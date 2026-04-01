@@ -10,13 +10,13 @@ import (
 
 func newTestProvider() *CocoonProvider {
 	return &CocoonProvider{
-		cocoonBin:    "/definitely-missing-cocoon",
-		sshPassword:  "test-password",
-		pods:         make(map[string]*corev1.Pod),
-		vms:          make(map[string]*CocoonVM),
-		injectHashes: make(map[string]string),
-		probeStates:  make(map[string]*probeResult),
-		pullers:      make(map[string]*EpochPuller),
+		cocoonBin:                 "/definitely-missing-cocoon",
+		sshPassword:               "test-password",
+		pods:                      make(map[string]*corev1.Pod),
+		vms:                       make(map[string]*CocoonVM),
+		injectHashes:              make(map[string]string),
+		probeStates:               make(map[string]*probeResult),
+		pullers:                   make(map[string]*EpochPuller),
 		lookupSuspendedSnapshotFn: func(_ context.Context, _, _ string) string { return "" },
 	}
 }
