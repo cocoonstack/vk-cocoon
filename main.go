@@ -24,17 +24,13 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
+	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
 func main() {
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if kubeconfig == "" {
-		kubeconfig = os.Getenv("HOME") + "/.kube/config"
-	}
 	nodeName := os.Getenv("VK_NODE_NAME")
 	if nodeName == "" {
 		nodeName = "cocoon-pool"
@@ -48,7 +44,7 @@ func main() {
 		nodeIP = detectNodeIP()
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, err := k8sutil.LoadConfig()
 	if err != nil {
 		klog.Fatalf("kubeconfig: %v", err)
 	}

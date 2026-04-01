@@ -27,6 +27,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cocoonstack/epoch/cocoon"
+	"github.com/cocoonstack/epoch/manifest"
 )
 
 // EpochPuller pulls snapshots from the Epoch HTTP registry.
@@ -36,6 +39,7 @@ type EpochPuller struct {
 	cocoonBin string
 	token     string // Bearer token for registry auth (empty = no auth)
 	client    *http.Client
+	paths     *cocoon.Paths
 
 	mu     sync.Mutex
 	pulled map[string]bool
@@ -59,6 +63,7 @@ func NewEpochPuller(serverURL, rootDir, cocoonBin string) *EpochPuller {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
+		paths:  cocoon.NewPaths(rootDir),
 		pulled: make(map[string]bool),
 	}
 }
@@ -132,12 +137,12 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
 	}
-	if m.isCloudImageManifest() {
+	if isCloudImageManifest(m) {
 		return fmt.Errorf("manifest %s:%s is a cloud image, not a snapshot", name, tag)
 	}
 
 	sid := m.SnapshotID
-	dataDir := filepath.Join(p.rootDir, "snapshot", "localfile", sid)
+	dataDir := p.paths.SnapshotDataDir(sid)
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dataDir, err)
 	}
@@ -149,7 +154,7 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 			log.Printf("[epoch]   %s exists, skip", layer.Filename)
 			continue
 		}
-		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, humanSize(layer.Size))
+		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
 		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
 			return fmt.Errorf("download %s: %w", layer.Filename, err)
 		}
@@ -196,7 +201,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
 	}
-	if !m.isCloudImageManifest() {
+	if !isCloudImageManifest(m) {
 		return fmt.Errorf("manifest %s:%s is not a direct cloud image", name, tag)
 	}
 
@@ -210,7 +215,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 
 // --- HTTP calls ---
 
-func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*epochManifest, error) {
+func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manifest.Manifest, error) {
 	url := fmt.Sprintf("%s/v2/%s/manifests/%s", p.serverURL, name, tag)
 	if p.authToken() != "" {
 		return p.getManifestWithCurl(ctx, url)
@@ -232,7 +237,7 @@ func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*epoch
 		return nil, fmt.Errorf("GET manifest %s:%s: %d %s", name, tag, resp.StatusCode, string(body))
 	}
 
-	var m epochManifest
+	var m manifest.Manifest
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 		return nil, fmt.Errorf("decode manifest: %w", err)
 	}
@@ -275,12 +280,12 @@ func (p *EpochPuller) downloadBlob(ctx context.Context, name, digest, destPath s
 // from Go's client stack while equivalent curl requests succeed on the same host.
 // When a registry token is configured, use curl for the whole pull path so
 // manifest/blob requests stay on the same known-good client behavior.
-func (p *EpochPuller) getManifestWithCurl(ctx context.Context, url string) (*epochManifest, error) {
+func (p *EpochPuller) getManifestWithCurl(ctx context.Context, url string) (*manifest.Manifest, error) {
 	data, err := p.curlRead(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	var m epochManifest
+	var m manifest.Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("decode manifest via curl: %w", err)
 	}
@@ -334,7 +339,7 @@ func (p *EpochPuller) curlWriteFile(ctx context.Context, url, destPath string) e
 // --- Snapshot DB ---
 
 func (p *EpochPuller) ensureLocalSnapshotMetadata(name string) (bool, error) {
-	db, err := p.readSnapshotDB()
+	db, err := p.paths.ReadSnapshotDB()
 	if err != nil {
 		return false, err
 	}
@@ -349,11 +354,11 @@ func (p *EpochPuller) ensureLocalSnapshotMetadata(name string) (bool, error) {
 	if err := hydrateSnapshotRecord(rec); err != nil {
 		return false, err
 	}
-	return true, p.writeSnapshotDB(db)
+	return true, p.paths.WriteSnapshotDB(db)
 }
 
-func (p *EpochPuller) updateSnapshotDB(m *epochManifest, name, dataDir string) error {
-	db, err := p.readSnapshotDB()
+func (p *EpochPuller) updateSnapshotDB(m *manifest.Manifest, name, dataDir string) error {
+	db, err := p.paths.ReadSnapshotDB()
 	if err != nil {
 		return err
 	}
@@ -372,7 +377,7 @@ func (p *EpochPuller) updateSnapshotDB(m *epochManifest, name, dataDir string) e
 		}
 	}
 
-	rec := &snapshotRecord{
+	rec := &cocoon.SnapshotRecord{
 		ID:           m.SnapshotID,
 		Name:         name,
 		Image:        m.Image,
@@ -390,74 +395,12 @@ func (p *EpochPuller) updateSnapshotDB(m *epochManifest, name, dataDir string) e
 	db.Snapshots[m.SnapshotID] = rec
 	db.Names[name] = m.SnapshotID
 
-	return p.writeSnapshotDB(db)
+	return p.paths.WriteSnapshotDB(db)
 }
 
-func (p *EpochPuller) snapshotDBFile() string {
-	return filepath.Join(p.rootDir, "snapshot", "db", "snapshots.json")
-}
-
-func (p *EpochPuller) readSnapshotDB() (*snapshotDB, error) {
-	data, err := os.ReadFile(p.snapshotDBFile())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &snapshotDB{
-				Snapshots: make(map[string]*snapshotRecord),
-				Names:     make(map[string]string),
-			}, nil
-		}
-		return nil, err
-	}
-	var db snapshotDB
-	if err := json.Unmarshal(data, &db); err != nil {
-		return nil, err
-	}
-	if db.Snapshots == nil {
-		db.Snapshots = make(map[string]*snapshotRecord)
-	}
-	if db.Names == nil {
-		db.Names = make(map[string]string)
-	}
-	return &db, nil
-}
-
-func (p *EpochPuller) writeSnapshotDB(db *snapshotDB) error {
-	data, err := json.MarshalIndent(db, "", "  ")
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(p.snapshotDBFile())
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return err
-	}
-	tmp := p.snapshotDBFile() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil { //nolint:gosec // snapshot DB needs to be readable
-		return err
-	}
-	return os.Rename(tmp, p.snapshotDBFile())
-}
-
-// --- Types (minimal, matching epoch manifest format) ---
-
-type epochManifest struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	Name          string            `json:"name"`
-	Tag           string            `json:"tag"`
-	SnapshotID    string            `json:"snapshotId"`
-	Image         string            `json:"image,omitempty"`
-	ImageBlobIDs  map[string]string `json:"imageBlobIDs,omitempty"`
-	CPU           int               `json:"cpu,omitempty"`
-	Memory        int64             `json:"memory,omitempty"`
-	Storage       int64             `json:"storage,omitempty"`
-	NICs          int               `json:"nics,omitempty"`
-	Layers        []epochLayer      `json:"layers"`
-	BaseImages    []epochLayer      `json:"baseImages,omitempty"`
-	TotalSize     int64             `json:"totalSize"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	PushedAt      time.Time         `json:"pushedAt"`
-}
-
-func (m *epochManifest) isCloudImageManifest() bool {
+// isCloudImageManifest returns true if the manifest describes a direct cloud
+// image (disk layers only, no snapshot config or base images).
+func isCloudImageManifest(m *manifest.Manifest) bool {
 	if m == nil || len(m.Layers) == 0 {
 		return false
 	}
@@ -479,8 +422,8 @@ func (m *epochManifest) isCloudImageManifest() bool {
 	return !hasConfig && hasDiskLayer
 }
 
-func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseImages []epochLayer) error {
-	blobDir := filepath.Join(p.rootDir, "cloudimg", "blobs")
+func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseImages []manifest.Layer) error {
+	blobDir := p.paths.CloudimgBlobDir()
 	if err := os.MkdirAll(blobDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", blobDir, err)
 	}
@@ -498,8 +441,8 @@ func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseI
 	return nil
 }
 
-func (p *EpochPuller) downloadBaseImagesFromSource(ctx context.Context, m *epochManifest) error {
-	blobDir := filepath.Join(p.rootDir, "cloudimg", "blobs")
+func (p *EpochPuller) downloadBaseImagesFromSource(ctx context.Context, m *manifest.Manifest) error {
+	blobDir := p.paths.CloudimgBlobDir()
 	if err := os.MkdirAll(blobDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", blobDir, err)
 	}
@@ -584,31 +527,6 @@ func isHTTPURL(raw string) bool {
 	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }
 
-type epochLayer struct {
-	Digest    string `json:"digest"`
-	Size      int64  `json:"size"`
-	Filename  string `json:"filename"`
-	MediaType string `json:"mediaType,omitempty"`
-}
-
-type snapshotDB struct {
-	Snapshots map[string]*snapshotRecord `json:"snapshots"`
-	Names     map[string]string          `json:"names"`
-}
-
-type snapshotRecord struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Image        string              `json:"image,omitempty"`
-	ImageBlobIDs map[string]struct{} `json:"image_blob_ids,omitempty"`
-	CPU          int                 `json:"cpu,omitempty"`
-	Memory       int64               `json:"memory,omitempty"`
-	Storage      int64               `json:"storage,omitempty"`
-	NICs         int                 `json:"nics,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	Pending      bool                `json:"pending,omitempty"`
-	DataDir      string              `json:"data_dir,omitempty"`
-}
 
 // ---------- Push (upload to epoch) ----------
 
@@ -622,7 +540,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 	log.Printf("[epoch] pushing %s:%s via HTTP...", snapshotName, tag)
 	start := time.Now()
 
-	db, err := p.readSnapshotDB()
+	db, err := p.paths.ReadSnapshotDB()
 	if err != nil {
 		return fmt.Errorf("read snapshot DB: %w", err)
 	}
@@ -638,7 +556,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 
 	dataDir := rec.DataDir
 	if dataDir == "" {
-		dataDir = filepath.Join(p.rootDir, "snapshot", "localfile", sid)
+		dataDir = p.paths.SnapshotDataDir(sid)
 	}
 
 	entries, err := os.ReadDir(dataDir)
@@ -647,7 +565,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 	}
 
 	// Upload each file as a blob.
-	var layers []epochLayer
+	var layers []manifest.Layer
 	var totalSize int64
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -658,24 +576,24 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		if err != nil {
 			return fmt.Errorf("push blob %s: %w", entry.Name(), err)
 		}
-		layers = append(layers, epochLayer{
+		layers = append(layers, manifest.Layer{
 			Digest:   digest,
 			Size:     size,
 			Filename: entry.Name(),
 		})
 		totalSize += size
-		log.Printf("[epoch]   %s → sha256:%s (%s)", entry.Name(), digest[:12], humanSize(size))
+		log.Printf("[epoch]   %s → sha256:%s (%s)", entry.Name(), digest[:12], cocoon.HumanSize(size))
 	}
 
 	// Upload base images when the registry accepts them. Always record their
 	// filenames in the manifest so pullers can reconstruct cloudimg blobs from
 	// rec.Image if direct base-image upload is unavailable.
 	var (
-		baseImages   []epochLayer
+		baseImages   []manifest.Layer
 		imageBlobIDs = make(map[string]string)
 	)
 	if rec.ImageBlobIDs != nil {
-		blobDir := filepath.Join(p.rootDir, "cloudimg", "blobs")
+		blobDir := p.paths.CloudimgBlobDir()
 		for hexID := range rec.ImageBlobIDs {
 			for _, ext := range []string{".qcow2", ".raw", ""} {
 				fp := filepath.Join(blobDir, hexID+ext)
@@ -686,7 +604,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 						log.Printf("[epoch]   skipping base image %s upload: %v", shortHex(hexID), err)
 						break
 					}
-					baseImages = append(baseImages, epochLayer{
+					baseImages = append(baseImages, manifest.Layer{
 						Digest:   digest,
 						Size:     size,
 						Filename: filepath.Base(fp),
@@ -698,7 +616,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		}
 	}
 
-	m := &epochManifest{
+	m := &manifest.Manifest{
 		SchemaVersion: 1,
 		Name:          snapshotName,
 		Tag:           tag,
@@ -720,7 +638,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		return fmt.Errorf("push manifest: %w", err)
 	}
 
-	log.Printf("[epoch] %s:%s pushed in %s (%s)", snapshotName, tag, time.Since(start).Round(time.Second), humanSize(totalSize))
+	log.Printf("[epoch] %s:%s pushed in %s (%s)", snapshotName, tag, time.Since(start).Round(time.Second), cocoon.HumanSize(totalSize))
 	return nil
 }
 
@@ -784,7 +702,7 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 }
 
 // pushManifest uploads a manifest via PUT /v2/{name}/manifests/{tag}.
-func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *epochManifest) error {
+func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *manifest.Manifest) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
@@ -828,17 +746,6 @@ func (p *EpochPuller) DeleteSnapshot(ctx context.Context, name, tag string) erro
 	return nil
 }
 
-func humanSize(b int64) string {
-	switch {
-	case b >= 1<<30:
-		return fmt.Sprintf("%.1fG", float64(b)/(1<<30))
-	case b >= 1<<20:
-		return fmt.Sprintf("%.1fM", float64(b)/(1<<20))
-	default:
-		return fmt.Sprintf("%dB", b)
-	}
-}
-
 type cloudImageIndex struct {
 	Images map[string]*cloudImageEntry `json:"images"`
 }
@@ -857,7 +764,7 @@ type chSnapshotConfig struct {
 	Nets []json.RawMessage `json:"net"`
 }
 
-func hydrateSnapshotRecord(rec *snapshotRecord) error {
+func hydrateSnapshotRecord(rec *cocoon.SnapshotRecord) error {
 	if rec == nil || rec.DataDir == "" {
 		return nil
 	}
@@ -886,8 +793,8 @@ func hydrateSnapshotRecord(rec *snapshotRecord) error {
 	return nil
 }
 
-func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *epochManifest) error {
-	dataDir := filepath.Join(p.rootDir, "snapshot", "localfile", m.SnapshotID)
+func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *manifest.Manifest) error {
+	dataDir := p.paths.SnapshotDataDir(m.SnapshotID)
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dataDir, err)
 	}
@@ -899,7 +806,7 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *epoc
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
-		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, humanSize(layer.Size))
+		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
 		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
 			return fmt.Errorf("download %s: %w", layer.Filename, err)
 		}
@@ -923,14 +830,14 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *epoc
 }
 
 func (p *EpochPuller) removeSnapshotRecord(name, snapshotID string) error {
-	db, err := p.readSnapshotDB()
+	db, err := p.paths.ReadSnapshotDB()
 	if err != nil {
 		return err
 	}
 	if existingID, ok := db.Names[name]; ok && (snapshotID == "" || existingID == snapshotID) {
 		delete(db.Names, name)
 		delete(db.Snapshots, existingID)
-		return p.writeSnapshotDB(db)
+		return p.paths.WriteSnapshotDB(db)
 	}
 	return nil
 }
