@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-ubuntu
+  namespace: default
+  labels:
+    app: test
+    runtime: cocoon
+  annotations:
+    cocoon.cis/mode: "run"
+    cocoon.cis/storage: "10G"
+    cocoon.cis/managed: "true"
+spec:
+  nodeName: cocoon-pool
+  tolerations:
+    - key: "virtual-kubelet.io/provider"
+      operator: "Exists"
+      effect: "NoSchedule"
+  containers:
+    - name: ubuntu
+      image: ubuntu-dev-base
+      resources:
+        limits:
+          cpu: "1"
+          memory: "1Gi"

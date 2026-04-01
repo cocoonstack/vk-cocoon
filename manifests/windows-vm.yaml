@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: windows-vm
+  namespace: default
+  labels:
+    app: windows-vm
+    os: windows
+  annotations:
+    cocoon.cis/mode: "run"
+    cocoon.cis/image: "https://registry.example.com/win11-base"
+    cocoon.cis/os: "windows"
+    cocoon.cis/storage: "20G"
+    cocoon.cis/managed: "true"
+spec:
+  nodeName: cocoon-pool
+  tolerations:
+    - key: "virtual-kubelet.io/provider"
+      operator: "Exists"
+      effect: "NoSchedule"
+  containers:
+    - name: windows
+      image: https://registry.example.com/win11-base
+      ports:
+        - containerPort: 3389
+          name: rdp
+          protocol: TCP
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"

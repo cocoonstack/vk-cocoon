@@ -1,0 +1,14 @@
+apiVersion: cocoon.cis/v1alpha1
+kind: CocoonSet
+metadata:
+  name: demo-cocoonset
+  namespace: default
+spec:
+  agent:
+    image: ubuntu-dev-base
+    replicas: 1
+    resources:
+      cpu: "2"
+      memory: "4Gi"
+    storage: "20G"
+  snapshotPolicy: always
