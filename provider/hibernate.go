@@ -14,13 +14,12 @@ package provider
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 )
 
@@ -46,11 +45,11 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 
 	for _, c := range checks {
 		// Read the LIVE annotation from K8s (p.pods may be stale).
-		cmd := fmt.Sprintf(
-			`kubectl get pod %s -n %s -o jsonpath='{.metadata.annotations.cocoon\.cis/hibernate}' 2>/dev/null`,
-			c.pod.Name, c.pod.Namespace)
-		out, _ := exec.CommandContext(ctx, "bash", "-c", cmd).Output() //nolint:gosec // cmd from kubectl template
-		liveHibernate := strings.Trim(strings.TrimSpace(string(out)), "'")
+		livePod, err := p.kubeClient.CoreV1().Pods(c.pod.Namespace).Get(ctx, c.pod.Name, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		liveHibernate := livePod.Annotations[AnnHibernate]
 
 		if liveHibernate == valTrue && c.vm.state == stateRunning {
 			klog.Infof("reconcileHibernate: %s has hibernate=true, triggering", c.key)

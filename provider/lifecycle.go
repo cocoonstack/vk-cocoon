@@ -12,12 +12,15 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 )
 
@@ -279,12 +282,27 @@ func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev
 		return
 	}
 	ns := pod.Namespace
-	cmd := fmt.Sprintf(
-		`kubectl get configmap cocoon-vm-snapshots -n %s -o name 2>/dev/null || kubectl create configmap cocoon-vm-snapshots -n %s; `+
-			`kubectl patch configmap cocoon-vm-snapshots -n %s --type merge -p '{"data":{"%s":"%s"}}'`,
-		ns, ns, ns, vmName, snapshotRef)
-	if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from kubectl template
-		klog.Warningf("recordSuspendedSnapshot %s: %v (%s)", vmName, err, strings.TrimSpace(string(out)))
+	cmClient := p.kubeClient.CoreV1().ConfigMaps(ns)
+
+	// Ensure the ConfigMap exists.
+	_, err := cmClient.Get(ctx, "cocoon-vm-snapshots", metav1.GetOptions{})
+	if err != nil {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cocoon-vm-snapshots", Namespace: ns},
+			Data:       map[string]string{},
+		}
+		if _, createErr := cmClient.Create(ctx, cm, metav1.CreateOptions{}); createErr != nil {
+			klog.Warningf("recordSuspendedSnapshot %s: create configmap: %v", vmName, createErr)
+			return
+		}
+	}
+
+	// Patch the data key.
+	patch, _ := json.Marshal(map[string]any{
+		"data": map[string]string{vmName: snapshotRef},
+	})
+	if _, err := cmClient.Patch(ctx, "cocoon-vm-snapshots", types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		klog.Warningf("recordSuspendedSnapshot %s: %v", vmName, err)
 	} else {
 		klog.Infof("recordSuspendedSnapshot: %s → %s", vmName, snapshotRef)
 	}
@@ -296,26 +314,17 @@ func (p *CocoonProvider) lookupSuspendedSnapshot(ctx context.Context, ns, vmName
 	if p.lookupSuspendedSnapshotFn != nil {
 		return p.lookupSuspendedSnapshotFn(ctx, ns, vmName)
 	}
-	cmd := fmt.Sprintf(
-		`kubectl get configmap cocoon-vm-snapshots -n %s -o jsonpath='{.data.%s}' 2>/dev/null`,
-		ns, vmName)
-	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput() //nolint:gosec // cmd from kubectl template
+	cm, err := p.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "cocoon-vm-snapshots", metav1.GetOptions{})
 	if err != nil {
 		return ""
 	}
-	ref := strings.TrimSpace(string(out))
-	if ref == "" || ref == "''" {
-		return ""
-	}
-	return strings.Trim(ref, "'")
+	return cm.Data[vmName]
 }
 
 // clearSuspendedSnapshot removes a VM's entry from the cocoon-vm-snapshots ConfigMap.
 func (p *CocoonProvider) clearSuspendedSnapshot(ctx context.Context, ns, vmName string) {
-	cmd := fmt.Sprintf(
-		`kubectl patch configmap cocoon-vm-snapshots -n %s --type json -p '[{"op":"remove","path":"/data/%s"}]' 2>/dev/null`,
-		ns, vmName)
-	_, _ = exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput() //nolint:gosec // cmd from kubectl template
+	patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, vmName)
+	_, _ = p.kubeClient.CoreV1().ConfigMaps(ns).Patch(ctx, "cocoon-vm-snapshots", types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
 }
 
 // ---------- Owner Detection ----------
@@ -328,12 +337,13 @@ func (p *CocoonProvider) getOwnerDeploymentName(ctx context.Context, pod *corev1
 			rsName := ref.Name
 			if idx := strings.LastIndex(rsName, "-"); idx > 0 {
 				candidate := rsName[:idx]
-				checkCmd := fmt.Sprintf(
-					`kubectl get replicaset %s -n %s -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null`,
-					rsName, pod.Namespace)
-				out, err := exec.CommandContext(ctx, "bash", "-c", checkCmd).Output() //nolint:gosec // cmd from kubectl template
-				if err == nil && strings.Contains(string(out), "Deployment") {
-					return candidate
+				rs, err := p.kubeClient.AppsV1().ReplicaSets(pod.Namespace).Get(ctx, rsName, metav1.GetOptions{})
+				if err == nil {
+					for _, ownerRef := range rs.OwnerReferences {
+						if ownerRef.Kind == "Deployment" {
+							return candidate
+						}
+					}
 				}
 			}
 			break
@@ -367,27 +377,25 @@ func extractOrdinal(podName string) int {
 
 // getDesiredReplicas queries the desired replica count for a Deployment or StatefulSet.
 // Returns -1 if the resource is not found (deleted) or the query fails.
-func getDesiredReplicas(ctx context.Context, ns, kind, name string) int {
-	resource := "deploy"
+func (p *CocoonProvider) getDesiredReplicas(ctx context.Context, ns, kind, name string) int {
 	if kind == "StatefulSet" {
-		resource = "statefulset"
+		sts, err := p.kubeClient.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return -1
+		}
+		if sts.Spec.Replicas == nil {
+			return -1
+		}
+		return int(*sts.Spec.Replicas)
 	}
-	cmd := fmt.Sprintf(
-		`kubectl get %s %s -n %s -o jsonpath='{.spec.replicas}' 2>/dev/null`,
-		resource, name, ns)
-	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).Output() //nolint:gosec // cmd from kubectl template
+	deploy, err := p.kubeClient.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return -1
 	}
-	s := strings.Trim(strings.TrimSpace(string(out)), "'")
-	if s == "" || s == "null" {
+	if deploy.Spec.Replicas == nil {
 		return -1
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return -1
-	}
-	return n
+	return int(*deploy.Spec.Replicas)
 }
 
 // shouldSnapshotOnDelete determines whether a pod's VM should be snapshotted
@@ -436,7 +444,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 
 	// StatefulSet: scale-down always removes highest ordinal first.
 	if stsName := getOwnerStatefulSetName(pod); stsName != "" {
-		desired := getDesiredReplicas(ctx, pod.Namespace, "StatefulSet", stsName)
+		desired := p.getDesiredReplicas(ctx, pod.Namespace, "StatefulSet", stsName)
 		if desired <= 0 {
 			return true // suspend all, or owner gone — be conservative
 		}
@@ -451,7 +459,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 
 	// Deployment: compare tracked pod count with desired replicas.
 	if deployName := p.getOwnerDeploymentName(ctx, pod); deployName != "" {
-		desired := getDesiredReplicas(ctx, pod.Namespace, "Deployment", deployName)
+		desired := p.getDesiredReplicas(ctx, pod.Namespace, "Deployment", deployName)
 		if desired <= 0 {
 			return true // suspend all, or owner gone
 		}
