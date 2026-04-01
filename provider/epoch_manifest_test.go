@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	cocoon "github.com/cocoonstack/epoch/cocoon"
+	"github.com/cocoonstack/epoch/cocoon"
 	"github.com/cocoonstack/epoch/manifest"
 )
 

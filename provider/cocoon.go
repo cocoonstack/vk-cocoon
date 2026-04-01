@@ -57,8 +57,8 @@ import (
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 )
 
-// Annotation keys.
 const (
+	// Annotation keys
 	AnnImage        = "cocoon.cis/image"
 	AnnMode         = "cocoon.cis/mode" // clone | run
 	AnnStorage      = "cocoon.cis/storage"
@@ -79,10 +79,8 @@ const (
 	// CocoonSet controller annotations
 	AnnForkFrom       = "cocoon.cis/fork-from"       // VM name to fork from (set by CocoonSet controller)
 	AnnSnapshotPolicy = "cocoon.cis/snapshot-policy" // always | main-only | never (set by CocoonSet controller)
-)
 
-// VM state constants used throughout the provider.
-const (
+	// VM state constants
 	stateRunning    = "running"
 	stateStopped    = "stopped"
 	stateHibernated = "hibernated"

@@ -18,15 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
-
-	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
 
 	"github.com/cocoonstack/vk-cocoon/provider"
 )

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,6 +29,7 @@ import (
 
 	"github.com/cocoonstack/epoch/cocoon"
 	"github.com/cocoonstack/epoch/manifest"
+	"k8s.io/klog/v2"
 )
 
 // EpochPuller pulls snapshots from the Epoch HTTP registry.
@@ -119,14 +119,14 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 		return nil
 	}
 
-	log.Printf("[epoch] pulling %s via HTTP...", ref)
+	klog.Infof("[epoch] pulling %s via HTTP...", ref)
 	start := time.Now()
 
 	if err := p.pull(ctx, name, tag); err != nil {
 		return fmt.Errorf("epoch HTTP pull %s: %w", ref, err)
 	}
 
-	log.Printf("[epoch] %s pulled in %s", ref, time.Since(start).Round(time.Second))
+	klog.Infof("[epoch] %s pulled in %s", ref, time.Since(start).Round(time.Second))
 	p.markPulled(ref)
 	return nil
 }
@@ -151,10 +151,10 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	for _, layer := range m.Layers {
 		destPath := filepath.Join(dataDir, layer.Filename)
 		if _, err := os.Stat(destPath); err == nil {
-			log.Printf("[epoch]   %s exists, skip", layer.Filename)
+			klog.Infof("[epoch]   %s exists, skip", layer.Filename)
 			continue
 		}
-		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
+		klog.Infof("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
 		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
 			return fmt.Errorf("download %s: %w", layer.Filename, err)
 		}
@@ -432,7 +432,7 @@ func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseI
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
-		log.Printf("[epoch]   downloading base image %s...", bi.Filename)
+		klog.Infof("[epoch]   downloading base image %s...", bi.Filename)
 		if err := p.downloadBlob(ctx, name, bi.Digest, destPath); err != nil {
 			return fmt.Errorf("download base %s: %w", bi.Filename, err)
 		}
@@ -458,7 +458,7 @@ func (p *EpochPuller) downloadBaseImagesFromSource(ctx context.Context, m *manif
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
-		log.Printf("[epoch]   downloading base image source %s -> %s...", m.Image, baseName)
+		klog.Infof("[epoch]   downloading base image source %s -> %s...", m.Image, baseName)
 		if err := p.downloadSourceImage(ctx, m.Image, hexID, destPath); err != nil {
 			return fmt.Errorf("download base source %s: %w", m.Image, err)
 		}
@@ -536,7 +536,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 	if tag == "" {
 		tag = "latest"
 	}
-	log.Printf("[epoch] pushing %s:%s via HTTP...", snapshotName, tag)
+	klog.Infof("[epoch] pushing %s:%s via HTTP...", snapshotName, tag)
 	start := time.Now()
 
 	db, err := p.paths.ReadSnapshotDB()
@@ -581,7 +581,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 			Filename: entry.Name(),
 		})
 		totalSize += size
-		log.Printf("[epoch]   %s → sha256:%s (%s)", entry.Name(), digest[:12], cocoon.HumanSize(size))
+		klog.Infof("[epoch]   %s → sha256:%s (%s)", entry.Name(), digest[:12], cocoon.HumanSize(size))
 	}
 
 	// Upload base images when the registry accepts them. Always record their
@@ -600,7 +600,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 					imageBlobIDs[hexID] = filepath.Base(fp)
 					digest, size, err := p.pushBlob(ctx, snapshotName, fp)
 					if err != nil {
-						log.Printf("[epoch]   skipping base image %s upload: %v", shortHex(hexID), err)
+						klog.Warningf("[epoch]   skipping base image %s upload: %v", shortHex(hexID), err)
 						break
 					}
 					baseImages = append(baseImages, manifest.Layer{
@@ -637,7 +637,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		return fmt.Errorf("push manifest: %w", err)
 	}
 
-	log.Printf("[epoch] %s:%s pushed in %s (%s)", snapshotName, tag, time.Since(start).Round(time.Second), cocoon.HumanSize(totalSize))
+	klog.Infof("[epoch] %s:%s pushed in %s (%s)", snapshotName, tag, time.Since(start).Round(time.Second), cocoon.HumanSize(totalSize))
 	return nil
 }
 
@@ -805,7 +805,7 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *mani
 		if _, err := os.Stat(destPath); err == nil {
 			continue
 		}
-		log.Printf("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
+		klog.Infof("[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
 		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
 			return fmt.Errorf("download %s: %w", layer.Filename, err)
 		}
