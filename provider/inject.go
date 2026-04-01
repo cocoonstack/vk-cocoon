@@ -22,7 +22,7 @@ import (
 // Annotation keys for injection config.
 const (
 	AnnEnvFile     = "cocoon.cis/env-file"     // target path for env file (default: /opt/agent/pod.env)
-	AnnServiceName = "cocoon.cis/service-name"  // systemd service to restart on env change
+	AnnServiceName = "cocoon.cis/service-name" // systemd service to restart on env change
 )
 
 var (
@@ -40,7 +40,7 @@ func sshWriteFile(ctx context.Context, vm *CocoonVM, password, path string, data
 	dir := path[:strings.LastIndex(path, "/")]
 	// Pass the script as a single SSH remote command (not via bash -c which
 	// has quoting issues). SSH concatenates all trailing args as the command.
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password,
+	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
 		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
 		fmt.Sprintf("root@%s", vm.IP),
@@ -55,7 +55,7 @@ func sshWriteFile(ctx context.Context, vm *CocoonVM, password, path string, data
 
 // sshExecSimple runs a command on the VM and returns combined output.
 func sshExecSimple(ctx context.Context, vm *CocoonVM, password, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password,
+	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
 		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
 		fmt.Sprintf("root@%s", vm.IP), command)
@@ -70,19 +70,15 @@ func waitForSSH(ctx context.Context, vm *CocoonVM, password string, timeout time
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
-		if err := sshReadyProbe(ctx, vm, password); err == nil {
+		lastErr = sshReadyProbe(ctx, vm, password)
+		if lastErr == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return fmt.Errorf("ssh not ready after %s: %w", timeout, lastErr)
-			}
-			return fmt.Errorf("ssh not ready after %s", timeout)
+			return fmt.Errorf("ssh not ready after %s: %w", timeout, lastErr)
 		}
 		time.Sleep(sshReadyPollInterval)
 	}
@@ -118,7 +114,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 
 	target := ann(pod, AnnEnvFile, "/opt/agent/pod.env")
 	pw := p.sshPass(vm)
-	if err := sshWriteFile(ctx, vm, pw, target, []byte(content), 0600); err != nil {
+	if err := sshWriteFile(ctx, vm, pw, target, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("injectEnvVars: %w", err)
 	}
 	klog.Infof("injectEnvVars %s/%s: wrote %d vars to %s", pod.Namespace, pod.Name, len(envs), target)
@@ -157,9 +153,10 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 
 		var data map[string]string
 		var binData map[string][]byte
-		mode := 0644
+		mode := 0o644
 
-		if vol.ConfigMap != nil && p.configMapLister != nil {
+		switch {
+		case vol.ConfigMap != nil && p.configMapLister != nil:
 			cm, err := p.configMapLister.ConfigMaps(pod.Namespace).Get(vol.ConfigMap.Name)
 			if err != nil {
 				if vol.ConfigMap.Optional != nil && *vol.ConfigMap.Optional {
@@ -172,7 +169,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 			if vol.ConfigMap.DefaultMode != nil {
 				mode = int(*vol.ConfigMap.DefaultMode)
 			}
-		} else if vol.Secret != nil && p.secretLister != nil {
+		case vol.Secret != nil && p.secretLister != nil:
 			sec, err := p.secretLister.Secrets(pod.Namespace).Get(vol.Secret.SecretName)
 			if err != nil {
 				if vol.Secret.Optional != nil && *vol.Secret.Optional {
@@ -185,7 +182,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 			if vol.Secret.DefaultMode != nil {
 				mode = int(*vol.Secret.DefaultMode)
 			}
-		} else {
+		default:
 			continue // skip unsupported volume types (emptyDir, hostPath, etc.)
 		}
 
@@ -220,7 +217,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 // postBootInject runs all injections and lifecycle setup after VM boot.
 // Order: security → init containers → volumes → env → sidecars → DNS → SSH key.
 func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.OS == "windows" {
+	if vm.OS == osWindows {
 		return
 	}
 	key := podKey(pod.Namespace, pod.Name)

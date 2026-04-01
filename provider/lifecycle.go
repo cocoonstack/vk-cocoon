@@ -76,7 +76,7 @@ func (p *CocoonProvider) installContainerServices(ctx context.Context, pod *core
 		}
 		if envContent != "" {
 			envPath := fmt.Sprintf("/opt/agent/sidecar-%s.env", c.Name)
-			sshWriteFile(ctx, vm, pw, envPath, []byte(envContent), 0600)
+			_ = sshWriteFile(ctx, vm, pw, envPath, []byte(envContent), 0o600)
 		}
 
 		// Create systemd service
@@ -98,8 +98,8 @@ WantedBy=multi-user.target
 `, c.Name, cmd, c.Name, svcName, svcName)
 
 		unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", svcName)
-		sshWriteFile(ctx, vm, pw, unitPath, []byte(unit), 0644)
-		sshExecSimple(ctx, vm, pw, fmt.Sprintf("systemctl daemon-reload && systemctl enable %s && systemctl start %s", svcName, svcName))
+		_ = sshWriteFile(ctx, vm, pw, unitPath, []byte(unit), 0o644)
+		_, _ = sshExecSimple(ctx, vm, pw, fmt.Sprintf("systemctl daemon-reload && systemctl enable %s && systemctl start %s", svcName, svcName))
 		klog.Infof("installContainerServices %s/%s: sidecar %s started", pod.Namespace, pod.Name, svcName)
 	}
 }
@@ -137,7 +137,7 @@ func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.P
 		// Ensure user exists
 		username := fmt.Sprintf("app-%d", *uid)
 		cmd := fmt.Sprintf("id -u %d >/dev/null 2>&1 || useradd -u %d -m %s", *uid, *uid, username)
-		sshExecSimple(ctx, vm, pw, cmd)
+		_, _ = sshExecSimple(ctx, vm, pw, cmd)
 		klog.Infof("applySecurityContext %s/%s: runAsUser=%d (user=%s)",
 			pod.Namespace, pod.Name, *uid, username)
 	}
@@ -175,25 +175,6 @@ func (p *CocoonProvider) injectDownwardAPIEnv(pod *corev1.Pod, vm *CocoonVM) map
 	return env
 }
 
-// ---------- #23: Container Restart Count ----------
-
-// getContainerRestartCount reads the systemd service restart count via SSH.
-// For VMs, "container restart" = systemd service restart.
-func (p *CocoonProvider) getContainerRestartCount(ctx context.Context, vm *CocoonVM, serviceName string) int32 {
-	if vm.skipSSH() || serviceName == "" {
-		return 0
-	}
-	pw := p.sshPass(vm)
-	// systemctl show -p NRestarts returns the restart count
-	out, err := sshExecSimple(ctx, vm, pw,
-		fmt.Sprintf("systemctl show -p NRestarts %s 2>/dev/null | cut -d= -f2", serviceName))
-	if err != nil {
-		return 0
-	}
-	n, _ := strconv.ParseInt(strings.TrimSpace(out), 10, 32)
-	return int32(n)
-}
-
 // ---------- #24: Resource Enforcement via CH API ----------
 
 // enforceResources uses CH API to resize VM resources to match pod limits.
@@ -212,7 +193,7 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 	}
 
 	// CPU resize
-	if cpuQ := limits.Cpu(); cpuQ != nil && !cpuQ.IsZero() {
+	if cpuQ := limits.Cpu(); cpuQ != nil && !cpuQ.IsZero() { //nolint:nestif // CH API resize with validation
 		desiredCPU := int(cpuQ.Value())
 		if desiredCPU > 0 && desiredCPU != vm.CPU {
 			sock := chSocketPath(vm.VMID)
@@ -220,7 +201,7 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 				body := fmt.Sprintf(`{"desired_vcpus":%d}`, desiredCPU)
 				cmd := fmt.Sprintf("sudo curl -s -X PUT --unix-socket %s -H 'Content-Type: application/json' -d '%s' http://localhost/api/v1/vm.resize",
 					sock, body)
-				if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil {
+				if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from trusted internal template
 					klog.V(2).Infof("enforceResources %s: CPU resize to %d failed: %v (%s)",
 						vm.VMName, desiredCPU, err, strings.TrimSpace(string(out)))
 				} else {
@@ -277,7 +258,7 @@ func addPodDNS(podName, namespace, ip string) {
 	entry := fmt.Sprintf("%s\t%s %s.%s.svc.cluster.local", ip, podName, podName, namespace)
 	// Append if not already present
 	cmd := fmt.Sprintf("grep -q '%s' /etc/hosts 2>/dev/null || echo '%s' >> /etc/hosts", podName, entry)
-	if out, err := exec.Command("sudo", "bash", "-c", cmd).CombinedOutput(); err != nil {
+	if out, err := exec.Command("sudo", "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from trusted template
 		klog.V(2).Infof("addPodDNS %s: %v (%s)", podName, err, strings.TrimSpace(string(out)))
 	}
 }
@@ -302,7 +283,7 @@ func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev
 		`kubectl get configmap cocoon-vm-snapshots -n %s -o name 2>/dev/null || kubectl create configmap cocoon-vm-snapshots -n %s; `+
 			`kubectl patch configmap cocoon-vm-snapshots -n %s --type merge -p '{"data":{"%s":"%s"}}'`,
 		ns, ns, ns, vmName, snapshotRef)
-	if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from kubectl template
 		klog.Warningf("recordSuspendedSnapshot %s: %v (%s)", vmName, err, strings.TrimSpace(string(out)))
 	} else {
 		klog.Infof("recordSuspendedSnapshot: %s → %s", vmName, snapshotRef)
@@ -318,7 +299,7 @@ func (p *CocoonProvider) lookupSuspendedSnapshot(ctx context.Context, ns, vmName
 	cmd := fmt.Sprintf(
 		`kubectl get configmap cocoon-vm-snapshots -n %s -o jsonpath='{.data.%s}' 2>/dev/null`,
 		ns, vmName)
-	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput() //nolint:gosec // cmd from kubectl template
 	if err != nil {
 		return ""
 	}
@@ -334,7 +315,7 @@ func (p *CocoonProvider) clearSuspendedSnapshot(ctx context.Context, ns, vmName 
 	cmd := fmt.Sprintf(
 		`kubectl patch configmap cocoon-vm-snapshots -n %s --type json -p '[{"op":"remove","path":"/data/%s"}]' 2>/dev/null`,
 		ns, vmName)
-	exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput()
+	_, _ = exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput() //nolint:gosec // cmd from kubectl template
 }
 
 // ---------- Owner Detection ----------
@@ -350,7 +331,7 @@ func (p *CocoonProvider) getOwnerDeploymentName(ctx context.Context, pod *corev1
 				checkCmd := fmt.Sprintf(
 					`kubectl get replicaset %s -n %s -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null`,
 					rsName, pod.Namespace)
-				out, err := exec.CommandContext(ctx, "bash", "-c", checkCmd).Output()
+				out, err := exec.CommandContext(ctx, "bash", "-c", checkCmd).Output() //nolint:gosec // cmd from kubectl template
 				if err == nil && strings.Contains(string(out), "Deployment") {
 					return candidate
 				}
@@ -394,7 +375,7 @@ func getDesiredReplicas(ctx context.Context, ns, kind, name string) int {
 	cmd := fmt.Sprintf(
 		`kubectl get %s %s -n %s -o jsonpath='{.spec.replicas}' 2>/dev/null`,
 		resource, name, ns)
-	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).Output()
+	out, err := exec.CommandContext(ctx, "bash", "-c", cmd).Output() //nolint:gosec // cmd from kubectl template
 	if err != nil {
 		return -1
 	}
@@ -448,7 +429,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 	}
 
 	// Explicit hibernate annotation from operator — always snapshot.
-	if ann(pod, AnnHibernate, "") == "true" {
+	if ann(pod, AnnHibernate, "") == valTrue {
 		klog.Infof("shouldSnapshot %s: hibernate annotation set, snapshot", key)
 		return true
 	}
@@ -587,14 +568,14 @@ func mainAgentVMName(vmName string) string {
 // forkFromMainAgent creates a live snapshot of the main agent (slot-0) VM
 // and returns the snapshot name for the sub-agent to clone from.
 // Returns "" if the main agent is not running or snapshot fails.
-func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, ns, vmName string) string {
+func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string) string {
 	mainVM := mainAgentVMName(vmName)
 
 	// Find the slot-0 VM.
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
-		if vm.VMName == mainVM && vm.State == "running" && vm.VMID != "" {
+		if vm.VMName == mainVM && vm.State == stateRunning && vm.VMID != "" {
 			sourceVM = vm
 			break
 		}
@@ -608,7 +589,7 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, ns, vmName strin
 
 	// Live snapshot the main agent.
 	forkSnap := vmName + "-fork"
-	p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
+	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.VMID)
 	if err != nil {
@@ -621,11 +602,11 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, ns, vmName strin
 
 // forkFromVM creates a live snapshot of a specific source VM.
 // Used by CocoonSet controller via cocoon.cis/fork-from annotation.
-func (p *CocoonProvider) forkFromVM(ctx context.Context, ns, sourceVMName, targetVMName string) string {
+func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, targetVMName string) string {
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
-		if vm.VMName == sourceVMName && vm.State == "running" && vm.VMID != "" {
+		if vm.VMName == sourceVMName && vm.State == stateRunning && vm.VMID != "" {
 			sourceVM = vm
 			break
 		}
@@ -638,7 +619,7 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, ns, sourceVMName, targe
 	}
 
 	forkSnap := targetVMName + "-fork"
-	p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
+	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.VMID)
 	if err != nil {

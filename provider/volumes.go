@@ -21,11 +21,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const (
-	// volumeHostBase is where PVC-backed volumes are stored on the host.
-	volumeHostBase = "/data01/volumes"
-)
-
 // setupVolumes creates non-configMap/secret volumes in the VM.
 // Called from postBootInject after VM has SSH.
 func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
@@ -48,7 +43,8 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 			continue
 		}
 
-		if vol.EmptyDir != nil {
+		switch {
+		case vol.EmptyDir != nil:
 			// EmptyDir: just create the directory in the VM.
 			// medium=Memory → tmpfs; default → regular dir.
 			if vol.EmptyDir.Medium == corev1.StorageMediumMemory {
@@ -60,20 +56,20 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 				}
 			} else {
 				cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
-				sshExecSimple(ctx, vm, pw, cmd)
+				_, _ = sshExecSimple(ctx, vm, pw, cmd)
 			}
 			klog.V(2).Infof("setupVolumes: emptyDir %s at %s", vol.Name, mount.MountPath)
 
-		} else if vol.HostPath != nil {
+		case vol.HostPath != nil:
 			// HostPath: create the directory in the VM (host paths aren't directly
 			// accessible from inside a VM). For true host sharing, use virtiofs.
 			// Here we just ensure the path exists.
 			cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
-			sshExecSimple(ctx, vm, pw, cmd)
+			_, _ = sshExecSimple(ctx, vm, pw, cmd)
 			klog.V(2).Infof("setupVolumes: hostPath %s → VM %s (dir created, not shared)",
 				vol.HostPath.Path, mount.MountPath)
 
-		} else if vol.Projected != nil {
+		case vol.Projected != nil:
 			// Projected volumes: combine downwardAPI + configMap + secret.
 			// DownwardAPI items handled here; configMap/secret handled by injectVolumes.
 			p.injectProjectedVolume(ctx, pod, vm, vol.Projected, mount.MountPath)
@@ -84,8 +80,8 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 
 // injectProjectedVolume writes DownwardAPI items from a projected volume.
 func (p *CocoonProvider) injectProjectedVolume(ctx context.Context, pod *corev1.Pod, vm *CocoonVM,
-	proj *corev1.ProjectedVolumeSource, mountPath string) {
-
+	proj *corev1.ProjectedVolumeSource, mountPath string,
+) {
 	pw := p.sshPass(vm)
 	for _, source := range proj.Sources {
 		if source.DownwardAPI != nil {
@@ -93,7 +89,7 @@ func (p *CocoonProvider) injectProjectedVolume(ctx context.Context, pod *corev1.
 				val := resolveDownwardAPIField(pod, item.FieldRef)
 				if val != "" {
 					path := filepath.Join(mountPath, item.Path)
-					sshWriteFile(ctx, vm, pw, path, []byte(val), 0444)
+					_ = sshWriteFile(ctx, vm, pw, path, []byte(val), 0o444)
 				}
 			}
 		}

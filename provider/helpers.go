@@ -12,7 +12,7 @@ import (
 // This is the case for Windows guests (which use RDP) or when
 // no IP has been assigned yet.
 func (vm *CocoonVM) skipSSH() bool {
-	return vm.OS == "windows" || vm.IP == ""
+	return vm.OS == osWindows || vm.IP == ""
 }
 
 // podKey builds the canonical map key for a pod: "namespace/name".
@@ -28,7 +28,7 @@ func ann(pod *corev1.Pod, key, def string) string {
 
 // isWindowsOS returns true if the OS type string indicates Windows.
 func isWindowsOS(osType string) bool {
-	return strings.EqualFold(strings.TrimSpace(osType), "windows")
+	return strings.EqualFold(strings.TrimSpace(osType), osWindows)
 }
 
 // parseImageRef splits an image reference into (registryURL, snapshotName).
@@ -118,14 +118,8 @@ func NodeCapacity() corev1.ResourceList {
 	}
 	return corev1.ResourceList{
 		corev1.ResourceCPU:              *resource.NewQuantity(int64(cpuCount), resource.DecimalSI),
-		corev1.ResourceMemory:           *resource.NewQuantity(int64(memBytes), resource.BinarySI),
+		corev1.ResourceMemory:           *resource.NewQuantity(int64(memBytes), resource.BinarySI), //nolint:gosec // memBytes fits in int64
 		corev1.ResourceEphemeralStorage: *resource.NewQuantity(3500*1024*1024*1024, resource.BinarySI),
 		corev1.ResourcePods:             *resource.NewQuantity(241, resource.DecimalSI),
 	}
 }
-
-// notFoundError satisfies the errdefs NotFound interface.
-type notFoundError struct{ msg string }
-
-func (e *notFoundError) Error() string  { return e.msg }
-func (e *notFoundError) NotFound() bool { return true }

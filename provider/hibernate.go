@@ -49,13 +49,13 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 		cmd := fmt.Sprintf(
 			`kubectl get pod %s -n %s -o jsonpath='{.metadata.annotations.cocoon\.cis/hibernate}' 2>/dev/null`,
 			c.pod.Name, c.pod.Namespace)
-		out, _ := exec.CommandContext(ctx, "bash", "-c", cmd).Output()
+		out, _ := exec.CommandContext(ctx, "bash", "-c", cmd).Output() //nolint:gosec // cmd from kubectl template
 		liveHibernate := strings.Trim(strings.TrimSpace(string(out)), "'")
 
-		if liveHibernate == "true" && c.vm.State == "running" {
+		if liveHibernate == valTrue && c.vm.State == stateRunning {
 			klog.Infof("reconcileHibernate: %s has hibernate=true, triggering", c.key)
 			p.hibernateVM(ctx, c.pod, c.vm)
-		} else if liveHibernate != "true" && c.vm.State == "hibernated" {
+		} else if liveHibernate != valTrue && c.vm.State == stateHibernated {
 			klog.Infof("reconcileHibernate: %s hibernate removed, triggering wake", c.key)
 			p.wakeVM(ctx, c.pod, c.vm)
 		}
@@ -88,7 +88,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 
 	// 1. Snapshot the running VM.
 	snapshotName := vm.VMName + "-suspend"
-	p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
+	_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.VMID)
 	if err != nil {
@@ -100,7 +100,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	// 2. Push to epoch.
 	pushedToEpoch := false
 	if puller != nil {
-		_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX",
+		_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX", //nolint:gosec // trusted path from config
 			filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
 
 		if pushErr := puller.PushSnapshot(ctx, snapshotName, "latest"); pushErr != nil {
@@ -119,15 +119,15 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	p.recordSuspendedSnapshot(ctx, pod, vm.VMName, fullRef)
 
 	if pushedToEpoch {
-		p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
+		_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
 	}
 
 	// 3. Destroy VM.
-	p.cocoonExec(ctx, "vm", "rm", "--force", vm.VMID)
+	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.VMID)
 
 	// 4. Mark as hibernated (pod stays, VM gone).
 	p.mu.Lock()
-	vm.State = "hibernated"
+	vm.State = stateHibernated
 	vm.VMID = ""
 	vm.IP = ""
 	p.mu.Unlock()
@@ -174,7 +174,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Clean up any stale VM with same name.
 	if existing := p.discoverVM(ctx, vm.VMName); existing != nil && existing.VMID != "" {
-		p.cocoonExec(ctx, "vm", "rm", "--force", existing.VMID)
+		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.VMID)
 	}
 
 	// Clone VM from snapshot.
@@ -187,7 +187,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Discover new VM.
 	var fresh *CocoonVM
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		fresh = p.discoverVM(ctx, vm.VMName)
 		if fresh != nil && fresh.VMID != "" {
 			break
@@ -209,7 +209,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	// Update VM record.
 	p.mu.Lock()
 	vm.VMID = fresh.VMID
-	vm.State = "running"
+	vm.State = stateRunning
 	vm.IP = fresh.IP
 	vm.MAC = fresh.MAC
 	vm.StartedAt = time.Now()

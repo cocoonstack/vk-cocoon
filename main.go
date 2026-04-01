@@ -20,13 +20,14 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+
+	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
 func main() {
@@ -88,16 +89,18 @@ func main() {
 	}
 
 	var tlsCert tls.Certificate
-	if _, err := os.Stat(certPath); err == nil {
-		tlsCert, err = tls.LoadX509KeyPair(certPath, keyPath)
-		if err != nil {
-			klog.Fatalf("load TLS cert: %v", err)
+	if _, statErr := os.Stat(certPath); statErr == nil {
+		var loadErr error
+		tlsCert, loadErr = tls.LoadX509KeyPair(certPath, keyPath)
+		if loadErr != nil {
+			klog.Fatalf("load TLS cert: %v", loadErr)
 		}
 		klog.Infof("Using TLS cert from %s", certPath)
 	} else {
-		tlsCert, err = generateSelfSignedCert(nodeName, nodeIP)
-		if err != nil {
-			klog.Fatalf("generate TLS cert: %v", err)
+		var genErr error
+		tlsCert, genErr = generateSelfSignedCert(nodeName, nodeIP)
+		if genErr != nil {
+			klog.Fatalf("generate TLS cert: %v", genErr)
 		}
 		klog.Infof("Using self-signed TLS cert")
 	}
@@ -125,7 +128,7 @@ func main() {
 	// Patch node to set kubelet endpoint port (NaiveNodeProvider doesn't propagate DaemonEndpoints)
 	go func() {
 		time.Sleep(5 * time.Second)
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			nodeObj, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 			if err != nil {
 				time.Sleep(2 * time.Second)

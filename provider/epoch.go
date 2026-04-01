@@ -223,7 +223,7 @@ func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*epoch
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -252,18 +252,18 @@ func (p *EpochPuller) downloadBlob(ctx context.Context, name, digest, destPath s
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("GET blob %s: %d %s", digest[:12], resp.StatusCode, string(body))
 	}
 
-	f, err := os.Create(destPath)
+	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_, err = io.Copy(f, resp.Body)
 	return err
@@ -429,7 +429,7 @@ func (p *EpochPuller) writeSnapshotDB(db *snapshotDB) error {
 		return err
 	}
 	tmp := p.snapshotDBFile() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil { //nolint:gosec // snapshot DB needs to be readable
 		return err
 	}
 	return os.Rename(tmp, p.snapshotDBFile())
@@ -491,7 +491,7 @@ func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseI
 		if err := p.downloadBlob(ctx, name, bi.Digest, destPath); err != nil {
 			return fmt.Errorf("download base %s: %w", bi.Filename, err)
 		}
-		_ = os.Chmod(destPath, 0o444)
+		_ = os.Chmod(destPath, 0o444) //nolint:gosec // read-only base images
 	}
 	return nil
 }
@@ -517,7 +517,7 @@ func (p *EpochPuller) downloadBaseImagesFromSource(ctx context.Context, m *epoch
 		if err := p.downloadSourceImage(ctx, m.Image, hexID, destPath); err != nil {
 			return fmt.Errorf("download base source %s: %w", m.Image, err)
 		}
-		_ = os.Chmod(destPath, 0o444)
+		_ = os.Chmod(destPath, 0o444) //nolint:gosec // read-only base images
 	}
 	return nil
 }
@@ -531,7 +531,7 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -539,7 +539,7 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 	}
 
 	tmpPath := destPath + ".tmp"
-	f, err := os.Create(tmpPath)
+	f, err := os.Create(tmpPath) //nolint:gosec // destPath is constructed from trusted config
 	if err != nil {
 		return err
 	}
@@ -564,8 +564,8 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 
 func trimBlobExt(filename string) string {
 	for _, ext := range []string{".qcow2", ".raw"} {
-		if strings.HasSuffix(filename, ext) {
-			return strings.TrimSuffix(filename, ext)
+		if trimmed, ok := strings.CutSuffix(filename, ext); ok {
+			return trimmed
 		}
 	}
 	return filename
@@ -726,13 +726,13 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 // Returns the SHA-256 digest and file size. Skips upload if blob already exists (HEAD check).
 func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (string, int64, error) {
 	// Compute SHA-256.
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) //nolint:gosec // filePath is from local snapshot data directory
 	if err != nil {
 		return "", 0, err
 	}
 	h := sha256.New()
 	size, err := io.Copy(h, f)
-	f.Close()
+	_ = f.Close()
 	if err != nil {
 		return "", 0, fmt.Errorf("hash %s: %w", filePath, err)
 	}
@@ -740,22 +740,23 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 
 	// HEAD check — skip if already uploaded.
 	headURL := fmt.Sprintf("%s/v2/%s/blobs/sha256:%s", p.serverURL, name, digest)
-	if headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, headURL, nil); err == nil {
+	headReq, headErr := http.NewRequestWithContext(ctx, http.MethodHead, headURL, nil)
+	if headErr == nil {
 		p.setAuth(headReq)
-		if resp, err := p.client.Do(headReq); err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
+		if headResp, doErr := p.client.Do(headReq); doErr == nil {
+			_ = headResp.Body.Close()
+			if headResp.StatusCode == 200 {
 				return digest, size, nil
 			}
 		}
 	}
 
 	// Upload.
-	f, err = os.Open(filePath)
+	f, err = os.Open(filePath) //nolint:gosec // filePath is from local snapshot data directory
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	url := fmt.Sprintf("%s/v2/%s/blobs/sha256:%s", p.serverURL, name, digest)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, f)
@@ -770,7 +771,7 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 	if err != nil {
 		return "", 0, fmt.Errorf("PUT blob: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -800,7 +801,7 @@ func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *epo
 	if err != nil {
 		return fmt.Errorf("PUT manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -821,7 +822,7 @@ func (p *EpochPuller) DeleteSnapshot(ctx context.Context, name, tag string) erro
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -859,7 +860,7 @@ func hydrateSnapshotRecord(rec *snapshotRecord) error {
 		return nil
 	}
 	configPath := filepath.Join(rec.DataDir, "config.json")
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // configPath is from local snapshot data directory
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -934,7 +935,7 @@ func (p *EpochPuller) removeSnapshotRecord(name, snapshotID string) error {
 
 func (p *EpochPuller) cloudImageExists(ctx context.Context, name string) bool {
 	imageDB := filepath.Join(p.rootDir, "cloudimg", "db", "images.json")
-	data, err := os.ReadFile(imageDB)
+	data, err := os.ReadFile(imageDB) //nolint:gosec // imageDB is from trusted config path
 	if err == nil {
 		var db cloudImageIndex
 		if jsonErr := json.Unmarshal(data, &db); jsonErr == nil {

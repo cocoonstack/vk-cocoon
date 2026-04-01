@@ -30,16 +30,16 @@ const (
 
 // probeResult tracks the current probe state for a pod.
 type probeResult struct {
-	mu              sync.Mutex
-	livenessReady   bool
-	readinessReady  bool
-	liveFailCount   int
-	readyFailCount  int
-	liveSuccCount   int
-	readySuccCount  int
-	lastLiveErr     string
-	lastReadyErr    string
-	cancel          context.CancelFunc
+	mu             sync.Mutex
+	livenessReady  bool
+	readinessReady bool
+	liveFailCount  int
+	readyFailCount int
+	liveSuccCount  int
+	readySuccCount int
+	lastLiveErr    string
+	lastReadyErr   string
+	cancel         context.CancelFunc
 }
 
 // startProbes launches background probe goroutines for a pod.
@@ -120,7 +120,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 
 		err := p.executeProbe(ctx, vm, probe, timeout)
 		pr.mu.Lock()
-		if probeType == "liveness" {
+		if probeType == "liveness" { //nolint:nestif // probe state machine with threshold tracking
 			if err == nil {
 				pr.liveSuccCount++
 				pr.liveFailCount = 0
@@ -188,7 +188,7 @@ func (p *CocoonProvider) executeProbe(ctx context.Context, vm *CocoonVM, probe *
 		}
 		return probeHTTP(scheme, vm.IP, port, path, timeout)
 	}
-	if probe.Exec != nil && vm.OS != "windows" {
+	if probe.Exec != nil && vm.OS != osWindows {
 		pw := p.sshPass(vm)
 		cmd := strings.Join(probe.Exec.Command, " ")
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -205,7 +205,7 @@ func probeTCP(ip string, port int, timeout time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("tcp %s:%d: %w", ip, port, err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 
@@ -217,7 +217,7 @@ func probeHTTP(scheme, ip string, port int, path string, timeout time.Duration) 
 	if err != nil {
 		return fmt.Errorf("http %s: %w", url, err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("http %s: status %d", url, resp.StatusCode)
 	}

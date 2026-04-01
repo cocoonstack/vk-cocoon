@@ -76,7 +76,7 @@ func chSocketPath(vmID string) string {
 func chGet(socketPath, endpoint string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "--unix-socket", socketPath,
+	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "--unix-socket", socketPath, //nolint:gosec // trusted internal args
 		"http://localhost"+endpoint)
 	out, err := cmd.Output()
 	if err != nil {
@@ -85,37 +85,7 @@ func chGet(socketPath, endpoint string) ([]byte, error) {
 	return out, nil
 }
 
-// chPut calls a CH API PUT endpoint via sudo curl.
-func chPut(socketPath, endpoint string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "-X", "PUT",
-		"--unix-socket", socketPath, "http://localhost"+endpoint)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("CH API PUT %s: %w (%s)", endpoint, err, string(out))
-	}
-	return nil
-}
-
 // ---------- CH API calls ----------
-
-// chGetVMInfo calls GET /api/v1/vm.info.
-func chGetVMInfo(vmID string) (*CHVMInfo, error) {
-	sock := chSocketPath(vmID)
-	if sock == "" {
-		return nil, fmt.Errorf("no CH socket for VM %s", vmID)
-	}
-	data, err := chGet(sock, "/api/v1/vm.info")
-	if err != nil {
-		return nil, err
-	}
-	var info CHVMInfo
-	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("vm.info decode: %w", err)
-	}
-	return &info, nil
-}
 
 // chGetPing calls GET /api/v1/vmm.ping and returns PID.
 func chGetPing(vmID string) (*CHPing, error) {
@@ -151,15 +121,6 @@ func chGetCounters(vmID string) (CHCounters, error) {
 	return counters, nil
 }
 
-// chPowerButton sends ACPI power button via PUT /api/v1/vm.power-button.
-func chPowerButton(vmID string) error {
-	sock := chSocketPath(vmID)
-	if sock == "" {
-		return fmt.Errorf("no CH socket for VM %s", vmID)
-	}
-	return chPut(sock, "/api/v1/vm.power-button")
-}
-
 // ---------- Host /proc metrics ----------
 
 // readHostCPUCount returns the number of logical CPUs on the host.
@@ -169,7 +130,7 @@ func readHostCPUCount() int {
 		return 0
 	}
 	count := 0
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(line, "processor") {
 			count++
 		}
@@ -183,7 +144,7 @@ func readHostMemoryBytes() uint64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
@@ -201,7 +162,7 @@ func readHostMemAvailable() uint64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(line, "MemAvailable:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
@@ -219,8 +180,8 @@ func readHostDiskBytes(path string) (total, avail uint64) {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0, 0
 	}
-	total = stat.Blocks * uint64(stat.Bsize)
-	avail = stat.Bavail * uint64(stat.Bsize)
+	total = stat.Blocks * uint64(stat.Bsize) //nolint:gosec // Bsize is always positive on Linux
+	avail = stat.Bavail * uint64(stat.Bsize) //nolint:gosec // Bsize is always positive on Linux
 	return total, avail
 }
 
@@ -259,7 +220,7 @@ func readProcMemoryRSS(pid int) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.HasPrefix(line, "VmRSS:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
