@@ -1601,8 +1601,6 @@ func (p *CocoonProvider) notifyPodStatus(ns, name string) {
 	p.notifyPodCb(podCopy)
 }
 
-// ---------- Post-clone network fix ----------
-
 // ---------- Internal helpers ----------
 
 func (p *CocoonProvider) getVM(ns, name string) *CocoonVM {

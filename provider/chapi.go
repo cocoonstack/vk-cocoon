@@ -266,23 +266,4 @@ func readProcMemoryRSS(pid int) (uint64, error) {
 	return 0, fmt.Errorf("VmRSS not found for pid %d", pid)
 }
 
-// getClockTicksPerSecond reads the system clock ticks (usually 100).
-func getClockTicksPerSecond() uint64 {
-	data, err := os.ReadFile("/proc/self/auxv")
-	if err != nil {
-		return 100 // default: 100 Hz
-	}
-	_ = data
-	return 100
-}
-
-// ---------- Helper: read file safely ----------
-
-func readFileTrimmed(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
 

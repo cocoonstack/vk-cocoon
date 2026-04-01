@@ -1,5 +1,8 @@
 bin/
 dist/
+vk-cocoon
 *.out
 *.test
 coverage.out
+coverage.html
+coverage.txt

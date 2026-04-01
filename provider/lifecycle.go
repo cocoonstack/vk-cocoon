@@ -512,8 +512,6 @@ func (p *CocoonProvider) countDeploymentPods(ns, deployName string) int {
 
 // ---------- Slot Allocation ----------
 
-// ---------- Slot Allocation ----------
-
 // allocateSlotLocked finds the first available replica slot. Caller must hold p.mu.
 func (p *CocoonProvider) allocateSlotLocked(ns, deployName string) int {
 	prefix := fmt.Sprintf("vk-%s-%s-", ns, deployName)

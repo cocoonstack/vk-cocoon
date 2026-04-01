@@ -331,15 +331,6 @@ func (p *EpochPuller) curlWriteFile(ctx context.Context, url, destPath string) e
 
 // --- Snapshot DB ---
 
-func (p *EpochPuller) snapshotExists(name string) bool {
-	db, err := p.readSnapshotDB()
-	if err != nil {
-		return false
-	}
-	_, ok := db.Names[name]
-	return ok
-}
-
 func (p *EpochPuller) ensureLocalSnapshotMetadata(name string) (bool, error) {
 	db, err := p.readSnapshotDB()
 	if err != nil {
