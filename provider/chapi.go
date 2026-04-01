@@ -1,4 +1,4 @@
-// Package provider — Cloud Hypervisor API client for VM metrics and control.
+// Package provider -- Cloud Hypervisor API client for VM metrics and control.
 //
 // Each Cloud Hypervisor process exposes a Unix socket API at:
 //
@@ -7,10 +7,10 @@
 //
 // Endpoints used:
 //
-//	GET  /api/v1/vm.info      — VM state + memory_actual_size
-//	GET  /api/v1/vm.counters  — Disk I/O + network stats per device
-//	GET  /api/v1/vmm.ping     — Health check + PID
-//	PUT  /api/v1/vm.power-button — ACPI power button (graceful shutdown)
+//	GET  /api/v1/vm.info      -- VM state + memory_actual_size
+//	GET  /api/v1/vm.counters  -- Disk I/O + network stats per device
+//	GET  /api/v1/vmm.ping     -- Health check + PID
+//	PUT  /api/v1/vm.power-button -- ACPI power button (graceful shutdown)
 package provider
 
 import (
@@ -25,49 +25,6 @@ import (
 	"syscall"
 	"time"
 )
-
-// chSocketPath returns the CH API socket path for a given VM ID.
-// Checks both /data01/cocoon/run and /var/lib/cocoon/run.
-// Uses sudo test because the directories are root-owned.
-func chSocketPath(vmID string) string {
-	for _, base := range []string{
-		"/data01/cocoon/run/cloudhypervisor",
-		"/var/lib/cocoon/run/cloudhypervisor",
-	} {
-		sock := filepath.Join(base, vmID, "api.sock")
-		// os.Stat fails if parent dir is root-only, so use sudo test
-		if err := exec.Command("sudo", "test", "-S", sock).Run(); err == nil {
-			return sock
-		}
-	}
-	return ""
-}
-
-// chGet calls a CH API GET endpoint via sudo curl (socket is root-owned).
-func chGet(socketPath, endpoint string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "--unix-socket", socketPath,
-		"http://localhost"+endpoint)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("CH API %s: %w", endpoint, err)
-	}
-	return out, nil
-}
-
-// chPut calls a CH API PUT endpoint via sudo curl.
-func chPut(socketPath, endpoint string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "-X", "PUT",
-		"--unix-socket", socketPath, "http://localhost"+endpoint)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("CH API PUT %s: %w (%s)", endpoint, err, string(out))
-	}
-	return nil
-}
 
 // ---------- CH API response types ----------
 
@@ -95,6 +52,52 @@ type CHPing struct {
 // CHCounters is the response from GET /api/v1/vm.counters.
 type CHCounters map[string]map[string]uint64
 
+// ---------- Socket discovery ----------
+
+// chSocketPath returns the CH API socket path for a given VM ID.
+// Checks both /data01/cocoon/run and /var/lib/cocoon/run.
+// Uses sudo test because the directories are root-owned.
+func chSocketPath(vmID string) string {
+	for _, base := range []string{
+		"/data01/cocoon/run/cloudhypervisor",
+		"/var/lib/cocoon/run/cloudhypervisor",
+	} {
+		sock := filepath.Join(base, vmID, "api.sock")
+		if err := exec.Command("sudo", "test", "-S", sock).Run(); err == nil { //nolint:gosec
+			return sock
+		}
+	}
+	return ""
+}
+
+// ---------- Low-level HTTP helpers ----------
+
+// chGet calls a CH API GET endpoint via sudo curl (socket is root-owned).
+func chGet(socketPath, endpoint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "--unix-socket", socketPath,
+		"http://localhost"+endpoint)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("CH API %s: %w", endpoint, err)
+	}
+	return out, nil
+}
+
+// chPut calls a CH API PUT endpoint via sudo curl.
+func chPut(socketPath, endpoint string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "-X", "PUT",
+		"--unix-socket", socketPath, "http://localhost"+endpoint)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("CH API PUT %s: %w (%s)", endpoint, err, string(out))
+	}
+	return nil
+}
+
 // ---------- CH API calls ----------
 
 // chGetVMInfo calls GET /api/v1/vm.info.
@@ -114,7 +117,7 @@ func chGetVMInfo(vmID string) (*CHVMInfo, error) {
 	return &info, nil
 }
 
-// chGetPing calls GET /api/v1/vmm.ping — returns PID.
+// chGetPing calls GET /api/v1/vmm.ping and returns PID.
 func chGetPing(vmID string) (*CHPing, error) {
 	sock := chSocketPath(vmID)
 	if sock == "" {
@@ -131,7 +134,7 @@ func chGetPing(vmID string) (*CHPing, error) {
 	return &ping, nil
 }
 
-// chGetCounters calls GET /api/v1/vm.counters — per-device I/O stats.
+// chGetCounters calls GET /api/v1/vm.counters for per-device I/O stats.
 func chGetCounters(vmID string) (CHCounters, error) {
 	sock := chSocketPath(vmID)
 	if sock == "" {
@@ -192,17 +195,6 @@ func readHostMemoryBytes() uint64 {
 	return 0
 }
 
-// readHostDiskBytes returns total and available bytes for a path via statfs.
-func readHostDiskBytes(path string) (total, avail uint64) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, 0
-	}
-	total = stat.Blocks * uint64(stat.Bsize)
-	avail = stat.Bavail * uint64(stat.Bsize)
-	return total, avail
-}
-
 // readHostMemAvailable returns available memory in bytes from /proc/meminfo.
 func readHostMemAvailable() uint64 {
 	data, err := os.ReadFile("/proc/meminfo")
@@ -220,6 +212,19 @@ func readHostMemAvailable() uint64 {
 	}
 	return 0
 }
+
+// readHostDiskBytes returns total and available bytes for a path via statfs.
+func readHostDiskBytes(path string) (total, avail uint64) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, 0
+	}
+	total = stat.Blocks * uint64(stat.Bsize)
+	avail = stat.Bavail * uint64(stat.Bsize)
+	return total, avail
+}
+
+// ---------- Per-process /proc metrics ----------
 
 // readProcCPUUsage reads CPU time (in nanoseconds) for a process from /proc/{pid}/stat.
 // Returns (user_ns, system_ns, err).
@@ -265,5 +270,3 @@ func readProcMemoryRSS(pid int) (uint64, error) {
 	}
 	return 0, fmt.Errorf("VmRSS not found for pid %d", pid)
 }
-
-

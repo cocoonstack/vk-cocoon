@@ -954,7 +954,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 				// Push snapshot to epoch (if registry configured).
 				pushedToEpoch := false
 				if puller != nil {
-					exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX",
+					_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX",
 						filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
 
 					if pushErr := puller.PushSnapshot(ctx, snapshotName, "latest"); pushErr != nil {
@@ -1190,12 +1190,11 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 	}
 
 	containerName := "agent"
-	if p.mu.RLock(); true {
-		if pod, ok := p.pods[key]; ok && len(pod.Spec.Containers) > 0 {
-			containerName = pod.Spec.Containers[0].Name
-		}
-		p.mu.RUnlock()
+	p.mu.RLock()
+	if pod, ok := p.pods[key]; ok && len(pod.Spec.Containers) > 0 {
+		containerName = pod.Spec.Containers[0].Name
 	}
+	p.mu.RUnlock()
 
 	hostIP := p.nodeIP
 	if hostIP == "" {

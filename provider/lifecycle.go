@@ -285,7 +285,7 @@ func addPodDNS(podName, namespace, ip string) {
 // removePodDNS removes the dnsmasq host entry for the pod.
 func removePodDNS(podName string) {
 	cmd := fmt.Sprintf("sudo sed -i '/%s/d' /etc/hosts 2>/dev/null", podName)
-	exec.Command("bash", "-c", cmd).Run()
+	_ = exec.Command("bash", "-c", cmd).Run() //nolint:gosec
 }
 
 // ---------- Suspended Snapshot Tracking ----------

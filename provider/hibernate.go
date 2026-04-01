@@ -100,7 +100,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	// 2. Push to epoch.
 	pushedToEpoch := false
 	if puller != nil {
-		exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX",
+		_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX",
 			filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
 
 		if pushErr := puller.PushSnapshot(ctx, snapshotName, "latest"); pushErr != nil {
