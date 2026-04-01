@@ -527,7 +527,6 @@ func isHTTPURL(raw string) bool {
 	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }
 
-
 // ---------- Push (upload to epoch) ----------
 
 // PushSnapshot uploads a local snapshot to the epoch registry via HTTP.

@@ -27,6 +27,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
+
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 

@@ -332,7 +332,7 @@ func (p *CocoonProvider) clearSuspendedSnapshot(ctx context.Context, ns, vmName 
 // getOwnerDeploymentName returns the Deployment name for a pod owned via
 // ReplicaSet, or "" if not a Deployment-owned pod.
 func (p *CocoonProvider) getOwnerDeploymentName(ctx context.Context, pod *corev1.Pod) string {
-	for _, ref := range pod.OwnerReferences {
+	for _, ref := range pod.OwnerReferences { //nolint:nestif
 		if ref.Kind == "ReplicaSet" {
 			rsName := ref.Name
 			if idx := strings.LastIndex(rsName, "-"); idx > 0 {
