@@ -12,7 +12,7 @@ import (
 // This is the case for Windows guests (which use RDP) or when
 // no IP has been assigned yet.
 func (vm *CocoonVM) skipSSH() bool {
-	return vm.OS == osWindows || vm.IP == ""
+	return vm.os == osWindows || vm.ip == ""
 }
 
 // podKey builds the canonical map key for a pod: "namespace/name".

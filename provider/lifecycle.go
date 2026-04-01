@@ -160,7 +160,7 @@ func (p *CocoonProvider) injectDownwardAPIEnv(pod *corev1.Pod, vm *CocoonVM) map
 	env := map[string]string{
 		"POD_NAME":      pod.Name,
 		"POD_NAMESPACE": pod.Namespace,
-		"POD_IP":        vm.IP,
+		"POD_IP":        vm.ip,
 		"NODE_NAME":     pod.Spec.NodeName,
 		"POD_UID":       string(pod.UID),
 	}
@@ -180,7 +180,7 @@ func (p *CocoonProvider) injectDownwardAPIEnv(pod *corev1.Pod, vm *CocoonVM) map
 // enforceResources uses CH API to resize VM resources to match pod limits.
 // CPU: resize vCPUs. Memory: resize balloon.
 func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.VMID == "" || strings.HasPrefix(vm.VMID, "static-") {
+	if vm.vmID == "" || strings.HasPrefix(vm.vmID, "static-") {
 		return
 	}
 	if len(pod.Spec.Containers) == 0 {
@@ -195,18 +195,18 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 	// CPU resize
 	if cpuQ := limits.Cpu(); cpuQ != nil && !cpuQ.IsZero() { //nolint:nestif // CH API resize with validation
 		desiredCPU := int(cpuQ.Value())
-		if desiredCPU > 0 && desiredCPU != vm.CPU {
-			sock := chSocketPath(vm.VMID)
+		if desiredCPU > 0 && desiredCPU != vm.cpu {
+			sock := chSocketPath(vm.vmID)
 			if sock != "" {
 				body := fmt.Sprintf(`{"desired_vcpus":%d}`, desiredCPU)
 				cmd := fmt.Sprintf("sudo curl -s -X PUT --unix-socket %s -H 'Content-Type: application/json' -d '%s' http://localhost/api/v1/vm.resize",
 					sock, body)
 				if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from trusted internal template
 					klog.V(2).Infof("enforceResources %s: CPU resize to %d failed: %v (%s)",
-						vm.VMName, desiredCPU, err, strings.TrimSpace(string(out)))
+						vm.vmName, desiredCPU, err, strings.TrimSpace(string(out)))
 				} else {
-					klog.Infof("enforceResources %s: CPU resized to %d", vm.VMName, desiredCPU)
-					vm.CPU = desiredCPU
+					klog.Infof("enforceResources %s: CPU resized to %d", vm.vmName, desiredCPU)
+					vm.cpu = desiredCPU
 				}
 			}
 		}
@@ -217,9 +217,9 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 	// risky for running VMs. Log the desired size for observability.
 	if memQ := limits.Memory(); memQ != nil && !memQ.IsZero() {
 		desiredMB := int(memQ.Value() / (1024 * 1024))
-		if desiredMB > 0 && desiredMB != vm.MemoryMB {
+		if desiredMB > 0 && desiredMB != vm.memoryMB {
 			klog.V(2).Infof("enforceResources %s: memory limit %dMB (VM configured %dMB, balloon resize not applied)",
-				vm.VMName, desiredMB, vm.MemoryMB)
+				vm.vmName, desiredMB, vm.memoryMB)
 		}
 	}
 }
@@ -419,7 +419,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 			return true
 		case "main-only":
 			vm := p.getVM(pod.Namespace, pod.Name)
-			if vm != nil && isMainAgent(vm.VMName) {
+			if vm != nil && isMainAgent(vm.vmName) {
 				klog.Infof("shouldSnapshot %s: annotation snapshot-policy=main-only (is main)", key)
 				return true
 			}
@@ -500,11 +500,11 @@ func (p *CocoonProvider) allocateSlotLocked(ns, deployName string) int {
 	usedSlots := make(map[int]bool)
 	maxSlot := -1
 	for _, vm := range p.vms {
-		if strings.HasPrefix(vm.VMName, prefix) {
-			if vm.State == "suspending" || vm.State == "hibernated" {
+		if strings.HasPrefix(vm.vmName, prefix) {
+			if vm.state == "suspending" || vm.state == "hibernated" {
 				continue
 			}
-			slotStr := vm.VMName[len(prefix):]
+			slotStr := vm.vmName[len(prefix):]
 			if slot, err := strconv.Atoi(slotStr); err == nil {
 				usedSlots[slot] = true
 				if slot > maxSlot {
@@ -575,7 +575,7 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
-		if vm.VMName == mainVM && vm.State == stateRunning && vm.VMID != "" {
+		if vm.vmName == mainVM && vm.state == stateRunning && vm.vmID != "" {
 			sourceVM = vm
 			break
 		}
@@ -591,12 +591,12 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 	forkSnap := vmName + "-fork"
 	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
 
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.VMID)
+	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
 	if err != nil {
 		klog.Errorf("forkFromMainAgent: snapshot %s failed: %v — %s", mainVM, err, out)
 		return ""
 	}
-	klog.Infof("forkFromMainAgent: live snapshot of %s (%s) → %s", mainVM, sourceVM.VMID, forkSnap)
+	klog.Infof("forkFromMainAgent: live snapshot of %s (%s) → %s", mainVM, sourceVM.vmID, forkSnap)
 	return forkSnap
 }
 
@@ -606,7 +606,7 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
-		if vm.VMName == sourceVMName && vm.State == stateRunning && vm.VMID != "" {
+		if vm.vmName == sourceVMName && vm.state == stateRunning && vm.vmID != "" {
 			sourceVM = vm
 			break
 		}
@@ -621,12 +621,12 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 	forkSnap := targetVMName + "-fork"
 	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
 
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.VMID)
+	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
 	if err != nil {
 		klog.Errorf("forkFromVM: snapshot %s failed: %v — %s", sourceVMName, err, out)
 		return ""
 	}
-	klog.Infof("forkFromVM: live snapshot of %s (%s) → %s", sourceVMName, sourceVM.VMID, forkSnap)
+	klog.Infof("forkFromVM: live snapshot of %s (%s) → %s", sourceVMName, sourceVM.vmID, forkSnap)
 	return forkSnap
 }
 

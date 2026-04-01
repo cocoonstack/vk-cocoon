@@ -37,7 +37,7 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 	var checks []check
 	for key, pod := range p.pods {
 		vm := p.vms[key]
-		if vm == nil || !vm.Managed {
+		if vm == nil || !vm.managed {
 			continue
 		}
 		checks = append(checks, check{key: key, pod: pod, vm: vm})
@@ -52,10 +52,10 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 		out, _ := exec.CommandContext(ctx, "bash", "-c", cmd).Output() //nolint:gosec // cmd from kubectl template
 		liveHibernate := strings.Trim(strings.TrimSpace(string(out)), "'")
 
-		if liveHibernate == valTrue && c.vm.State == stateRunning {
+		if liveHibernate == valTrue && c.vm.state == stateRunning {
 			klog.Infof("reconcileHibernate: %s has hibernate=true, triggering", c.key)
 			p.hibernateVM(ctx, c.pod, c.vm)
-		} else if liveHibernate != valTrue && c.vm.State == stateHibernated {
+		} else if liveHibernate != valTrue && c.vm.state == stateHibernated {
 			klog.Infof("reconcileHibernate: %s hibernate removed, triggering wake", c.key)
 			p.wakeVM(ctx, c.pod, c.vm)
 		}
@@ -68,12 +68,12 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	key := podKey(pod.Namespace, pod.Name)
 
 	// Slot-0 is the main agent — cannot be hibernated.
-	if isMainAgent(vm.VMName) {
+	if isMainAgent(vm.vmName) {
 		klog.Warningf("hibernateVM %s: REJECTED — slot-0 (main agent) cannot be hibernated", key)
 		return
 	}
 
-	klog.Infof("hibernateVM %s: starting (vm=%s id=%s)", key, vm.VMName, vm.VMID)
+	klog.Infof("hibernateVM %s: starting (vm=%s id=%s)", key, vm.vmName, vm.vmID)
 
 	// Stop probes — VM will be gone.
 	p.stopProbes(key)
@@ -87,10 +87,10 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	puller := p.getPuller(registryURL)
 
 	// 1. Snapshot the running VM.
-	snapshotName := vm.VMName + "-suspend"
+	snapshotName := vm.vmName + "-suspend"
 	_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
 
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.VMID)
+	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.vmID)
 	if err != nil {
 		klog.Errorf("hibernateVM %s: snapshot failed: %v — %s", key, err, out)
 		return
@@ -116,20 +116,20 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	if registryURL != "" && pushedToEpoch {
 		fullRef = registryURL + "/" + snapshotName
 	}
-	p.recordSuspendedSnapshot(ctx, pod, vm.VMName, fullRef)
+	p.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
 
 	if pushedToEpoch {
 		_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
 	}
 
 	// 3. Destroy VM.
-	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.VMID)
+	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.vmID)
 
 	// 4. Mark as hibernated (pod stays, VM gone).
 	p.mu.Lock()
-	vm.State = stateHibernated
-	vm.VMID = ""
-	vm.IP = ""
+	vm.state = stateHibernated
+	vm.vmID = ""
+	vm.ip = ""
 	p.mu.Unlock()
 
 	klog.Infof("hibernateVM %s: complete — pod stays alive, VM destroyed", key)
@@ -140,7 +140,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 // Triggered when the cocoon.cis/hibernate annotation is removed.
 func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
 	key := podKey(pod.Namespace, pod.Name)
-	klog.Infof("wakeVM %s: starting (vm=%s)", key, vm.VMName)
+	klog.Infof("wakeVM %s: starting (vm=%s)", key, vm.vmName)
 
 	// Resolve image and check for suspended snapshot.
 	imageRaw := ann(pod, AnnImage, "")
@@ -150,14 +150,14 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	registryURL, image := parseImageRef(imageRaw)
 	cloneImage := image
 
-	if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.VMName); ref != "" {
+	if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
 		klog.Infof("wakeVM %s: found suspended snapshot %s", key, ref)
 		suspendRegistry, suspendName := parseImageRef(ref)
 		cloneImage = suspendName
 		if suspendRegistry != "" {
 			registryURL = suspendRegistry
 		}
-		p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.VMName)
+		p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 	}
 
 	// Pull from epoch.
@@ -173,12 +173,12 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	storage := ann(pod, AnnStorage, "100G")
 
 	// Clean up any stale VM with same name.
-	if existing := p.discoverVM(ctx, vm.VMName); existing != nil && existing.VMID != "" {
-		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.VMID)
+	if existing := p.discoverVM(ctx, vm.vmName); existing != nil && existing.vmID != "" {
+		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.vmID)
 	}
 
 	// Clone VM from snapshot.
-	args := buildCloneArgs(vm.VMName, cpu, mem, storage, cloneImage)
+	args := buildCloneArgs(vm.vmName, cpu, mem, storage, cloneImage)
 	out, err := p.cocoonExec(ctx, args...)
 	if err != nil {
 		klog.Errorf("wakeVM %s: clone failed: %v — %s", key, err, out)
@@ -188,8 +188,8 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	// Discover new VM.
 	var fresh *CocoonVM
 	for range 5 {
-		fresh = p.discoverVM(ctx, vm.VMName)
-		if fresh != nil && fresh.VMID != "" {
+		fresh = p.discoverVM(ctx, vm.vmName)
+		if fresh != nil && fresh.vmID != "" {
 			break
 		}
 		time.Sleep(2 * time.Second)
@@ -200,19 +200,19 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	}
 
 	// Wait for DHCP IP.
-	fresh.PodNamespace = pod.Namespace
-	fresh.PodName = pod.Name
-	fresh.OS = ann(pod, AnnOS, "linux")
-	fresh.Managed = true
-	fresh.IP = p.waitForDHCPIP(ctx, fresh, 120*time.Second)
+	fresh.podNamespace = pod.Namespace
+	fresh.podName = pod.Name
+	fresh.os = ann(pod, AnnOS, "linux")
+	fresh.managed = true
+	fresh.ip = p.waitForDHCPIP(ctx, fresh, 120*time.Second)
 
 	// Update VM record.
 	p.mu.Lock()
-	vm.VMID = fresh.VMID
-	vm.State = stateRunning
-	vm.IP = fresh.IP
-	vm.MAC = fresh.MAC
-	vm.StartedAt = time.Now()
+	vm.vmID = fresh.vmID
+	vm.state = stateRunning
+	vm.ip = fresh.ip
+	vm.mac = fresh.mac
+	vm.startedAt = time.Now()
 	p.mu.Unlock()
 
 	// Update in-memory pod annotations.
@@ -222,6 +222,6 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	go p.postBootInject(ctx, pod, vm)
 	go p.startProbes(context.Background(), pod, vm)
 
-	klog.Infof("wakeVM %s: complete (ip=%s)", key, fresh.IP)
+	klog.Infof("wakeVM %s: complete (ip=%s)", key, fresh.ip)
 	go p.notifyPodStatus(pod.Namespace, pod.Name)
 }

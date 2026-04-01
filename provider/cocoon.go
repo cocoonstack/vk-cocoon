@@ -94,22 +94,22 @@ const (
 
 // CocoonVM is the internal representation of a Cocoon VM tracked by the provider.
 type CocoonVM struct {
-	PodNamespace string
-	PodName      string
-	VMID         string
-	VMName       string
-	IP           string
-	MAC          string
-	State        string // running, stopped, created, error
-	CPU          int
-	MemoryMB     int
-	StorageGB    int
-	NICs         int
-	Image        string
-	OS           string // "linux" or "windows"
-	Managed      bool   // true = VK owns lifecycle (stop on delete, start on recreate)
-	CreatedAt    time.Time
-	StartedAt    time.Time
+	podNamespace string
+	podName      string
+	vmID         string
+	vmName       string
+	ip           string
+	mac          string
+	state        string // running, stopped, created, error
+	cpu          int
+	memoryMB     int
+	storageGB    int
+	nics         int
+	image        string
+	os           string // "linux" or "windows"
+	managed      bool   // true = VK owns lifecycle (stop on delete, start on recreate)
+	createdAt    time.Time
+	startedAt    time.Time
 }
 
 // cocoonVMJSON matches `cocoon vm list --format json` output.
@@ -174,7 +174,7 @@ type CocoonProvider struct {
 
 var _ nodeutil.Provider = (*CocoonProvider)(nil)
 
-func NewCocoonProvider(cocoonBin, nodeIP string, kubeClient kubernetes.Interface, cfg nodeutil.ProviderConfig) *CocoonProvider {
+func NewCocoonProvider(ctx context.Context, cocoonBin, nodeIP string, kubeClient kubernetes.Interface, cfg nodeutil.ProviderConfig) *CocoonProvider {
 	p := &CocoonProvider{
 		cocoonBin:       cocoonBin,
 		nodeIP:          nodeIP,
@@ -192,24 +192,37 @@ func NewCocoonProvider(cocoonBin, nodeIP string, kubeClient kubernetes.Interface
 	klog.Infof("CocoonProvider initialized (bin=%s, nodeIP=%s)", cocoonBin, nodeIP)
 
 	// Start reconciliation loop (like kubelet's syncPod).
-	go p.reconcileLoop()
+	go p.reconcileLoop(ctx)
 
 	return p
 }
 
-func buildRunArgs(vmName, cpu, mem, storage, nics, dns, rootPwd, image, osType string) []string {
-	args := []string{"vm", "run", "--name", vmName, "--cpu", cpu, "--memory", mem, "--storage", storage, "--nics", nics}
-	if isWindowsOS(osType) {
+// runConfig bundles the parameters for buildRunArgs.
+type runConfig struct {
+	vmName  string
+	cpu     string
+	mem     string
+	storage string
+	nics    string
+	dns     string
+	rootPwd string
+	image   string
+	osType  string
+}
+
+func buildRunArgs(rc runConfig) []string {
+	args := []string{"vm", "run", "--name", rc.vmName, "--cpu", rc.cpu, "--memory", rc.mem, "--storage", rc.storage, "--nics", rc.nics}
+	if isWindowsOS(rc.osType) {
 		args = append(args, "--windows")
 	}
-	if dns != "" {
-		args = append(args, "--dns", dns)
+	if rc.dns != "" {
+		args = append(args, "--dns", rc.dns)
 	}
 	// Windows guests do not consume Cocoon's cloud-init root password path.
-	if rootPwd != "" && !isWindowsOS(osType) {
-		args = append(args, "--default-root-password", rootPwd)
+	if rc.rootPwd != "" && !isWindowsOS(rc.osType) {
+		args = append(args, "--default-root-password", rc.rootPwd)
 	}
-	return append(args, image)
+	return append(args, rc.image)
 }
 
 func buildCloneArgs(vmName, cpu, mem, storage, snapshot string) []string {
@@ -249,7 +262,7 @@ func (p *CocoonProvider) discoverRecoverableManagedVM(ctx context.Context, vmID,
 		}
 		if vm != nil {
 			last = vm
-			if shouldReuseExistingVMState(vm.State) {
+			if shouldReuseExistingVMState(vm.state) {
 				return vm
 			}
 		}
@@ -296,11 +309,11 @@ func setPodAnnotation(pod *corev1.Pod, changed map[string]string, key, value str
 
 func applyVMPodAnnotations(pod *corev1.Pod, vm *CocoonVM) map[string]string {
 	changed := map[string]string{}
-	setPodAnnotation(pod, changed, AnnVMName, vm.VMName)
-	setPodAnnotation(pod, changed, AnnVMID, vm.VMID)
-	setPodAnnotation(pod, changed, AnnIP, vm.IP)
-	setPodAnnotation(pod, changed, AnnMAC, vm.MAC)
-	if vm.Managed {
+	setPodAnnotation(pod, changed, AnnVMName, vm.vmName)
+	setPodAnnotation(pod, changed, AnnVMID, vm.vmID)
+	setPodAnnotation(pod, changed, AnnIP, vm.ip)
+	setPodAnnotation(pod, changed, AnnMAC, vm.mac)
+	if vm.managed {
 		setPodAnnotation(pod, changed, AnnManaged, valTrue)
 	}
 	return changed
@@ -341,35 +354,35 @@ func (p *CocoonProvider) syncPodRuntimeMetadata(ctx context.Context, key string,
 
 	p.mu.Lock()
 	if current, ok := p.vms[key]; ok { //nolint:nestif // field-by-field merge is inherently nested
-		if vm.VMID != "" {
-			current.VMID = vm.VMID
+		if vm.vmID != "" {
+			current.vmID = vm.vmID
 		}
-		if vm.VMName != "" {
-			current.VMName = vm.VMName
+		if vm.vmName != "" {
+			current.vmName = vm.vmName
 		}
-		if vm.IP != "" {
-			current.IP = vm.IP
+		if vm.ip != "" {
+			current.ip = vm.ip
 		}
-		if vm.MAC != "" {
-			current.MAC = vm.MAC
+		if vm.mac != "" {
+			current.mac = vm.mac
 		}
-		if vm.State != "" {
-			current.State = vm.State
+		if vm.state != "" {
+			current.state = vm.state
 		}
-		if vm.Image != "" {
-			current.Image = vm.Image
+		if vm.image != "" {
+			current.image = vm.image
 		}
-		if vm.OS != "" {
-			current.OS = vm.OS
+		if vm.os != "" {
+			current.os = vm.os
 		}
-		if vm.Managed {
-			current.Managed = true
+		if vm.managed {
+			current.managed = true
 		}
-		if !vm.CreatedAt.IsZero() {
-			current.CreatedAt = vm.CreatedAt
+		if !vm.createdAt.IsZero() {
+			current.createdAt = vm.createdAt
 		}
-		if !vm.StartedAt.IsZero() {
-			current.StartedAt = vm.StartedAt
+		if !vm.startedAt.IsZero() {
+			current.startedAt = vm.startedAt
 		}
 		vm = current
 	}
@@ -389,43 +402,43 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 
 	vm := p.discoverRecoverableManagedVM(ctx, vmID, vmName)
 
-	if vm != nil && shouldReuseExistingVMState(vm.State) { //nolint:nestif // recovery logic requires multiple fallback checks
-		if vm.VMID == "" {
-			vm.VMID = vmID
+	if vm != nil && shouldReuseExistingVMState(vm.state) { //nolint:nestif // recovery logic requires multiple fallback checks
+		if vm.vmID == "" {
+			vm.vmID = vmID
 		}
-		if vm.VMName == "" {
-			vm.VMName = vmName
+		if vm.vmName == "" {
+			vm.vmName = vmName
 		}
-		if vm.IP == "" {
+		if vm.ip == "" {
 			if ipAnn := ann(pod, AnnIP, ""); ipAnn != "" {
-				vm.IP = ipAnn
+				vm.ip = ipAnn
 			}
 		}
-		if vm.IP == "" && vm.MAC != "" {
-			if dhcpIP := resolveIPFromLeaseByMAC(vm.MAC); dhcpIP != "" {
-				vm.IP = dhcpIP
+		if vm.ip == "" && vm.mac != "" {
+			if dhcpIP := resolveIPFromLeaseByMAC(vm.mac); dhcpIP != "" {
+				vm.ip = dhcpIP
 			}
 		}
-		if vm.IP == "" && vm.VMName != "" {
-			vm.IP = p.resolveIPFromLease(vm.VMName)
+		if vm.ip == "" && vm.vmName != "" {
+			vm.ip = p.resolveIPFromLease(vm.vmName)
 		}
-		if vm.Image == "" {
-			vm.Image = image
+		if vm.image == "" {
+			vm.image = image
 		}
-		vm.PodNamespace = pod.Namespace
-		vm.PodName = pod.Name
-		vm.OS = osType
-		vm.Managed = true
+		vm.podNamespace = pod.Namespace
+		vm.podName = pod.Name
+		vm.os = osType
+		vm.managed = true
 		now := time.Now()
-		if vm.CreatedAt.IsZero() {
-			vm.CreatedAt = now
+		if vm.createdAt.IsZero() {
+			vm.createdAt = now
 		}
-		if vm.StartedAt.IsZero() {
-			vm.StartedAt = now
+		if vm.startedAt.IsZero() {
+			vm.startedAt = now
 		}
 
 		p.storeRecoveredPodVM(key, pod, vm)
-		klog.Infof("CreatePod %s: recovered existing VM %s (%s) state=%s ip=%s", key, vm.VMName, vm.VMID, vm.State, vm.IP)
+		klog.Infof("CreatePod %s: recovered existing VM %s (%s) state=%s ip=%s", key, vm.vmName, vm.vmID, vm.state, vm.ip)
 		go p.startProbes(context.Background(), pod, vm)
 		go p.notifyPodStatus(pod.Namespace, pod.Name)
 		return true
@@ -435,15 +448,15 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 		if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vmName); ref != "" {
 			now := time.Now()
 			vm = &CocoonVM{
-				PodNamespace: pod.Namespace,
-				PodName:      pod.Name,
-				VMName:       vmName,
-				State:        stateHibernated,
-				Image:        image,
-				OS:           osType,
-				Managed:      true,
-				CreatedAt:    now,
-				StartedAt:    now,
+				podNamespace: pod.Namespace,
+				podName:      pod.Name,
+				vmName:       vmName,
+				state:        stateHibernated,
+				image:        image,
+				os:           osType,
+				managed:      true,
+				createdAt:    now,
+				startedAt:    now,
 			}
 			p.storeRecoveredPodVM(key, pod, vm)
 			klog.Infof("CreatePod %s: recovered hibernated pod %s from snapshot %s", key, vmName, ref)
@@ -453,7 +466,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 	}
 
 	if vm != nil {
-		klog.Warningf("CreatePod %s: pod carries existing vm-id=%s vm-name=%s but VM stayed in non-recoverable state=%s after retry; continuing with create", key, vmID, vmName, vm.State)
+		klog.Warningf("CreatePod %s: pod carries existing vm-id=%s vm-name=%s but VM stayed in non-recoverable state=%s after retry; continuing with create", key, vmID, vmName, vm.state)
 		return false
 	}
 	klog.Warningf("CreatePod %s: pod carries existing vm-id=%s vm-name=%s but no recoverable VM was found; continuing with create", key, vmID, vmName)
@@ -462,11 +475,16 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 
 // reconcileLoop periodically checks all managed VMs and restarts any that
 // are stopped or stale. Runs every 30 seconds, similar to kubelet's syncPod.
-func (p *CocoonProvider) reconcileLoop() {
+func (p *CocoonProvider) reconcileLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		p.reconcileOnce()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.reconcileOnce()
+		}
 	}
 }
 
@@ -486,8 +504,8 @@ func (p *CocoonProvider) reconcileOnce() {
 	}
 	var managed []vmSnapshot
 	for key, vm := range p.vms {
-		if vm.Managed {
-			managed = append(managed, vmSnapshot{key: key, vmID: vm.VMID, name: vm.VMName})
+		if vm.managed {
+			managed = append(managed, vmSnapshot{key: key, vmID: vm.vmID, name: vm.vmName})
 		}
 	}
 	p.mu.RUnlock()
@@ -500,7 +518,7 @@ func (p *CocoonProvider) reconcileOnce() {
 		// Skip hibernated VMs — no running VM expected.
 		p.mu.RLock()
 		vmRec, ok := p.vms[snap.key]
-		if ok && vmRec.State == stateHibernated {
+		if ok && vmRec.state == stateHibernated {
 			p.mu.RUnlock()
 			continue
 		}
@@ -523,32 +541,32 @@ func (p *CocoonProvider) reconcileOnce() {
 			continue
 		}
 
-		if snap.vmID == "" && fresh.VMID != "" {
-			updated.VMID = fresh.VMID
+		if snap.vmID == "" && fresh.vmID != "" {
+			updated.vmID = fresh.vmID
 		}
-		if fresh.VMName != "" {
-			updated.VMName = fresh.VMName
+		if fresh.vmName != "" {
+			updated.vmName = fresh.vmName
 		}
-		if fresh.State != "" {
-			updated.State = fresh.State
+		if fresh.state != "" {
+			updated.state = fresh.state
 		}
-		if fresh.MAC != "" {
-			updated.MAC = fresh.MAC
+		if fresh.mac != "" {
+			updated.mac = fresh.mac
 		}
-		if fresh.IP != "" {
-			updated.IP = fresh.IP
+		if fresh.ip != "" {
+			updated.ip = fresh.ip
 		}
-		if updated.MAC != "" {
-			if dhcpIP := resolveIPFromLeaseByMAC(updated.MAC); dhcpIP != "" {
-				updated.IP = dhcpIP
+		if updated.mac != "" {
+			if dhcpIP := resolveIPFromLeaseByMAC(updated.mac); dhcpIP != "" {
+				updated.ip = dhcpIP
 			}
 		}
 
 		p.syncPodRuntimeMetadata(ctx, snap.key, &updated)
 
-		if updated.State != stateRunning {
+		if updated.state != stateRunning {
 			klog.Warningf("reconcile: VM %s (%s) state=%s (not auto-restarting — VMs are ephemeral now)",
-				snap.name, snap.vmID, updated.State)
+				snap.name, snap.vmID, updated.state)
 		}
 	}
 }
@@ -606,18 +624,18 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			return fmt.Errorf("static mode requires cocoon.cis/ip annotation")
 		}
 		vm := &CocoonVM{
-			PodNamespace: pod.Namespace,
-			PodName:      pod.Name,
-			VMName:       pod.Name,
-			VMID:         ann(pod, AnnVMID, "static-"+pod.Name),
-			IP:           vmIP,
-			State:        stateRunning,
-			OS:           ann(pod, AnnOS, "linux"),
-			Managed:      false,
-			CPU:          2,
-			MemoryMB:     4096,
-			CreatedAt:    time.Now(),
-			StartedAt:    time.Now(),
+			podNamespace: pod.Namespace,
+			podName:      pod.Name,
+			vmName:       pod.Name,
+			vmID:         ann(pod, AnnVMID, "static-"+pod.Name),
+			ip:           vmIP,
+			state:        stateRunning,
+			os:           ann(pod, AnnOS, "linux"),
+			managed:      false,
+			cpu:          2,
+			memoryMB:     4096,
+			createdAt:    time.Now(),
+			startedAt:    time.Now(),
 		}
 		changed := applyVMPodAnnotations(pod, vm)
 		p.mu.Lock()
@@ -625,7 +643,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.vms[key] = vm
 		p.mu.Unlock()
 		p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, changed)
-		klog.Infof("CreatePod %s: static VM ip=%s os=%s", key, vm.IP, vm.OS)
+		klog.Infof("CreatePod %s: static VM ip=%s os=%s", key, vm.ip, vm.os)
 		go p.notifyPodStatus(pod.Namespace, pod.Name)
 		return nil
 	}
@@ -643,16 +661,16 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		if vm == nil {
 			return fmt.Errorf("adopt: VM not found (name=%q id=%q)", adoptName, adoptID)
 		}
-		vm.PodNamespace = pod.Namespace
-		vm.PodName = pod.Name
-		vm.Managed = ann(pod, AnnManaged, "false") == valTrue
-		vm.OS = ann(pod, AnnOS, "linux")
+		vm.podNamespace = pod.Namespace
+		vm.podName = pod.Name
+		vm.managed = ann(pod, AnnManaged, "false") == valTrue
+		vm.os = ann(pod, AnnOS, "linux")
 
 		if ipAnn := ann(pod, AnnIP, ""); ipAnn != "" {
-			vm.IP = ipAnn
+			vm.ip = ipAnn
 		}
-		if vm.IP == "" {
-			vm.IP = p.resolveIPFromLease(vm.VMName)
+		if vm.ip == "" {
+			vm.ip = p.resolveIPFromLease(vm.vmName)
 		}
 
 		changed := applyVMPodAnnotations(pod, vm)
@@ -662,7 +680,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.vms[key] = vm
 		p.mu.Unlock()
 		p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, changed)
-		klog.Infof("CreatePod %s: adopted existing VM %s (%s) ip=%s", key, vm.VMName, vm.VMID, vm.IP)
+		klog.Infof("CreatePod %s: adopted existing VM %s (%s) ip=%s", key, vm.vmName, vm.vmID, vm.ip)
 		return nil
 	}
 
@@ -676,7 +694,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// prevent concurrent CreatePods from getting the same slot.
 	p.mu.Lock()
 	vmName := p.deriveStableVMNameLocked(ctx, pod)
-	p.vms[key] = &CocoonVM{VMName: vmName, State: "creating", Managed: true}
+	p.vms[key] = &CocoonVM{vmName: vmName, state: "creating", managed: true}
 	p.mu.Unlock()
 
 	// ── Determine clone source ──
@@ -714,9 +732,9 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Pre-check: if a VM with this name already exists (e.g. provider restart
 	// or stale from a previous run), clean it up first.
-	if existing := p.discoverVM(ctx, vmName); existing != nil && existing.VMID != "" {
-		klog.Infof("CreatePod %s: stale VM %s exists (%s), removing", key, vmName, existing.State)
-		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.VMID)
+	if existing := p.discoverVM(ctx, vmName); existing != nil && existing.vmID != "" {
+		klog.Infof("CreatePod %s: stale VM %s exists (%s), removing", key, vmName, existing.state)
+		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.vmID)
 	}
 
 	// Resource limits → cocoon flags
@@ -757,7 +775,17 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	var args []string
 	switch effectiveMode {
 	case stateRun:
-		args = buildRunArgs(vmName, cpu, mem, storage, nics, dns, rootPwd, runImage, osType)
+		args = buildRunArgs(runConfig{
+			vmName:  vmName,
+			cpu:     cpu,
+			mem:     mem,
+			storage: storage,
+			nics:    nics,
+			dns:     dns,
+			rootPwd: rootPwd,
+			image:   runImage,
+			osType:  osType,
+		})
 	default: // clone
 		args = buildCloneArgs(vmName, cpu, mem, storage, effectiveCloneImage)
 	}
@@ -781,28 +809,28 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	var vm *CocoonVM
 	for range 5 {
 		vm = p.discoverVM(ctx, vmName)
-		if vm != nil && vm.VMID != "" {
+		if vm != nil && vm.vmID != "" {
 			break
 		}
 		time.Sleep(2 * time.Second)
 	}
 	if vm == nil {
-		vm = &CocoonVM{VMName: vmName, State: stateRunning, CPU: 2, MemoryMB: 8192}
+		vm = &CocoonVM{vmName: vmName, state: stateRunning, cpu: 2, memoryMB: 8192}
 	}
-	klog.Infof("CreatePod %s: discovered VM %s (vmid=%s)", key, vmName, vm.VMID)
-	vm.PodNamespace = pod.Namespace
-	vm.PodName = pod.Name
-	vm.Image = image
+	klog.Infof("CreatePod %s: discovered VM %s (vmid=%s)", key, vmName, vm.vmID)
+	vm.podNamespace = pod.Namespace
+	vm.podName = pod.Name
+	vm.image = image
 	if mode == stateRun {
-		vm.Image = runImage
+		vm.image = runImage
 	}
-	vm.OS = osType
-	vm.Managed = true
-	vm.CreatedAt = time.Now()
-	vm.StartedAt = time.Now()
+	vm.os = osType
+	vm.managed = true
+	vm.createdAt = time.Now()
+	vm.startedAt = time.Now()
 
 	// Wait for DHCP IP. Snapshots use DHCP networking (10.88.100.x).
-	vm.IP = p.waitForDHCPIP(ctx, vm, 120*time.Second)
+	vm.ip = p.waitForDHCPIP(ctx, vm, 120*time.Second)
 
 	// Update pod annotations with VM info
 	changed := applyVMPodAnnotations(pod, vm)
@@ -857,11 +885,11 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Trigger hibernate/wake on annotation change.
 	if vm != nil {
-		if !wasHibernated && wantHibernate && vm.State == stateRunning {
+		if !wasHibernated && wantHibernate && vm.state == stateRunning {
 			go p.hibernateVM(ctx, pod, vm)
 			return nil
 		}
-		if wasHibernated && !wantHibernate && vm.State == stateHibernated {
+		if wasHibernated && !wantHibernate && vm.state == stateHibernated {
 			go p.wakeVM(ctx, pod, vm)
 			return nil
 		}
@@ -871,7 +899,7 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.RLock()
 	vm = p.vms[key]
 	p.mu.RUnlock()
-	if vm != nil && vm.OS != osWindows && vm.IP != "" && vm.State == stateRunning {
+	if vm != nil && vm.os != osWindows && vm.ip != "" && vm.state == stateRunning {
 		go p.postBootInject(ctx, pod, vm)
 	}
 	return nil
@@ -886,9 +914,9 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.RUnlock()
 
 	switch {
-	case ok && vm.VMID != "" && vm.Managed:
-		if ownerKey := p.findOtherActivePodForVMID(ctx, pod, vm.VMID); ownerKey != "" {
-			klog.Warningf("DeletePod %s: skip destroy for VM %s (%s); still owned by active pod %s", key, vm.VMName, vm.VMID, ownerKey)
+	case ok && vm.vmID != "" && vm.managed:
+		if ownerKey := p.findOtherActivePodForVMID(ctx, pod, vm.vmID); ownerKey != "" {
+			klog.Warningf("DeletePod %s: skip destroy for VM %s (%s); still owned by active pod %s", key, vm.vmName, vm.vmID, ownerKey)
 			goto cleanup
 		}
 		if p.shouldSnapshotOnDelete(ctx, pod) { //nolint:nestif // snapshot-on-delete has epoch push pipeline
@@ -896,7 +924,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 			// Mark VM as suspending immediately so allocateSlot in a concurrent
 			// CreatePod (the replacement) can reuse this slot.
 			p.mu.Lock()
-			vm.State = "suspending"
+			vm.state = "suspending"
 			p.mu.Unlock()
 
 			// Resolve the epoch registry URL from the pod's image annotation.
@@ -907,13 +935,13 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 			delRegistryURL, _ := parseImageRef(imageRaw)
 			puller := p.getPuller(delRegistryURL)
 
-			snapshotName := vm.VMName + "-suspend"
-			klog.Infof("DeletePod %s: creating snapshot %s from running VM %s", key, snapshotName, vm.VMID)
+			snapshotName := vm.vmName + "-suspend"
+			klog.Infof("DeletePod %s: creating snapshot %s from running VM %s", key, snapshotName, vm.vmID)
 
 			// Remove old snapshot with same name first (cocoon rejects duplicate names).
 			_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
 
-			out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.VMID)
+			out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.vmID)
 			if err != nil {
 				klog.Errorf("DeletePod %s: snapshot failed: %v — %s", key, err, out)
 			} else {
@@ -938,7 +966,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 				if delRegistryURL != "" && pushedToEpoch {
 					fullRef = delRegistryURL + "/" + snapshotName
 				}
-				p.recordSuspendedSnapshot(ctx, pod, vm.VMName, fullRef)
+				p.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
 
 				// Only clean up local snapshot if safely in epoch.
 				if pushedToEpoch {
@@ -950,17 +978,17 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 			klog.Infof("DeletePod %s: scale-down detected, skipping snapshot", key)
 			// Only clear snapshot for slot-0 (main agent). Sub-agent snapshots
 			// are permanent — they can be restored via Hibernation CRD.
-			if isMainAgent(vm.VMName) {
-				p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.VMName)
+			if isMainAgent(vm.vmName) {
+				p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 			}
 		}
 
 		// Destroy VM (always, regardless of snapshot decision).
-		klog.Infof("DeletePod %s: destroying VM %s (%s)", key, vm.VMName, vm.VMID)
-		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.VMID)
+		klog.Infof("DeletePod %s: destroying VM %s (%s)", key, vm.vmName, vm.vmID)
+		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.vmID)
 
-	case ok && !vm.Managed:
-		klog.Infof("DeletePod %s: skipping unmanaged VM %s (%s)", key, vm.VMName, vm.VMID)
+	case ok && !vm.managed:
+		klog.Infof("DeletePod %s: skipping unmanaged VM %s (%s)", key, vm.vmName, vm.vmID)
 	case !ok:
 		// Fallback: provider lost in-memory state (restart etc).
 		vmID := ann(pod, AnnVMID, "")
@@ -1001,7 +1029,7 @@ func (p *CocoonProvider) findOtherActivePodForVMID(ctx context.Context, pod *cor
 
 	p.mu.RLock()
 	for key, vm := range p.vms {
-		if key == selfKey || vm == nil || vm.VMID != vmID {
+		if key == selfKey || vm == nil || vm.vmID != vmID {
 			continue
 		}
 		if otherPod, ok := p.pods[key]; ok {
@@ -1072,36 +1100,36 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 
 	// Refresh state from cocoon (preserve IP if inspect returns empty).
 	// Skip for static VMs (externally managed, e.g. QEMU Windows VMs).
-	if vm.VMID != "" && !strings.HasPrefix(vm.VMID, "static-") { //nolint:nestif // VM state refresh with DHCP fallback
-		if fresh := p.discoverVMByID(ctx, vm.VMID); fresh != nil {
-			if fresh.VMID != "" {
-				vm.VMID = fresh.VMID
+	if vm.vmID != "" && !strings.HasPrefix(vm.vmID, "static-") { //nolint:nestif // VM state refresh with DHCP fallback
+		if fresh := p.discoverVMByID(ctx, vm.vmID); fresh != nil {
+			if fresh.vmID != "" {
+				vm.vmID = fresh.vmID
 			}
-			if fresh.VMName != "" {
-				vm.VMName = fresh.VMName
+			if fresh.vmName != "" {
+				vm.vmName = fresh.vmName
 			}
-			if fresh.State != "" {
-				vm.State = fresh.State
+			if fresh.state != "" {
+				vm.state = fresh.state
 			}
-			if fresh.MAC != "" {
-				vm.MAC = fresh.MAC
+			if fresh.mac != "" {
+				vm.mac = fresh.mac
 			}
-			if fresh.IP != "" {
-				vm.IP = fresh.IP
+			if fresh.ip != "" {
+				vm.ip = fresh.ip
 			}
 		}
 		// Always resolve DHCP IP — it's the actual accessible IP.
 		// cocoon vm list returns CNI IP which differs from the guest DHCP IP,
 		// and DHCP leases can change on VM restart/clone.
 		dhcpIP := ""
-		if vm.MAC != "" {
-			dhcpIP = resolveIPFromLeaseByMAC(vm.MAC)
+		if vm.mac != "" {
+			dhcpIP = resolveIPFromLeaseByMAC(vm.mac)
 		}
 		if dhcpIP == "" {
-			dhcpIP = p.resolveIPFromLease(vm.VMName)
+			dhcpIP = p.resolveIPFromLease(vm.vmName)
 		}
 		if dhcpIP != "" {
-			vm.IP = dhcpIP
+			vm.ip = dhcpIP
 		}
 
 		p.syncPodRuntimeMetadata(ctx, key, &vm)
@@ -1111,7 +1139,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 	ready := corev1.ConditionFalse
 	var containerState corev1.ContainerState
 
-	switch vm.State {
+	switch vm.state {
 	case stateRunning:
 		phase = corev1.PodRunning
 		ready = corev1.ConditionTrue
@@ -1121,7 +1149,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 			ready = corev1.ConditionFalse
 		}
 		containerState = corev1.ContainerState{
-			Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(vm.StartedAt)},
+			Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(vm.startedAt)},
 		}
 	case stateHibernated:
 		// Pod stays Running (prevents RS/STS from recreating) but NotReady
@@ -1139,7 +1167,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 		containerState = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{
 				ExitCode: 0, Reason: "Stopped",
-				StartedAt: metav1.NewTime(vm.StartedAt), FinishedAt: metav1.Now(),
+				StartedAt: metav1.NewTime(vm.startedAt), FinishedAt: metav1.Now(),
 			},
 		}
 	case "error":
@@ -1147,7 +1175,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 		containerState = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{
 				ExitCode: 1, Reason: "Error",
-				StartedAt: metav1.NewTime(vm.StartedAt), FinishedAt: metav1.Now(),
+				StartedAt: metav1.NewTime(vm.startedAt), FinishedAt: metav1.Now(),
 			},
 		}
 	case "created":
@@ -1166,17 +1194,17 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 
 	hostIP := p.nodeIP
 	if hostIP == "" {
-		hostIP = vm.IP
+		hostIP = vm.ip
 	}
 	var podIPs []corev1.PodIP
-	if vm.IP != "" {
-		podIPs = []corev1.PodIP{{IP: vm.IP}}
+	if vm.ip != "" {
+		podIPs = []corev1.PodIP{{IP: vm.ip}}
 	}
 
 	return &corev1.PodStatus{
 		Phase:  phase,
 		HostIP: hostIP,
-		PodIP:  vm.IP,
+		PodIP:  vm.ip,
 		PodIPs: podIPs,
 		Conditions: []corev1.PodCondition{
 			{Type: corev1.PodReady, Status: ready, LastTransitionTime: metav1.Now()},
@@ -1187,11 +1215,11 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 		ContainerStatuses: []corev1.ContainerStatus{
 			{
 				Name:         containerName,
-				Ready:        vm.State == stateRunning,
+				Ready:        vm.state == stateRunning,
 				RestartCount: 0,
-				Image:        vm.Image,
-				ImageID:      vm.Image,
-				ContainerID:  fmt.Sprintf("cocoon://%s", vm.VMID),
+				Image:        vm.image,
+				ImageID:      vm.image,
+				ContainerID:  fmt.Sprintf("cocoon://%s", vm.vmID),
 				State:        containerState,
 			},
 		},
@@ -1210,15 +1238,15 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, ns, podName, cont
 	}
 
 	vm := p.getVM(ns, podName)
-	if vm == nil || vm.IP == "" {
+	if vm == nil || vm.ip == "" {
 		return io.NopCloser(strings.NewReader("pod not found or no IP assigned\n")), nil
 	}
 
 	// Windows VMs don't have SSH/journalctl — suggest RDP + Event Viewer
-	if vm.OS == osWindows {
+	if vm.os == osWindows {
 		msg := fmt.Sprintf("Windows VM %s (IP: %s) — use RDP (port 3389) for access.\n"+
 			"  kubectl port-forward %s 3389:3389 -n %s\n"+
-			"  Then connect with Remote Desktop to localhost:3389\n", vm.VMName, vm.IP, podName, ns)
+			"  Then connect with Remote Desktop to localhost:3389\n", vm.vmName, vm.ip, podName, ns)
 		return io.NopCloser(strings.NewReader(msg)), nil
 	}
 
@@ -1244,7 +1272,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, ns, podName, cont
 	args := []string{
 		"-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
 		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-		fmt.Sprintf("root@%s", vm.IP),
+		fmt.Sprintf("root@%s", vm.ip),
 	}
 	args = append(args, jcArgs...)
 
@@ -1262,14 +1290,14 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, ns, podName, cont
 
 func (p *CocoonProvider) RunInContainer(ctx context.Context, ns, podName, container string, cmd []string, attach api.AttachIO) error {
 	vm := p.getVM(ns, podName)
-	if vm == nil || vm.IP == "" {
+	if vm == nil || vm.ip == "" {
 		return fmt.Errorf("pod %s/%s not found or no IP", ns, podName)
 	}
 
 	klog.Infof("RunInContainer: %s/%s cmd=%v tty=%v", ns, podName, cmd, attach.TTY())
 
 	// Windows VMs don't have SSH — return a helpful error
-	if vm.OS == osWindows {
+	if vm.os == osWindows {
 		msg := fmt.Sprintf("exec not supported on Windows VM. Use RDP:\n  kubectl port-forward %s 3389:3389 -n %s\n", podName, ns)
 		if attach.Stdout() != nil {
 			_, _ = io.WriteString(attach.Stdout(), msg)
@@ -1288,7 +1316,7 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, ns, podName, contai
 	}
 	sshArgs = append(sshArgs,
 		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-		fmt.Sprintf("root@%s", vm.IP),
+		fmt.Sprintf("root@%s", vm.ip),
 	)
 	// SSH remote command: join all args into one string for remote shell to parse.
 	// Lens sends: ["sh", "-c", "(bash || ash || sh)"] as separate args.
@@ -1355,14 +1383,14 @@ func (p *CocoonProvider) AttachToContainer(ctx context.Context, ns, podName, con
 
 func (p *CocoonProvider) PortForward(ctx context.Context, ns, podName string, port int32, stream io.ReadWriteCloser) error {
 	vm := p.getVM(ns, podName)
-	if vm == nil || vm.IP == "" {
+	if vm == nil || vm.ip == "" {
 		return fmt.Errorf("pod %s/%s not found or no IP", ns, podName)
 	}
 
 	// TCP proxy to VM IP:port
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", vm.IP, port), 5*time.Second)
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", vm.ip, port), 5*time.Second)
 	if err != nil {
-		return fmt.Errorf("connect to %s:%d: %w", vm.IP, port, err)
+		return fmt.Errorf("connect to %s:%d: %w", vm.ip, port, err)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -1386,18 +1414,18 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 
 	for key, vm := range vmsCopy {
 		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 || vm.VMID == "" {
+		if len(parts) != 2 || vm.vmID == "" {
 			continue
 		}
 
 		podStat := statsv1alpha1.PodStats{
 			PodRef:    statsv1alpha1.PodReference{Name: parts[1], Namespace: parts[0]},
-			StartTime: metav1.NewTime(vm.CreatedAt),
+			StartTime: metav1.NewTime(vm.createdAt),
 		}
 
 		// Real CPU/MEM from CH API + /proc (skip static VMs)
-		if !strings.HasPrefix(vm.VMID, "static-") { //nolint:nestif // metrics collection from multiple APIs
-			if ping, err := chGetPing(vm.VMID); err == nil && ping.PID > 0 {
+		if !strings.HasPrefix(vm.vmID, "static-") { //nolint:nestif // metrics collection from multiple APIs
+			if ping, err := chGetPing(vm.vmID); err == nil && ping.PID > 0 {
 				if uNs, sNs, err := readProcCPUUsage(ping.PID); err == nil {
 					totalNs := uNs + sNs
 					podStat.CPU = &statsv1alpha1.CPUStats{
@@ -1413,7 +1441,7 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 				}
 			}
 			// Network + Disk from vm.counters
-			if counters, err := chGetCounters(vm.VMID); err == nil {
+			if counters, err := chGetCounters(vm.vmID); err == nil {
 				for devName, stats := range counters {
 					if strings.Contains(devName, "net") {
 						rx := stats["rx_bytes"]
@@ -1431,8 +1459,8 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 			}
 		} else {
 			// Static VMs: use configured values as fallback
-			cpuNano := uint64(vm.CPU) * 1e9               //nolint:gosec // CPU count is always small positive
-			memBytes := uint64(vm.MemoryMB) * 1024 * 1024 //nolint:gosec // MemoryMB is always positive
+			cpuNano := uint64(vm.cpu) * 1e9               //nolint:gosec // CPU count is always small positive
+			memBytes := uint64(vm.memoryMB) * 1024 * 1024 //nolint:gosec // MemoryMB is always positive
 			podStat.CPU = &statsv1alpha1.CPUStats{Time: now, UsageCoreNanoSeconds: &cpuNano}
 			podStat.Memory = &statsv1alpha1.MemoryStats{Time: now, WorkingSetBytes: &memBytes}
 		}
@@ -1475,7 +1503,7 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 
 	for key, vm := range vmsCopy {
 		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 || vm.VMID == "" {
+		if len(parts) != 2 || vm.vmID == "" {
 			continue
 		}
 		ns, name := parts[0], parts[1]
@@ -1486,8 +1514,8 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 			{Name: &podLabel, Value: &name},
 		}
 
-		if !strings.HasPrefix(vm.VMID, "static-") { //nolint:nestif // per-device metrics from CH API
-			if ping, err := chGetPing(vm.VMID); err == nil && ping.PID > 0 {
+		if !strings.HasPrefix(vm.vmID, "static-") { //nolint:nestif // per-device metrics from CH API
+			if ping, err := chGetPing(vm.vmID); err == nil && ping.PID > 0 {
 				if uNs, sNs, err := readProcCPUUsage(ping.PID); err == nil {
 					cpuSec := float64(uNs+sNs) / 1e9
 					cpuMetrics = append(cpuMetrics, &dto.Metric{Label: labels, Gauge: &dto.Gauge{Value: &cpuSec}})
@@ -1497,7 +1525,7 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 					memMetrics = append(memMetrics, &dto.Metric{Label: labels, Gauge: &dto.Gauge{Value: &memF}})
 				}
 			}
-			if counters, err := chGetCounters(vm.VMID); err == nil {
+			if counters, err := chGetCounters(vm.vmID); err == nil {
 				for devName, stats := range counters {
 					if strings.Contains(devName, "net") {
 						rx := float64(stats["rx_bytes"])
@@ -1575,7 +1603,7 @@ func (p *CocoonProvider) getVM(ns, name string) *CocoonVM {
 func (p *CocoonProvider) sshPass(vm *CocoonVM) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if pod, ok := p.pods[podKey(vm.PodNamespace, vm.PodName)]; ok {
+	if pod, ok := p.pods[podKey(vm.podNamespace, vm.podName)]; ok {
 		if pw := ann(pod, AnnSSHPassword, ""); pw != "" {
 			return pw
 		}
@@ -1692,7 +1720,7 @@ func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *Cocoo
 				break
 			}
 		}
-		return &CocoonVM{VMID: vmID, VMName: name, State: state, IP: ip}
+		return &CocoonVM{vmID: vmID, vmName: name, state: state, ip: ip}
 	}
 	return nil
 }
@@ -1707,7 +1735,7 @@ func (p *CocoonProvider) discoverVMText(ctx context.Context, name string) *Cocoo
 			if ip == "-" {
 				ip = ""
 			}
-			return &CocoonVM{VMID: f[0], VMName: f[1], State: f[2], IP: ip, CPU: 2, MemoryMB: 8192}
+			return &CocoonVM{vmID: f[0], vmName: f[1], state: f[2], ip: ip, cpu: 2, memoryMB: 8192}
 		}
 	}
 	return nil
@@ -1745,14 +1773,14 @@ func jsonToVM(v cocoonVMJSON) *CocoonVM {
 		vmName = v.Config.Name
 	}
 	return &CocoonVM{
-		VMID:     v.ID,
-		VMName:   vmName,
-		State:    v.State,
-		IP:       ip,
-		MAC:      mac,
-		CPU:      cpu,
-		MemoryMB: memMB,
-		Image:    v.Image,
+		vmID:     v.ID,
+		vmName:   vmName,
+		state:    v.State,
+		ip:       ip,
+		mac:      mac,
+		cpu:      cpu,
+		memoryMB: memMB,
+		image:    v.Image,
 	}
 }
 
@@ -1765,20 +1793,20 @@ func resolveIPFromLeaseByMAC(mac string) string {
 // Only accepts leases newer than the VM creation time to avoid stale entries.
 func (p *CocoonProvider) waitForDHCPIP(_ context.Context, vm *CocoonVM, timeout time.Duration) string {
 	deadline := time.Now().Add(timeout)
-	mac := vm.MAC
+	mac := vm.mac
 	notBefore := time.Now().Add(-60 * time.Second) // lease must be recent
-	klog.Infof("waitForDHCPIP: VM %s mac=%s, polling leases (timeout %s)", vm.VMName, mac, timeout)
+	klog.Infof("waitForDHCPIP: VM %s mac=%s, polling leases (timeout %s)", vm.vmName, mac, timeout)
 	for time.Now().Before(deadline) {
 		if mac != "" {
 			if ip := resolveLeaseByMAC(mac, notBefore); ip != "" && strings.HasPrefix(ip, "10.88.100.") {
-				klog.Infof("waitForDHCPIP: VM %s got DHCP IP %s (by MAC)", vm.VMName, ip)
+				klog.Infof("waitForDHCPIP: VM %s got DHCP IP %s (by MAC)", vm.vmName, ip)
 				return ip
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
-	klog.Warningf("waitForDHCPIP: VM %s DHCP timeout, falling back to %s", vm.VMName, vm.IP)
-	return vm.IP
+	klog.Warningf("waitForDHCPIP: VM %s DHCP timeout, falling back to %s", vm.vmName, vm.ip)
+	return vm.ip
 }
 
 // resolveLeaseByMAC finds the DHCP IP for a MAC address.

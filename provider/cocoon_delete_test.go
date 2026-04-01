@@ -35,21 +35,21 @@ func TestDeletePodSkipsDestroyWhenAnotherActivePodSharesVMID(t *testing.T) {
 
 	p.pods[oldKey] = oldPod.DeepCopy()
 	p.vms[oldKey] = &CocoonVM{
-		PodNamespace: oldPod.Namespace,
-		PodName:      oldPod.Name,
-		VMID:         "vm-shared",
-		VMName:       "vk-testns-app-0",
-		Managed:      true,
-		State:        "running",
+		podNamespace: oldPod.Namespace,
+		podName:      oldPod.Name,
+		vmID:         "vm-shared",
+		vmName:       "vk-testns-app-0",
+		managed:      true,
+		state:        "running",
 	}
 	p.pods[newKey] = runningPod.DeepCopy()
 	p.vms[newKey] = &CocoonVM{
-		PodNamespace: runningPod.Namespace,
-		PodName:      runningPod.Name,
-		VMID:         "vm-shared",
-		VMName:       "vk-testns-app-0",
-		Managed:      true,
-		State:        "running",
+		podNamespace: runningPod.Namespace,
+		podName:      runningPod.Name,
+		vmID:         "vm-shared",
+		vmName:       "vk-testns-app-0",
+		managed:      true,
+		state:        "running",
 	}
 
 	var calls int
@@ -102,21 +102,21 @@ func TestDeletePodStillDestroysWhenOnlyVMNameMatches(t *testing.T) {
 
 	p.pods[oldKey] = oldPod.DeepCopy()
 	p.vms[oldKey] = &CocoonVM{
-		PodNamespace: oldPod.Namespace,
-		PodName:      oldPod.Name,
-		VMID:         "vm-old",
-		VMName:       "vk-testns-app-0",
-		Managed:      true,
-		State:        "running",
+		podNamespace: oldPod.Namespace,
+		podName:      oldPod.Name,
+		vmID:         "vm-old",
+		vmName:       "vk-testns-app-0",
+		managed:      true,
+		state:        "running",
 	}
 	p.pods[newKey] = runningPod.DeepCopy()
 	p.vms[newKey] = &CocoonVM{
-		PodNamespace: runningPod.Namespace,
-		PodName:      runningPod.Name,
-		VMID:         "vm-new",
-		VMName:       "vk-testns-app-0",
-		Managed:      true,
-		State:        "running",
+		podNamespace: runningPod.Namespace,
+		podName:      runningPod.Name,
+		vmID:         "vm-new",
+		vmName:       "vk-testns-app-0",
+		managed:      true,
+		state:        "running",
 	}
 
 	var calls [][]string

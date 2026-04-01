@@ -77,6 +77,16 @@ func (p *EpochPuller) authToken() string {
 	return strings.TrimSpace(p.token)
 }
 
+// markPulled records a ref as pulled, clearing the cache when it grows too large.
+func (p *EpochPuller) markPulled(ref string) {
+	p.mu.Lock()
+	if len(p.pulled) > 1000 {
+		clear(p.pulled)
+	}
+	p.pulled[ref] = true
+	p.mu.Unlock()
+}
+
 // RootDir returns the cocoon data root directory.
 func (p *EpochPuller) RootDir() string { return p.rootDir }
 
@@ -100,9 +110,7 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	if ok, err := p.ensureLocalSnapshotMetadata(name); err != nil {
 		return fmt.Errorf("repair local snapshot %s: %w", name, err)
 	} else if ok {
-		p.mu.Lock()
-		p.pulled[ref] = true
-		p.mu.Unlock()
+		p.markPulled(ref)
 		return nil
 	}
 
@@ -114,9 +122,7 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	}
 
 	log.Printf("[epoch] %s pulled in %s", ref, time.Since(start).Round(time.Second))
-	p.mu.Lock()
-	p.pulled[ref] = true
-	p.mu.Unlock()
+	p.markPulled(ref)
 	return nil
 }
 
@@ -182,9 +188,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 	p.mu.Unlock()
 
 	if p.cloudImageExists(ctx, name) {
-		p.mu.Lock()
-		p.pulled[ref] = true
-		p.mu.Unlock()
+		p.markPulled(ref)
 		return nil
 	}
 
@@ -200,9 +204,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 		return fmt.Errorf("import cloud image %s:%s: %w", name, tag, err)
 	}
 
-	p.mu.Lock()
-	p.pulled[ref] = true
-	p.mu.Unlock()
+	p.markPulled(ref)
 	return nil
 }
 

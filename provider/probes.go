@@ -174,7 +174,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 // executeProbe runs a single probe check.
 func (p *CocoonProvider) executeProbe(ctx context.Context, vm *CocoonVM, probe *corev1.Probe, timeout time.Duration) error {
 	if probe.TCPSocket != nil {
-		return probeTCP(vm.IP, probe.TCPSocket.Port.IntValue(), timeout)
+		return probeTCP(vm.ip, probe.TCPSocket.Port.IntValue(), timeout)
 	}
 	if probe.HTTPGet != nil {
 		port := probe.HTTPGet.Port.IntValue()
@@ -186,9 +186,9 @@ func (p *CocoonProvider) executeProbe(ctx context.Context, vm *CocoonVM, probe *
 		if path == "" {
 			path = "/"
 		}
-		return probeHTTP(scheme, vm.IP, port, path, timeout)
+		return probeHTTP(scheme, vm.ip, port, path, timeout)
 	}
-	if probe.Exec != nil && vm.OS != osWindows {
+	if probe.Exec != nil && vm.os != osWindows {
 		pw := p.sshPass(vm)
 		cmd := strings.Join(probe.Exec.Command, " ")
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -209,11 +209,20 @@ func probeTCP(ip string, port int, timeout time.Duration) error {
 	return nil
 }
 
+// probeClient is reused across all HTTP probes; timeout is set per-request
+// via context rather than on the client.
+var probeClient = &http.Client{}
+
 // probeHTTP does an HTTP GET and checks for 2xx/3xx.
 func probeHTTP(scheme, ip string, port int, path string, timeout time.Duration) error {
-	client := &http.Client{Timeout: timeout}
 	url := fmt.Sprintf("%s://%s:%d%s", scheme, ip, port, path)
-	resp, err := client.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("http %s: %w", url, err)
+	}
+	resp, err := probeClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("http %s: %w", url, err)
 	}

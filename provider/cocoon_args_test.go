@@ -6,7 +6,11 @@ import (
 )
 
 func TestBuildRunArgsLinux(t *testing.T) {
-	got := buildRunArgs("vm-linux", "2", "8G", "100G", "1", "8.8.8.8,1.1.1.1", "rootpass", "ubuntu.img", "linux")
+	got := buildRunArgs(runConfig{
+		vmName: "vm-linux", cpu: "2", mem: "8G", storage: "100G",
+		nics: "1", dns: "8.8.8.8,1.1.1.1", rootPwd: "rootpass",
+		image: "ubuntu.img", osType: "linux",
+	})
 	want := []string{
 		"vm", "run",
 		"--name", "vm-linux",
@@ -24,7 +28,11 @@ func TestBuildRunArgsLinux(t *testing.T) {
 }
 
 func TestBuildRunArgsWindows(t *testing.T) {
-	got := buildRunArgs("vm-win", "4", "8G", "100G", "1", "10.8.8.8,10.8.8.9", "ignored", "win1125h2", "windows")
+	got := buildRunArgs(runConfig{
+		vmName: "vm-win", cpu: "4", mem: "8G", storage: "100G",
+		nics: "1", dns: "10.8.8.8,10.8.8.9", rootPwd: "ignored",
+		image: "win1125h2", osType: "windows",
+	})
 	want := []string{
 		"vm", "run",
 		"--name", "vm-win",

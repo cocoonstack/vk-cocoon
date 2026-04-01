@@ -123,8 +123,8 @@ func chGetCounters(vmID string) (CHCounters, error) {
 
 // ---------- Host /proc metrics ----------
 
-// readHostCPUCount returns the number of logical CPUs on the host.
-func readHostCPUCount() int {
+// hostCPUCount caches the logical CPU count (never changes at runtime).
+var hostCPUCount = func() int {
 	data, err := os.ReadFile("/proc/cpuinfo")
 	if err != nil {
 		return 0
@@ -136,42 +136,42 @@ func readHostCPUCount() int {
 		}
 	}
 	return count
+}()
+
+// readHostCPUCount returns the number of logical CPUs on the host.
+func readHostCPUCount() int {
+	return hostCPUCount
+}
+
+// readMeminfoField reads a single field from /proc/meminfo, returning the
+// value in bytes.  Returns 0 if the field is not found or the file cannot
+// be read.
+func readMeminfoField(field string) uint64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	prefix := field + ":"
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if strings.HasPrefix(line, prefix) {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, _ := strconv.ParseUint(fields[1], 10, 64)
+				return kb * 1024
+			}
+		}
+	}
+	return 0
 }
 
 // readHostMemoryBytes returns total physical memory in bytes.
 func readHostMemoryBytes() uint64 {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return 0
-	}
-	for line := range strings.SplitSeq(string(data), "\n") {
-		if strings.HasPrefix(line, "MemTotal:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				kb, _ := strconv.ParseUint(fields[1], 10, 64)
-				return kb * 1024
-			}
-		}
-	}
-	return 0
+	return readMeminfoField("MemTotal")
 }
 
 // readHostMemAvailable returns available memory in bytes from /proc/meminfo.
 func readHostMemAvailable() uint64 {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return 0
-	}
-	for line := range strings.SplitSeq(string(data), "\n") {
-		if strings.HasPrefix(line, "MemAvailable:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				kb, _ := strconv.ParseUint(fields[1], 10, 64)
-				return kb * 1024
-			}
-		}
-	}
-	return 0
+	return readMeminfoField("MemAvailable")
 }
 
 // readHostDiskBytes returns total and available bytes for a path via statfs.

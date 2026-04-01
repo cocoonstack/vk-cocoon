@@ -19,8 +19,8 @@ func TestWaitForSSHEventuallySucceeds(t *testing.T) {
 	attempts := 0
 	sshReadyProbe = func(_ context.Context, vm *CocoonVM, password string) error {
 		attempts++
-		if vm.IP != "10.88.100.10" {
-			t.Fatalf("vm.IP = %q, want 10.88.100.10", vm.IP)
+		if vm.ip != "10.88.100.10" {
+			t.Fatalf("vm.ip = %q, want 10.88.100.10", vm.ip)
 		}
 		if password != "secret" {
 			t.Fatalf("password = %q, want secret", password)
@@ -31,7 +31,7 @@ func TestWaitForSSHEventuallySucceeds(t *testing.T) {
 		return nil
 	}
 
-	vm := &CocoonVM{IP: "10.88.100.10"}
+	vm := &CocoonVM{ip: "10.88.100.10"}
 	if err := waitForSSH(context.Background(), vm, "secret", time.Second); err != nil {
 		t.Fatalf("waitForSSH: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestWaitForSSHTimesOut(t *testing.T) {
 		return errors.New("connection refused")
 	}
 
-	vm := &CocoonVM{IP: "10.88.100.11"}
+	vm := &CocoonVM{ip: "10.88.100.11"}
 	if err := waitForSSH(context.Background(), vm, "secret", 10*time.Millisecond); err == nil {
 		t.Fatal("waitForSSH: expected timeout error")
 	}

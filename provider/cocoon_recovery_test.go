@@ -37,11 +37,11 @@ func TestCreatePodRecoversExistingManagedVMByID(t *testing.T) {
 			t.Fatalf("discoverVMByID got %q, want vm-123", vmID)
 		}
 		return &CocoonVM{
-			VMID:   vmID,
-			VMName: "vk-testns-app-0",
-			State:  "running",
-			IP:     "10.88.100.10",
-			MAC:    "02:00:00:00:00:10",
+			vmID:   vmID,
+			vmName: "vk-testns-app-0",
+			state:  "running",
+			ip:     "10.88.100.10",
+			mac:    "02:00:00:00:00:10",
 		}
 	}
 
@@ -63,11 +63,11 @@ func TestCreatePodRecoversExistingManagedVMByID(t *testing.T) {
 	if vm == nil {
 		t.Fatalf("expected recovered VM record for %s", key)
 	}
-	if vm.VMID != "vm-123" {
-		t.Fatalf("recovered VMID = %q, want vm-123", vm.VMID)
+	if vm.vmID != "vm-123" {
+		t.Fatalf("recovered VMID = %q, want vm-123", vm.vmID)
 	}
-	if vm.VMName != "vk-testns-app-0" {
-		t.Fatalf("recovered VMName = %q, want vk-testns-app-0", vm.VMName)
+	if vm.vmName != "vk-testns-app-0" {
+		t.Fatalf("recovered VMName = %q, want vk-testns-app-0", vm.vmName)
 	}
 	if got := p.pods[key].Annotations[AnnIP]; got != "10.88.100.10" {
 		t.Fatalf("stored pod IP = %q, want 10.88.100.10", got)
@@ -82,10 +82,10 @@ func TestCreatePodRecoversExistingManagedVMByNameFallback(t *testing.T) {
 			t.Fatalf("discoverVM got %q, want vk-testns-app-1", vmName)
 		}
 		return &CocoonVM{
-			VMID:   "vm-456",
-			VMName: vmName,
-			State:  "running",
-			IP:     "10.88.100.11",
+			vmID:   "vm-456",
+			vmName: vmName,
+			state:  "running",
+			ip:     "10.88.100.11",
 		}
 	}
 
@@ -103,7 +103,7 @@ func TestCreatePodRecoversExistingManagedVMByNameFallback(t *testing.T) {
 	}
 
 	key := podKey(pod.Namespace, pod.Name)
-	if got := p.vms[key].VMID; got != "vm-456" {
+	if got := p.vms[key].vmID; got != "vm-456" {
 		t.Fatalf("recovered VMID = %q, want vm-456", got)
 	}
 }
@@ -127,16 +127,16 @@ func TestCreatePodRecoversManagedVMWhenDiscoveryInitiallyReturnsStale(t *testing
 		}
 		if calls == 1 {
 			return &CocoonVM{
-				VMID:   vmID,
-				VMName: "vk-testns-app-stale",
-				State:  "stopped (stale)",
+				vmID:   vmID,
+				vmName: "vk-testns-app-stale",
+				state:  "stopped (stale)",
 			}
 		}
 		return &CocoonVM{
-			VMID:   vmID,
-			VMName: "vk-testns-app-stale",
-			State:  "running",
-			IP:     "10.88.100.12",
+			vmID:   vmID,
+			vmName: "vk-testns-app-stale",
+			state:  "running",
+			ip:     "10.88.100.12",
 		}
 	}
 
@@ -185,11 +185,11 @@ func TestCreatePodRecoversHibernatedPodWithoutCreatingVM(t *testing.T) {
 	if vm == nil {
 		t.Fatalf("expected hibernated VM record for %s", key)
 	}
-	if vm.State != "hibernated" {
-		t.Fatalf("recovered state = %q, want hibernated", vm.State)
+	if vm.state != "hibernated" {
+		t.Fatalf("recovered state = %q, want hibernated", vm.state)
 	}
-	if vm.VMID != "" {
-		t.Fatalf("hibernated VMID = %q, want empty", vm.VMID)
+	if vm.vmID != "" {
+		t.Fatalf("hibernated VMID = %q, want empty", vm.vmID)
 	}
 }
 
