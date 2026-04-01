@@ -3,8 +3,8 @@
 //
 // VM semantics:
 //   - Init containers: SSH commands run sequentially before main service
-//   - Multi-container: each container → systemd service in the VM
-//   - Security context: runAsUser → Linux user inside VM
+//   - Multi-container: each container -> systemd service in the VM
+//   - Security context: runAsUser -> Linux user inside VM
 //   - Container restart: systemd Restart=always; track count from journalctl
 //   - Resource enforcement: CH API balloon/vcpu resize
 //   - Pod events: k8s EventRecorder for lifecycle events
@@ -18,10 +18,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog/v2"
 )
 
 // ---------- #13: Init Containers ----------
@@ -33,24 +33,25 @@ func (p *CocoonProvider) runInitContainers(ctx context.Context, pod *corev1.Pod,
 	if vm.skipSSH() {
 		return nil
 	}
+	logger := log.WithFunc("provider.runInitContainers")
 	pw := p.sshPass(vm)
 	for i, ic := range pod.Spec.InitContainers {
 		cmd := strings.Join(append(ic.Command, ic.Args...), " ")
 		if cmd == "" {
 			continue
 		}
-		klog.Infof("initContainer[%d] %s/%s: running %q", i, pod.Namespace, pod.Name, cmd)
+		logger.Infof(ctx, "initContainer[%d] %s/%s: running %q", i, pod.Namespace, pod.Name, cmd)
 		out, err := sshExecSimple(ctx, vm, pw, cmd)
 		if err != nil {
-			klog.Errorf("initContainer[%d] %s/%s failed: %v — %s", i, pod.Namespace, pod.Name, err, out)
+			logger.Errorf(ctx, err, "initContainer[%d] %s/%s failed: %s", i, pod.Namespace, pod.Name, out)
 			return fmt.Errorf("init container %s failed: %w", ic.Name, err)
 		}
-		klog.Infof("initContainer[%d] %s/%s: OK (%d bytes output)", i, pod.Namespace, pod.Name, len(out))
+		logger.Infof(ctx, "initContainer[%d] %s/%s: OK (%d bytes output)", i, pod.Namespace, pod.Name, len(out))
 	}
 	return nil
 }
 
-// ---------- #12: Multi-container → systemd services ----------
+// ---------- #12: Multi-container -> systemd services ----------
 
 // installContainerServices creates a systemd service for each container spec.
 // Container[0] is the primary; additional containers are sidecar services.
@@ -59,6 +60,7 @@ func (p *CocoonProvider) installContainerServices(ctx context.Context, pod *core
 	if vm.skipSSH() || len(pod.Spec.Containers) <= 1 {
 		return // single container handled by deploy.sh / standard flow
 	}
+	logger := log.WithFunc("provider.installContainerServices")
 	pw := p.sshPass(vm)
 	for i, c := range pod.Spec.Containers {
 		if i == 0 {
@@ -103,19 +105,20 @@ WantedBy=multi-user.target
 		unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", svcName)
 		_ = sshWriteFile(ctx, vm, pw, unitPath, []byte(unit), 0o644)
 		_, _ = sshExecSimple(ctx, vm, pw, fmt.Sprintf("systemctl daemon-reload && systemctl enable %s && systemctl start %s", svcName, svcName))
-		klog.Infof("installContainerServices %s/%s: sidecar %s started", pod.Namespace, pod.Name, svcName)
+		logger.Infof(ctx, "%s/%s: sidecar %s started", pod.Namespace, pod.Name, svcName)
 	}
 }
 
 // ---------- #14: Security Context ----------
 
 // applySecurityContext maps pod/container security settings to VM config.
-// For VMs, the main mapping is runAsUser → create/switch Linux user.
+// For VMs, the main mapping is runAsUser -> create/switch Linux user.
 // Capabilities, seccomp, apparmor are N/A (VM provides kernel-level isolation).
 func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
 	if vm.skipSSH() {
 		return
 	}
+	logger := log.WithFunc("provider.applySecurityContext")
 	sc := pod.Spec.SecurityContext
 	if sc == nil && (len(pod.Spec.Containers) == 0 || pod.Spec.Containers[0].SecurityContext == nil) {
 		return
@@ -141,7 +144,7 @@ func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.P
 		username := fmt.Sprintf("app-%d", *uid)
 		cmd := fmt.Sprintf("id -u %d >/dev/null 2>&1 || useradd -u %d -m %s", *uid, *uid, username)
 		_, _ = sshExecSimple(ctx, vm, pw, cmd)
-		klog.Infof("applySecurityContext %s/%s: runAsUser=%d (user=%s)",
+		logger.Infof(ctx, "%s/%s: runAsUser=%d (user=%s)",
 			pod.Namespace, pod.Name, *uid, username)
 	}
 
@@ -149,7 +152,7 @@ func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.P
 	if len(pod.Spec.Containers) > 0 {
 		csc := pod.Spec.Containers[0].SecurityContext
 		if csc != nil && csc.ReadOnlyRootFilesystem != nil && *csc.ReadOnlyRootFilesystem {
-			klog.Warningf("applySecurityContext %s/%s: ReadOnlyRootFilesystem ignored (VM requires writable root)",
+			logger.Warnf(ctx, "%s/%s: ReadOnlyRootFilesystem ignored (VM requires writable root)",
 				pod.Namespace, pod.Name)
 		}
 	}
@@ -189,6 +192,7 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 	if len(pod.Spec.Containers) == 0 {
 		return
 	}
+	logger := log.WithFunc("provider.enforceResources")
 
 	limits := pod.Spec.Containers[0].Resources.Limits
 	if limits == nil {
@@ -205,10 +209,10 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 				cmd := fmt.Sprintf("sudo curl -s -X PUT --unix-socket %s -H 'Content-Type: application/json' -d '%s' http://localhost/api/v1/vm.resize",
 					sock, body)
 				if out, err := exec.CommandContext(ctx, "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from trusted internal template
-					klog.V(2).Infof("enforceResources %s: CPU resize to %d failed: %v (%s)",
+					logger.Debugf(ctx, "%s: CPU resize to %d failed: %v (%s)",
 						vm.vmName, desiredCPU, err, strings.TrimSpace(string(out)))
 				} else {
-					klog.Infof("enforceResources %s: CPU resized to %d", vm.vmName, desiredCPU)
+					logger.Infof(ctx, "%s: CPU resized to %d", vm.vmName, desiredCPU)
 					vm.cpu = desiredCPU
 				}
 			}
@@ -221,7 +225,7 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 	if memQ := limits.Memory(); memQ != nil && !memQ.IsZero() {
 		desiredMB := int(memQ.Value() / (1024 * 1024))
 		if desiredMB > 0 && desiredMB != vm.memoryMB {
-			klog.V(2).Infof("enforceResources %s: memory limit %dMB (VM configured %dMB, balloon resize not applied)",
+			logger.Debugf(ctx, "%s: memory limit %dMB (VM configured %dMB, balloon resize not applied)",
 				vm.vmName, desiredMB, vm.memoryMB)
 		}
 	}
@@ -235,6 +239,7 @@ func (p *CocoonProvider) injectSSHKey(ctx context.Context, pod *corev1.Pod, vm *
 	if vm.skipSSH() {
 		return
 	}
+	logger := log.WithFunc("provider.injectSSHKey")
 	pubkey := ann(pod, "cocoon.cis/ssh-pubkey", "")
 	if pubkey == "" {
 		return
@@ -243,15 +248,15 @@ func (p *CocoonProvider) injectSSHKey(ctx context.Context, pod *corev1.Pod, vm *
 	cmd := fmt.Sprintf("mkdir -p /root/.ssh && echo '%s' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys",
 		pubkey)
 	if _, err := sshExecSimple(ctx, vm, pw, cmd); err != nil {
-		klog.Warningf("injectSSHKey %s/%s: %v", pod.Namespace, pod.Name, err)
+		logger.Warnf(ctx, "%s/%s: %v", pod.Namespace, pod.Name, err)
 	} else {
-		klog.Infof("injectSSHKey %s/%s: SSH pubkey injected", pod.Namespace, pod.Name)
+		logger.Infof(ctx, "%s/%s: SSH pubkey injected", pod.Namespace, pod.Name)
 	}
 }
 
 // ---------- #17: Pod DNS via dnsmasq ----------
 
-// addPodDNS adds a dnsmasq host entry for the pod: pod-name → VM IP.
+// addPodDNS adds a dnsmasq host entry for the pod: pod-name -> VM IP.
 // Pods can resolve each other by name within the cocoon bridge.
 func addPodDNS(podName, namespace, ip string) {
 	if ip == "" {
@@ -261,9 +266,7 @@ func addPodDNS(podName, namespace, ip string) {
 	entry := fmt.Sprintf("%s\t%s %s.%s.svc.cluster.local", ip, podName, podName, namespace)
 	// Append if not already present
 	cmd := fmt.Sprintf("grep -q '%s' /etc/hosts 2>/dev/null || echo '%s' >> /etc/hosts", podName, entry)
-	if out, err := exec.Command("sudo", "bash", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // cmd from trusted template
-		klog.V(2).Infof("addPodDNS %s: %v (%s)", podName, err, strings.TrimSpace(string(out)))
-	}
+	_, _ = exec.Command("sudo", "bash", "-c", cmd).CombinedOutput() //nolint:gosec // cmd from trusted template
 }
 
 // removePodDNS removes the dnsmasq host entry for the pod.
@@ -281,6 +284,7 @@ func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev
 	if vmName == "" || snapshotRef == "" {
 		return
 	}
+	logger := log.WithFunc("provider.recordSuspendedSnapshot")
 	ns := pod.Namespace
 	cmClient := p.kubeClient.CoreV1().ConfigMaps(ns)
 
@@ -292,7 +296,7 @@ func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev
 			Data:       map[string]string{},
 		}
 		if _, createErr := cmClient.Create(ctx, cm, metav1.CreateOptions{}); createErr != nil {
-			klog.Warningf("recordSuspendedSnapshot %s: create configmap: %v", vmName, createErr)
+			logger.Warnf(ctx, "%s: create configmap: %v", vmName, createErr)
 			return
 		}
 	}
@@ -302,9 +306,9 @@ func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev
 		"data": map[string]string{vmName: snapshotRef},
 	})
 	if _, err := cmClient.Patch(ctx, "cocoon-vm-snapshots", types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		klog.Warningf("recordSuspendedSnapshot %s: %v", vmName, err)
+		logger.Warnf(ctx, "%s: %v", vmName, err)
 	} else {
-		klog.Infof("recordSuspendedSnapshot: %s → %s", vmName, snapshotRef)
+		logger.Infof(ctx, "%s -> %s", vmName, snapshotRef)
 	}
 }
 
@@ -363,7 +367,7 @@ func getOwnerStatefulSetName(pod *corev1.Pod) string {
 }
 
 // extractOrdinal extracts the ordinal index from a StatefulSet pod name.
-// e.g. "agent-group-2" → 2, "bot-0" → 0.
+// e.g. "agent-group-2" -> 2, "bot-0" -> 0.
 func extractOrdinal(podName string) int {
 	if idx := strings.LastIndex(podName, "-"); idx >= 0 {
 		if n, err := strconv.Atoi(podName[idx+1:]); err == nil {
@@ -405,40 +409,41 @@ func (p *CocoonProvider) getDesiredReplicas(ctx context.Context, ns, kind, name 
 //
 // Decision matrix:
 //
-//	Deployment  desired=0              → true  (suspend all, snapshot everything)
-//	Deployment  desired>0, count>desired → false (scale-down, slot removed)
-//	Deployment  desired>0, count≤desired → true  (pod restart / kill)
-//	StatefulSet desired=0              → true  (suspend all)
-//	StatefulSet ordinal≥desired        → false (scale-down, highest ordinals removed first)
-//	StatefulSet ordinal<desired        → true  (pod restart / kill)
-//	Bare pod                           → true  (always snapshot)
-//	Owner not found (-1)               → true  (conservative: assume restart)
+//	Deployment  desired=0              -> true  (suspend all, snapshot everything)
+//	Deployment  desired>0, count>desired -> false (scale-down, slot removed)
+//	Deployment  desired>0, count<=desired -> true  (pod restart / kill)
+//	StatefulSet desired=0              -> true  (suspend all)
+//	StatefulSet ordinal>=desired        -> false (scale-down, highest ordinals removed first)
+//	StatefulSet ordinal<desired        -> true  (pod restart / kill)
+//	Bare pod                           -> true  (always snapshot)
+//	Owner not found (-1)               -> true  (conservative: assume restart)
 func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1.Pod) bool {
+	logger := log.WithFunc("provider.shouldSnapshotOnDelete")
 	key := podKey(pod.Namespace, pod.Name)
 
 	// CocoonSet-owned pods: controller sets explicit snapshot policy
 	if policy := ann(pod, AnnSnapshotPolicy, ""); policy != "" {
 		switch policy {
 		case "never":
-			klog.Infof("shouldSnapshot %s: annotation snapshot-policy=never", key)
+			logger.Infof(ctx, "%s: annotation snapshot-policy=never", key)
 			return false
 		case "always":
-			klog.Infof("shouldSnapshot %s: annotation snapshot-policy=always", key)
+			logger.Infof(ctx, "%s: annotation snapshot-policy=always", key)
 			return true
 		case "main-only":
 			vm := p.getVM(pod.Namespace, pod.Name)
 			if vm != nil && isMainAgent(vm.vmName) {
-				klog.Infof("shouldSnapshot %s: annotation snapshot-policy=main-only (is main)", key)
+				logger.Infof(ctx, "%s: annotation snapshot-policy=main-only (is main)", key)
 				return true
 			}
-			klog.Infof("shouldSnapshot %s: annotation snapshot-policy=main-only (not main, skip)", key)
+			logger.Infof(ctx, "%s: annotation snapshot-policy=main-only (not main, skip)", key)
 			return false
 		}
 	}
 
 	// Explicit hibernate annotation from operator — always snapshot.
 	if ann(pod, AnnHibernate, "") == valTrue {
-		klog.Infof("shouldSnapshot %s: hibernate annotation set, snapshot", key)
+		logger.Infof(ctx, "%s: hibernate annotation set, snapshot", key)
 		return true
 	}
 
@@ -450,7 +455,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 		}
 		ordinal := extractOrdinal(pod.Name)
 		if ordinal >= 0 && ordinal >= desired {
-			klog.Infof("shouldSnapshot %s: StatefulSet scale-down (ordinal=%d >= desired=%d), skip",
+			logger.Infof(ctx, "%s: StatefulSet scale-down (ordinal=%d >= desired=%d), skip",
 				key, ordinal, desired)
 			return false
 		}
@@ -465,7 +470,7 @@ func (p *CocoonProvider) shouldSnapshotOnDelete(ctx context.Context, pod *corev1
 		}
 		current := p.countDeploymentPods(pod.Namespace, deployName)
 		if current > desired {
-			klog.Infof("shouldSnapshot %s: Deployment scale-down (current=%d > desired=%d), skip",
+			logger.Infof(ctx, "%s: Deployment scale-down (current=%d > desired=%d), skip",
 				key, current, desired)
 			return false
 		}
@@ -550,7 +555,7 @@ func (p *CocoonProvider) deriveStableVMNameLocked(ctx context.Context, pod *core
 // ---------- Fork / Slot Helpers ----------
 
 // extractSlotFromVMName extracts the slot number from a Deployment VM name.
-// "vk-prod-deploy-2" → 2.  Returns -1 for non-Deployment names.
+// "vk-prod-deploy-2" -> 2.  Returns -1 for non-Deployment names.
 func extractSlotFromVMName(vmName string) int {
 	idx := strings.LastIndex(vmName, "-")
 	if idx < 0 {
@@ -564,7 +569,7 @@ func extractSlotFromVMName(vmName string) int {
 }
 
 // mainAgentVMName derives the slot-0 VM name from any slot's VM name.
-// "vk-prod-deploy-2" → "vk-prod-deploy-0"
+// "vk-prod-deploy-2" -> "vk-prod-deploy-0"
 func mainAgentVMName(vmName string) string {
 	idx := strings.LastIndex(vmName, "-")
 	if idx < 0 {
@@ -577,6 +582,7 @@ func mainAgentVMName(vmName string) string {
 // and returns the snapshot name for the sub-agent to clone from.
 // Returns "" if the main agent is not running or snapshot fails.
 func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string) string {
+	logger := log.WithFunc("provider.forkFromMainAgent")
 	mainVM := mainAgentVMName(vmName)
 
 	// Find the slot-0 VM.
@@ -591,7 +597,7 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 	p.mu.RUnlock()
 
 	if sourceVM == nil {
-		klog.Warningf("forkFromMainAgent: main agent VM %s not running, falling back to base image", mainVM)
+		logger.Warnf(ctx, "main agent VM %s not running, falling back to base image", mainVM)
 		return ""
 	}
 
@@ -601,16 +607,17 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
 	if err != nil {
-		klog.Errorf("forkFromMainAgent: snapshot %s failed: %v — %s", mainVM, err, out)
+		logger.Errorf(ctx, err, "snapshot %s failed: %s", mainVM, out)
 		return ""
 	}
-	klog.Infof("forkFromMainAgent: live snapshot of %s (%s) → %s", mainVM, sourceVM.vmID, forkSnap)
+	logger.Infof(ctx, "live snapshot of %s (%s) -> %s", mainVM, sourceVM.vmID, forkSnap)
 	return forkSnap
 }
 
 // forkFromVM creates a live snapshot of a specific source VM.
 // Used by CocoonSet controller via cocoon.cis/fork-from annotation.
 func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, targetVMName string) string {
+	logger := log.WithFunc("provider.forkFromVM")
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
@@ -622,7 +629,7 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 	p.mu.RUnlock()
 
 	if sourceVM == nil {
-		klog.Warningf("forkFromVM: source VM %s not running, falling back to base image", sourceVMName)
+		logger.Warnf(ctx, "source VM %s not running, falling back to base image", sourceVMName)
 		return ""
 	}
 
@@ -631,10 +638,10 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
 	if err != nil {
-		klog.Errorf("forkFromVM: snapshot %s failed: %v — %s", sourceVMName, err, out)
+		logger.Errorf(ctx, err, "snapshot %s failed: %s", sourceVMName, out)
 		return ""
 	}
-	klog.Infof("forkFromVM: live snapshot of %s (%s) → %s", sourceVMName, sourceVM.vmID, forkSnap)
+	logger.Infof(ctx, "live snapshot of %s (%s) -> %s", sourceVMName, sourceVM.vmID, forkSnap)
 	return forkSnap
 }
 

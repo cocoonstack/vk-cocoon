@@ -1,12 +1,12 @@
 // Package provider — hibernate/wake lifecycle for pods.
 //
-// Hibernate: snapshot running VM → push to epoch → destroy VM → pod stays Running+NotReady.
-// Wake: pull snapshot from epoch → clone VM → pod becomes Running+Ready.
+// Hibernate: snapshot running VM -> push to epoch -> destroy VM -> pod stays Running+NotReady.
+// Wake: pull snapshot from epoch -> clone VM -> pod becomes Running+Ready.
 //
 // Triggered by the cocoon.cis/hibernate annotation:
 //
-//	annotation set to "true"  → hibernateVM (via reconcile loop)
-//	annotation removed        → wakeVM     (via reconcile loop)
+//	annotation set to "true"  -> hibernateVM (via reconcile loop)
+//	annotation removed        -> wakeVM     (via reconcile loop)
 //
 // The pod object stays alive in K8s throughout the hibernate/wake cycle,
 // so Deployment/StatefulSet controllers don't recreate it.
@@ -18,15 +18,17 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/klog/v2"
 )
 
 // reconcileHibernateAnnotations checks all tracked pods for hibernate annotation
 // changes. Called from the 30s reconcile loop because the VK framework doesn't
 // trigger UpdatePod for annotation-only changes.
 func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
+	logger := log.WithFunc("provider.reconcileHibernateAnnotations")
+
 	p.mu.RLock()
 	type check struct {
 		key string
@@ -52,10 +54,10 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 		liveHibernate := livePod.Annotations[AnnHibernate]
 
 		if liveHibernate == valTrue && c.vm.state == stateRunning {
-			klog.Infof("reconcileHibernate: %s has hibernate=true, triggering", c.key)
+			logger.Infof(ctx, "%s has hibernate=true, triggering", c.key)
 			p.hibernateVM(ctx, c.pod, c.vm)
 		} else if liveHibernate != valTrue && c.vm.state == stateHibernated {
-			klog.Infof("reconcileHibernate: %s hibernate removed, triggering wake", c.key)
+			logger.Infof(ctx, "%s hibernate removed, triggering wake", c.key)
 			p.wakeVM(ctx, c.pod, c.vm)
 		}
 	}
@@ -64,15 +66,16 @@ func (p *CocoonProvider) reconcileHibernateAnnotations(ctx context.Context) {
 // hibernateVM snapshots a running VM, pushes to epoch, and destroys the VM.
 // The pod stays alive with phase=Running, Ready=False (container Waiting "Hibernated").
 func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
+	logger := log.WithFunc("provider.hibernateVM")
 	key := podKey(pod.Namespace, pod.Name)
 
 	// Slot-0 is the main agent — cannot be hibernated.
 	if isMainAgent(vm.vmName) {
-		klog.Warningf("hibernateVM %s: REJECTED — slot-0 (main agent) cannot be hibernated", key)
+		logger.Warnf(ctx, "%s: REJECTED — slot-0 (main agent) cannot be hibernated", key)
 		return
 	}
 
-	klog.Infof("hibernateVM %s: starting (vm=%s id=%s)", key, vm.vmName, vm.vmID)
+	logger.Infof(ctx, "%s: starting (vm=%s id=%s)", key, vm.vmName, vm.vmID)
 
 	// Stop probes — VM will be gone.
 	p.stopProbes(key)
@@ -91,10 +94,10 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 
 	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.vmID)
 	if err != nil {
-		klog.Errorf("hibernateVM %s: snapshot failed: %v — %s", key, err, out)
+		logger.Errorf(ctx, err, "%s: snapshot failed: %s", key, out)
 		return
 	}
-	klog.Infof("hibernateVM %s: snapshot %s created", key, snapshotName)
+	logger.Infof(ctx, "%s: snapshot %s created", key, snapshotName)
 
 	// 2. Push to epoch.
 	pushedToEpoch := false
@@ -103,9 +106,9 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 			filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
 
 		if pushErr := puller.PushSnapshot(ctx, snapshotName, "latest"); pushErr != nil {
-			klog.Errorf("hibernateVM %s: epoch push failed: %v", key, pushErr)
+			logger.Errorf(ctx, pushErr, "%s: epoch push failed", key)
 		} else {
-			klog.Infof("hibernateVM %s: pushed to epoch", key)
+			logger.Infof(ctx, "%s: pushed to epoch", key)
 			pushedToEpoch = true
 		}
 	}
@@ -131,15 +134,16 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	vm.ip = ""
 	p.mu.Unlock()
 
-	klog.Infof("hibernateVM %s: complete — pod stays alive, VM destroyed", key)
+	logger.Infof(ctx, "%s: complete — pod stays alive, VM destroyed", key)
 	go p.notifyPodStatus(pod.Namespace, pod.Name)
 }
 
 // wakeVM restores a hibernated VM from its epoch snapshot.
 // Triggered when the cocoon.cis/hibernate annotation is removed.
 func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
+	logger := log.WithFunc("provider.wakeVM")
 	key := podKey(pod.Namespace, pod.Name)
-	klog.Infof("wakeVM %s: starting (vm=%s)", key, vm.vmName)
+	logger.Infof(ctx, "%s: starting (vm=%s)", key, vm.vmName)
 
 	// Resolve image and check for suspended snapshot.
 	imageRaw := ann(pod, AnnImage, "")
@@ -150,7 +154,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	cloneImage := image
 
 	if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
-		klog.Infof("wakeVM %s: found suspended snapshot %s", key, ref)
+		logger.Infof(ctx, "%s: found suspended snapshot %s", key, ref)
 		suspendRegistry, suspendName := parseImageRef(ref)
 		cloneImage = suspendName
 		if suspendRegistry != "" {
@@ -163,7 +167,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	puller := p.getPuller(registryURL)
 	if puller != nil {
 		if err := puller.EnsureSnapshot(ctx, cloneImage); err != nil {
-			klog.Warningf("wakeVM %s: epoch pull %s failed: %v", key, cloneImage, err)
+			logger.Warnf(ctx, "%s: epoch pull %s failed: %v", key, cloneImage, err)
 		}
 	}
 
@@ -180,7 +184,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	args := buildCloneArgs(vm.vmName, cpu, mem, storage, cloneImage)
 	out, err := p.cocoonExec(ctx, args...)
 	if err != nil {
-		klog.Errorf("wakeVM %s: clone failed: %v — %s", key, err, out)
+		logger.Errorf(ctx, err, "%s: clone failed: %s", key, out)
 		return
 	}
 
@@ -194,7 +198,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 		time.Sleep(2 * time.Second)
 	}
 	if fresh == nil {
-		klog.Errorf("wakeVM %s: VM not found after clone", key)
+		logger.Errorf(ctx, nil, "%s: VM not found after clone", key)
 		return
 	}
 
@@ -221,6 +225,6 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	go p.postBootInject(ctx, pod, vm)
 	go p.startProbes(ctx, pod, vm)
 
-	klog.Infof("wakeVM %s: complete (ip=%s)", key, fresh.ip)
+	logger.Infof(ctx, "%s: complete (ip=%s)", key, fresh.ip)
 	go p.notifyPodStatus(pod.Namespace, pod.Name)
 }

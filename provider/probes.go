@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2"
 )
 
 const (
@@ -71,7 +71,7 @@ func (p *CocoonProvider) startProbes(ctx context.Context, pod *corev1.Pod, vm *C
 	if c.ReadinessProbe != nil {
 		go p.runProbeLoop(probeCtx, pod.Namespace, pod.Name, vm, c.ReadinessProbe, "readiness", pr)
 	}
-	klog.Infof("startProbes %s: liveness=%v readiness=%v", key, c.LivenessProbe != nil, c.ReadinessProbe != nil)
+	log.WithFunc("provider.startProbes").Infof(ctx, "%s: liveness=%v readiness=%v", key, c.LivenessProbe != nil, c.ReadinessProbe != nil)
 }
 
 // stopProbes cancels probe goroutines for a pod.
@@ -111,6 +111,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 	case <-time.After(delay):
 	}
 
+	logger := log.WithFunc("provider.runProbeLoop")
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,7 +135,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 				pr.lastLiveErr = err.Error()
 				if pr.liveFailCount >= failThresh {
 					if pr.livenessReady {
-						klog.Warningf("probe %s/%s liveness FAILED (%dx): %v", ns, name, pr.liveFailCount, err)
+						logger.Warnf(ctx, "%s/%s liveness FAILED (%dx): %v", ns, name, pr.liveFailCount, err)
 						pr.livenessReady = false
 						go p.notifyPodStatus(ns, name)
 					}
@@ -154,7 +155,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 				pr.lastReadyErr = err.Error()
 				if pr.readyFailCount >= failThresh {
 					if pr.readinessReady {
-						klog.Warningf("probe %s/%s readiness FAILED (%dx): %v", ns, name, pr.readyFailCount, err)
+						logger.Warnf(ctx, "%s/%s readiness FAILED (%dx): %v", ns, name, pr.readyFailCount, err)
 						pr.readinessReady = false
 						go p.notifyPodStatus(ns, name)
 					}

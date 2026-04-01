@@ -17,8 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2"
 )
 
 // setupVolumes creates non-configMap/secret volumes in the VM.
@@ -36,6 +36,7 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 		}
 	}
 
+	logger := log.WithFunc("provider.setupVolumes")
 	pw := p.sshPass(vm)
 	for _, vol := range pod.Spec.Volumes {
 		mount, ok := mounts[vol.Name]
@@ -46,19 +47,19 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 		switch {
 		case vol.EmptyDir != nil:
 			// EmptyDir: just create the directory in the VM.
-			// medium=Memory → tmpfs; default → regular dir.
+			// medium=Memory -> tmpfs; default -> regular dir.
 			if vol.EmptyDir.Medium == corev1.StorageMediumMemory {
 				cmd := fmt.Sprintf("mkdir -p '%s' && mount -t tmpfs -o size=64m tmpfs '%s'",
 					mount.MountPath, mount.MountPath)
 				if _, err := sshExecSimple(ctx, vm, pw, cmd); err != nil {
-					klog.Warningf("setupVolumes %s/%s: emptyDir tmpfs %s: %v",
+					logger.Warnf(ctx, "%s/%s: emptyDir tmpfs %s: %v",
 						pod.Namespace, pod.Name, mount.MountPath, err)
 				}
 			} else {
 				cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
 				_, _ = sshExecSimple(ctx, vm, pw, cmd)
 			}
-			klog.V(2).Infof("setupVolumes: emptyDir %s at %s", vol.Name, mount.MountPath)
+			logger.Debugf(ctx, "emptyDir %s at %s", vol.Name, mount.MountPath)
 
 		case vol.HostPath != nil:
 			// HostPath: create the directory in the VM (host paths aren't directly
@@ -66,7 +67,7 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 			// Here we just ensure the path exists.
 			cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
 			_, _ = sshExecSimple(ctx, vm, pw, cmd)
-			klog.V(2).Infof("setupVolumes: hostPath %s → VM %s (dir created, not shared)",
+			logger.Debugf(ctx, "hostPath %s -> VM %s (dir created, not shared)",
 				vol.HostPath.Path, mount.MountPath)
 
 		case vol.Projected != nil:

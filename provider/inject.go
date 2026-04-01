@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/klog/v2"
 )
 
 // Annotation keys for injection config.
@@ -117,7 +117,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 	if err := sshWriteFile(ctx, vm, pw, target, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("injectEnvVars: %w", err)
 	}
-	klog.Infof("injectEnvVars %s/%s: wrote %d vars to %s", pod.Namespace, pod.Name, len(envs), target)
+	log.WithFunc("provider.injectEnvVars").Infof(ctx, "%s/%s: wrote %d vars to %s", pod.Namespace, pod.Name, len(envs), target)
 	return hash, nil
 }
 
@@ -209,22 +209,23 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 	hash := ""
 	if fileCount > 0 {
 		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(allContent.String())))
-		klog.Infof("injectVolumes %s/%s: wrote %d files", pod.Namespace, pod.Name, fileCount)
+		log.WithFunc("provider.injectVolumes").Infof(ctx, "%s/%s: wrote %d files", pod.Namespace, pod.Name, fileCount)
 	}
 	return hash, nil
 }
 
 // postBootInject runs all injections and lifecycle setup after VM boot.
-// Order: security → init containers → volumes → env → sidecars → DNS → SSH key.
+// Order: security -> init containers -> volumes -> env -> sidecars -> DNS -> SSH key.
 func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
 	if vm.os == osWindows {
 		return
 	}
+	logger := log.WithFunc("provider.postBootInject")
 	key := podKey(pod.Namespace, pod.Name)
 	pw := p.sshPass(vm)
 
 	if err := waitForSSH(ctx, vm, pw, sshReadyTimeout); err != nil {
-		klog.Warningf("postBootInject %s: SSH not ready: %v", key, err)
+		logger.Warnf(ctx, "%s: SSH not ready: %v", key, err)
 		return
 	}
 
@@ -236,7 +237,7 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 
 	// #13: Init containers (must complete before main service starts)
 	if err := p.runInitContainers(ctx, pod, vm); err != nil {
-		klog.Errorf("postBootInject %s: init containers failed: %v", key, err)
+		logger.Errorf(ctx, err, "%s: init containers failed", key)
 		return // don't proceed if init fails
 	}
 
@@ -245,7 +246,7 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 
 	// #5: ConfigMap/Secret volumes
 	if volHash, err := p.injectVolumes(ctx, pod, vm); err != nil {
-		klog.Warningf("postBootInject %s: volume injection failed: %v", key, err)
+		logger.Warnf(ctx, "%s: volume injection failed: %v", key, err)
 	} else if volHash != "" {
 		p.mu.Lock()
 		p.injectHashes[key+"/vol"] = volHash
@@ -254,14 +255,14 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 
 	// #6/#22: Env vars + DownwardAPI metadata
 	if envHash, err := p.injectEnvVars(ctx, pod, vm); err != nil {
-		klog.Warningf("postBootInject %s: env injection failed: %v", key, err)
+		logger.Warnf(ctx, "%s: env injection failed: %v", key, err)
 	} else if envHash != "" {
 		p.mu.Lock()
 		p.injectHashes[key+"/env"] = envHash
 		p.mu.Unlock()
 	}
 
-	// #12: Multi-container → sidecar systemd services
+	// #12: Multi-container -> sidecar systemd services
 	p.installContainerServices(ctx, pod, vm)
 
 	// #17: Pod DNS entry

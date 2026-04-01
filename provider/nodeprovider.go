@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/klog/v2"
 )
 
 // CocoonNodeProvider implements node.NodeProvider with dynamic conditions.
@@ -56,7 +56,7 @@ func (n *CocoonNodeProvider) NotifyNodeStatus(ctx context.Context, cb func(*core
 			}
 		}
 	}()
-	klog.Info("NodeProvider: dynamic conditions enabled (30s interval)")
+	log.WithFunc("provider.NotifyNodeStatus").Info(ctx, "dynamic conditions enabled (30s interval)")
 }
 
 // updateConditions computes real node conditions from host metrics.

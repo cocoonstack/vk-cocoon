@@ -19,17 +19,29 @@ import (
 	"time"
 
 	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
+	"github.com/projecteru2/core/log"
+	"github.com/projecteru2/core/types"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/klog/v2"
 
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
 func main() {
+	ctx := context.Background()
+
+	logLevel := os.Getenv("VK_LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	if err := log.SetupLog(ctx, &types.ServerLogConfig{Level: logLevel}, ""); err != nil {
+		log.WithFunc("main").Fatalf(ctx, err, "setup log: %v", err)
+	}
+	logger := log.WithFunc("main")
+
 	nodeName := os.Getenv("VK_NODE_NAME")
 	if nodeName == "" {
 		nodeName = "cocoon-pool"
@@ -45,14 +57,14 @@ func main() {
 
 	config, err := k8sutil.LoadConfig()
 	if err != nil {
-		klog.Fatalf("kubeconfig: %v", err)
+		logger.Fatalf(ctx, err, "kubeconfig: %v", err)
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		klog.Fatalf("clientset: %v", err)
+		logger.Fatalf(ctx, err, "clientset: %v", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	mux := http.NewServeMux()
@@ -88,16 +100,16 @@ func main() {
 		var loadErr error
 		tlsCert, loadErr = tls.LoadX509KeyPair(certPath, keyPath)
 		if loadErr != nil {
-			klog.Fatalf("load TLS cert: %v", loadErr)
+			logger.Fatalf(ctx, loadErr, "load TLS cert: %v", loadErr)
 		}
-		klog.Infof("Using TLS cert from %s", certPath)
+		logger.Infof(ctx, "using TLS cert from %s", certPath)
 	} else {
 		var genErr error
 		tlsCert, genErr = generateSelfSignedCert(nodeName, nodeIP)
 		if genErr != nil {
-			klog.Fatalf("generate TLS cert: %v", genErr)
+			logger.Fatalf(ctx, genErr, "generate TLS cert: %v", genErr)
 		}
-		klog.Infof("Using self-signed TLS cert")
+		logger.Info(ctx, "using self-signed TLS cert")
 	}
 
 	n, err := nodeutil.NewNode(nodeName, newProvider,
@@ -111,12 +123,12 @@ func main() {
 		}),
 	)
 	if err != nil {
-		klog.Fatalf("failed to create node: %v", err)
+		logger.Fatalf(ctx, err, "create node: %v", err)
 	}
 
 	go func() {
 		if err := n.Run(ctx); err != nil {
-			klog.Fatalf("node exited: %v", err)
+			logger.Fatalf(ctx, err, "node exited: %v", err)
 		}
 	}()
 
@@ -133,16 +145,16 @@ func main() {
 				KubeletEndpoint: corev1.DaemonEndpoint{Port: 10250},
 			}
 			if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
-				klog.Warningf("patch node endpoints: %v (retry %d)", err, i)
+				logger.Warnf(ctx, "patch node endpoints: %v (retry %d)", err, i)
 				time.Sleep(2 * time.Second)
 				continue
 			}
-			klog.Infof("Node %s kubelet endpoint set to :10250", nodeName)
+			logger.Infof(ctx, "node %s kubelet endpoint set to :10250", nodeName)
 			break
 		}
 	}()
 
-	klog.Infof("Virtual Kubelet '%s' started (ip=%s, cocoon=%s)", nodeName, nodeIP, cocoonBin)
+	logger.Infof(ctx, "Virtual Kubelet '%s' started (ip=%s, cocoon=%s)", nodeName, nodeIP, cocoonBin)
 	fmt.Printf("Virtual Kubelet '%s' ready — kubelet API on :10250\n", nodeName)
 	<-ctx.Done()
 	fmt.Println("Shutting down...")
