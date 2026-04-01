@@ -2,24 +2,22 @@
 
 Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs.
 
-## What it does
+## Overview
 
 `vk-cocoon` registers a virtual node in Kubernetes and translates pod lifecycle operations into VM operations. Each pod becomes a full MicroVM managed by the Cocoon runtime and Cloud Hypervisor.
 
-Key capabilities:
-
-- **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake.
-- **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation.
-- **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots.
-- **Full kubectl support** -- `exec`, `logs`, `attach`, and `port-forward` bridged through SSH.
-- **Liveness and readiness probes** -- exec, TCP, and HTTP probes run against the guest VM.
-- **ConfigMap and Secret injection** -- volumes and env vars written into the VM via SSH after boot.
-- **Windows guests** -- first-class support with RDP access on port 3389.
-- **Real metrics** -- CPU and memory stats from Cloud Hypervisor API and host `/proc`.
+- **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake
+- **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation
+- **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots
+- **Full kubectl support** -- `exec`, `logs`, `attach`, and `port-forward` bridged through SSH
+- **Liveness and readiness probes** -- exec, TCP, and HTTP probes run against the guest VM
+- **ConfigMap and Secret injection** -- volumes and env vars written into the VM via SSH after boot
+- **Windows guests** -- first-class support with RDP access on port 3389
+- **Real metrics** -- CPU and memory stats from Cloud Hypervisor API and host `/proc`
 
 ## Architecture
 
-```
+```text
 Kubernetes API
       |
       v
@@ -29,7 +27,7 @@ Kubernetes API
   Cocoon runtime  --->  Cloud Hypervisor  --->  Guest VM
 ```
 
-## Pod modes
+### Pod modes
 
 | Mode | Annotation | Behavior |
 |---|---|---|
@@ -38,7 +36,7 @@ Kubernetes API
 | adopt | `cocoon.cis/mode=adopt` | Attach to an existing Cocoon VM |
 | static | `cocoon.cis/mode=static` | Track an externally managed VM by IP |
 
-## Common annotations
+### Common annotations
 
 | Annotation | Purpose |
 |---|---|
@@ -60,28 +58,33 @@ Kubernetes API
 - `sshpass` for SSH-based VM access
 - (Optional) An [Epoch](https://github.com/cocoonstack/epoch) registry for snapshot storage
 
-### From source
+### Download
+
+Download a pre-built binary from [GitHub Releases](https://github.com/cocoonstack/vk-cocoon/releases).
+
+### Build from source
 
 ```bash
 git clone https://github.com/cocoonstack/vk-cocoon.git
 cd vk-cocoon
-make build
+make build          # produces ./vk-cocoon
 sudo mv vk-cocoon /usr/local/bin/
 ```
 
-### Environment variables
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
 | `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name in Kubernetes |
 | `VK_NODE_IP` | auto-detected | IP address of the host running vk-cocoon |
+| `VK_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary |
 | `COCOON_SSH_PASSWORD` | (none) | Default SSH password for VM access |
 | `EPOCH_REGISTRY_TOKEN` | (none) | Bearer token for Epoch registry auth |
 | `VK_TLS_CERT` / `VK_TLS_KEY` | self-signed | TLS cert/key for the kubelet API |
 
-## Quick start
+## Quick Start
 
 ```bash
 export KUBECONFIG=$HOME/.kube/config
@@ -93,31 +96,32 @@ export COCOON_BIN=/usr/local/bin/cocoon
 
 See [DEPLOY.md](DEPLOY.md) for worker prerequisites and environment variables.
 
-## Build
+## Usage
 
-```bash
-make build    # produces ./vk-cocoon
-make test     # runs tests with race detection
-make lint     # runs golangci-lint
-```
-
-## Examples
+### Examples
 
 - [manifests/test-ubuntu.yaml](manifests/test-ubuntu.yaml) -- Linux VM pod
 - [manifests/windows-vm.yaml](manifests/windows-vm.yaml) -- Windows VM pod
 - [manifests/test-cocoonset.yaml](manifests/test-cocoonset.yaml) -- CocoonSet with fork
 
-## Design
+## Development
+
+```bash
+make build          # build binary
+make test           # run tests with race detection
+make lint           # run golangci-lint
+make fmt            # format code
+make help           # show all targets
+```
 
 See [DESIGN.md](DESIGN.md) for the provider's design rationale covering restart recovery, networking, hibernation, and Windows support.
 
-## Related projects
+## Related Projects
 
 | Project | Role |
 |---|---|
-| [cocoon](https://github.com/cocoonstack/cocoon) | MicroVM runtime |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and Hibernation controllers |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Sticky scheduling webhook |
 | [glance](https://github.com/cocoonstack/glance) | Browser-based SSH, RDP, and VNC access |
 
