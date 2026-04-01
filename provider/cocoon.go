@@ -1789,7 +1789,7 @@ func resolveIPFromLeaseByMAC(mac string) string {
 // waitForDHCPIP polls dnsmasq leases until a DHCP IP (10.88.100.x) appears for the VM.
 // Only accepts leases newer than the VM creation time to avoid stale entries.
 // Uses context.Background because the polling must complete even if the parent
-// ctx is cancelled (e.g. during graceful shutdown).
+// ctx is canceled (e.g. during graceful shutdown).
 func (p *CocoonProvider) waitForDHCPIP(_ context.Context, vm *CocoonVM, timeout time.Duration) string {
 	deadline := time.Now().Add(timeout)
 	mac := vm.mac
