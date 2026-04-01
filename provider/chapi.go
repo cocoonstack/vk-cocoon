@@ -56,14 +56,13 @@ type CHCounters map[string]map[string]uint64
 
 // chSocketPath returns the CH API socket path for a given VM ID.
 // Checks both /data01/cocoon/run and /var/lib/cocoon/run.
-// Uses sudo test because the directories are root-owned.
 func chSocketPath(vmID string) string {
 	for _, base := range []string{
 		"/data01/cocoon/run/cloudhypervisor",
 		"/var/lib/cocoon/run/cloudhypervisor",
 	} {
 		sock := filepath.Join(base, vmID, "api.sock")
-		if err := exec.Command("sudo", "test", "-S", sock).Run(); err == nil { //nolint:gosec
+		if fi, err := os.Stat(sock); err == nil && fi.Mode().Type()&os.ModeSocket != 0 {
 			return sock
 		}
 	}

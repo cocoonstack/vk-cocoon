@@ -322,7 +322,7 @@ func (p *CocoonProvider) patchPodAnnotations(ctx context.Context, ns, name strin
 		return
 	}
 	if ctx == nil {
-		ctx = context.TODO()
+		ctx = context.Background() // defensive nil guard
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -1574,7 +1574,7 @@ func (p *CocoonProvider) notifyPodStatus(ns, name string) {
 		klog.V(2).Infof("notifyPodStatus %s/%s: pod not found in store", ns, name)
 		return
 	}
-	status, err := p.GetPodStatus(context.TODO(), ns, name)
+	status, err := p.GetPodStatus(context.Background(), ns, name) // fire-and-forget notification; no parent ctx available
 	if err != nil {
 		klog.Warningf("notifyPodStatus %s/%s: GetPodStatus: %v", ns, name, err)
 		return
