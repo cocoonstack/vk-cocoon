@@ -17,6 +17,7 @@ func newTestProvider() *CocoonProvider {
 		injectHashes: make(map[string]string),
 		probeStates:  make(map[string]*probeResult),
 		pullers:      make(map[string]*EpochPuller),
+		lookupSuspendedSnapshotFn: func(_ context.Context, _, _ string) string { return "" },
 	}
 }
 
