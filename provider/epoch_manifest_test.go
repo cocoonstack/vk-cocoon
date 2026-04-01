@@ -4,31 +4,34 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	cocoon "github.com/cocoonstack/epoch/cocoon"
+	"github.com/cocoonstack/epoch/manifest"
 )
 
 func TestEpochManifestIsCloudImageManifest(t *testing.T) {
 	t.Run("direct cloud image", func(t *testing.T) {
-		m := &epochManifest{
+		m := &manifest.Manifest{
 			Image: "win1125h2-latest.qcow2",
-			Layers: []epochLayer{
+			Layers: []manifest.Layer{
 				{Filename: "win1125h2-latest.qcow2.part.001"},
 				{Filename: "win1125h2-latest.qcow2.part.002"},
 			},
 		}
-		if !m.isCloudImageManifest() {
+		if !isCloudImageManifest(m) {
 			t.Fatal("expected direct cloud image manifest")
 		}
 	})
 
 	t.Run("snapshot payload", func(t *testing.T) {
-		m := &epochManifest{
+		m := &manifest.Manifest{
 			Name: "ubuntu-dev-base",
-			Layers: []epochLayer{
+			Layers: []manifest.Layer{
 				{Filename: "config.json"},
 				{Filename: "overlay.qcow2"},
 			},
 		}
-		if m.isCloudImageManifest() {
+		if isCloudImageManifest(m) {
 			t.Fatal("snapshot manifest misclassified as cloud image")
 		}
 	})
@@ -46,7 +49,7 @@ func TestHydrateSnapshotRecord(t *testing.T) {
 		t.Fatalf("write config.json: %v", err)
 	}
 
-	rec := &snapshotRecord{
+	rec := &cocoon.SnapshotRecord{
 		Name:    "ubuntu-dev-base",
 		DataDir: dir,
 	}
