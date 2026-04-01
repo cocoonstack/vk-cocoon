@@ -101,9 +101,9 @@ type CocoonVM struct {
 	ip           string
 	mac          string
 	state        string // running, stopped, created, error
-	cpu      int
-	memoryMB int
-	image    string
+	cpu          int
+	memoryMB     int
+	image        string
 	os           string // "linux" or "windows"
 	managed      bool   // true = VK owns lifecycle (stop on delete, start on recreate)
 	createdAt    time.Time
