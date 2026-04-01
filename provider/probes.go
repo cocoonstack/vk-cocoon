@@ -186,7 +186,7 @@ func (p *CocoonProvider) executeProbe(ctx context.Context, vm *CocoonVM, probe *
 		if path == "" {
 			path = "/"
 		}
-		return probeHTTP(scheme, vm.ip, port, path, timeout)
+		return probeHTTP(ctx, scheme, vm.ip, port, path, timeout)
 	}
 	if probe.Exec != nil && vm.os != osWindows {
 		pw := p.sshPass(vm)
@@ -214,9 +214,9 @@ func probeTCP(ip string, port int, timeout time.Duration) error {
 var probeClient = &http.Client{}
 
 // probeHTTP does an HTTP GET and checks for 2xx/3xx.
-func probeHTTP(scheme, ip string, port int, path string, timeout time.Duration) error {
+func probeHTTP(ctx context.Context, scheme, ip string, port int, path string, timeout time.Duration) error {
 	url := fmt.Sprintf("%s://%s:%d%s", scheme, ip, port, path)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

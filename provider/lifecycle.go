@@ -522,7 +522,7 @@ func (p *CocoonProvider) allocateSlotLocked(ns, deployName string) int {
 		}
 	}
 
-	for i := 0; i <= maxSlot; i++ {
+	for i := range maxSlot + 1 {
 		if !usedSlots[i] {
 			return i
 		}

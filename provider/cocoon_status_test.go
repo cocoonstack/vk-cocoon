@@ -119,7 +119,7 @@ func TestReconcileOnceBackfillsGuestIPIntoPodAnnotations(t *testing.T) {
 		}
 	}
 
-	p.reconcileOnce()
+	p.reconcileOnce(context.Background())
 
 	if got := p.vms[key].ip; got != "10.88.100.207" {
 		t.Fatalf("cached VM IP = %q, want 10.88.100.207", got)

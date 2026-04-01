@@ -278,7 +278,7 @@ func (p *CocoonProvider) discoverRecoverableManagedVM(ctx context.Context, vmID,
 	return last
 }
 
-func (p *CocoonProvider) storeRecoveredPodVM(key string, pod *corev1.Pod, vm *CocoonVM) {
+func (p *CocoonProvider) storeRecoveredPodVM(ctx context.Context, key string, pod *corev1.Pod, vm *CocoonVM) {
 	changed := applyVMPodAnnotations(pod, vm)
 
 	p.mu.Lock()
@@ -286,7 +286,7 @@ func (p *CocoonProvider) storeRecoveredPodVM(key string, pod *corev1.Pod, vm *Co
 	p.vms[key] = vm
 	p.mu.Unlock()
 
-	p.patchPodAnnotations(context.Background(), pod.Namespace, pod.Name, changed)
+	p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, changed)
 }
 
 func setPodAnnotation(pod *corev1.Pod, changed map[string]string, key, value string) {
@@ -322,7 +322,7 @@ func (p *CocoonProvider) patchPodAnnotations(ctx context.Context, ns, name strin
 		return
 	}
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = context.TODO()
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -435,9 +435,9 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 			vm.startedAt = now
 		}
 
-		p.storeRecoveredPodVM(key, pod, vm)
+		p.storeRecoveredPodVM(ctx, key, pod, vm)
 		klog.Infof("CreatePod %s: recovered existing VM %s (%s) state=%s ip=%s", key, vm.vmName, vm.vmID, vm.state, vm.ip)
-		go p.startProbes(context.Background(), pod, vm)
+		go p.startProbes(ctx, pod, vm)
 		go p.notifyPodStatus(pod.Namespace, pod.Name)
 		return true
 	}
@@ -456,7 +456,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 				createdAt:    now,
 				startedAt:    now,
 			}
-			p.storeRecoveredPodVM(key, pod, vm)
+			p.storeRecoveredPodVM(ctx, key, pod, vm)
 			klog.Infof("CreatePod %s: recovered hibernated pod %s from snapshot %s", key, vmName, ref)
 			go p.notifyPodStatus(pod.Namespace, pod.Name)
 			return true
@@ -481,13 +481,12 @@ func (p *CocoonProvider) reconcileLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			p.reconcileOnce()
+			p.reconcileOnce(ctx)
 		}
 	}
 }
 
-func (p *CocoonProvider) reconcileOnce() {
-	ctx := context.Background()
+func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 
 	// Check for hibernate/wake annotation changes (VK framework doesn't
 	// call UpdatePod for annotation-only changes, so we poll here).
@@ -847,7 +846,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	go p.postBootInject(ctx, pod, vm)
 
 	// Start liveness/readiness probes if defined.
-	go p.startProbes(context.Background(), pod, vm)
+	go p.startProbes(ctx, pod, vm)
 
 	// Async notify pod status to avoid 5s polling delay.
 	go p.notifyPodStatus(pod.Namespace, pod.Name)
@@ -1423,7 +1422,7 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 
 		// Real CPU/MEM from CH API + /proc (skip static VMs)
 		if !strings.HasPrefix(vm.vmID, "static-") { //nolint:nestif // metrics collection from multiple APIs
-			if ping, err := chGetPing(vm.vmID); err == nil && ping.PID > 0 {
+			if ping, err := chGetPing(ctx, vm.vmID); err == nil && ping.PID > 0 {
 				if uNs, sNs, err := readProcCPUUsage(ping.PID); err == nil {
 					totalNs := uNs + sNs
 					podStat.CPU = &statsv1alpha1.CPUStats{
@@ -1439,7 +1438,7 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 				}
 			}
 			// Network + Disk from vm.counters
-			if counters, err := chGetCounters(vm.vmID); err == nil {
+			if counters, err := chGetCounters(ctx, vm.vmID); err == nil {
 				for devName, stats := range counters {
 					if strings.Contains(devName, "net") {
 						rx := stats["rx_bytes"]
@@ -1513,7 +1512,7 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 		}
 
 		if !strings.HasPrefix(vm.vmID, "static-") { //nolint:nestif // per-device metrics from CH API
-			if ping, err := chGetPing(vm.vmID); err == nil && ping.PID > 0 {
+			if ping, err := chGetPing(ctx, vm.vmID); err == nil && ping.PID > 0 {
 				if uNs, sNs, err := readProcCPUUsage(ping.PID); err == nil {
 					cpuSec := float64(uNs+sNs) / 1e9
 					cpuMetrics = append(cpuMetrics, &dto.Metric{Label: labels, Gauge: &dto.Gauge{Value: &cpuSec}})
@@ -1523,7 +1522,7 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 					memMetrics = append(memMetrics, &dto.Metric{Label: labels, Gauge: &dto.Gauge{Value: &memF}})
 				}
 			}
-			if counters, err := chGetCounters(vm.vmID); err == nil {
+			if counters, err := chGetCounters(ctx, vm.vmID); err == nil {
 				for devName, stats := range counters {
 					if strings.Contains(devName, "net") {
 						rx := float64(stats["rx_bytes"])
@@ -1576,7 +1575,7 @@ func (p *CocoonProvider) notifyPodStatus(ns, name string) {
 		klog.V(2).Infof("notifyPodStatus %s/%s: pod not found in store", ns, name)
 		return
 	}
-	status, err := p.GetPodStatus(context.Background(), ns, name)
+	status, err := p.GetPodStatus(context.TODO(), ns, name)
 	if err != nil {
 		klog.Warningf("notifyPodStatus %s/%s: GetPodStatus: %v", ns, name, err)
 		return

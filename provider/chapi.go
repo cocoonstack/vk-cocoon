@@ -73,8 +73,8 @@ func chSocketPath(vmID string) string {
 // ---------- Low-level HTTP helpers ----------
 
 // chGet calls a CH API GET endpoint via sudo curl (socket is root-owned).
-func chGet(socketPath, endpoint string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func chGet(ctx context.Context, socketPath, endpoint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sudo", "curl", "-s", "--unix-socket", socketPath, //nolint:gosec // trusted internal args
 		"http://localhost"+endpoint)
@@ -88,12 +88,12 @@ func chGet(socketPath, endpoint string) ([]byte, error) {
 // ---------- CH API calls ----------
 
 // chGetPing calls GET /api/v1/vmm.ping and returns PID.
-func chGetPing(vmID string) (*CHPing, error) {
+func chGetPing(ctx context.Context, vmID string) (*CHPing, error) {
 	sock := chSocketPath(vmID)
 	if sock == "" {
 		return nil, fmt.Errorf("no CH socket for VM %s", vmID)
 	}
-	data, err := chGet(sock, "/api/v1/vmm.ping")
+	data, err := chGet(ctx, sock, "/api/v1/vmm.ping")
 	if err != nil {
 		return nil, err
 	}
@@ -105,12 +105,12 @@ func chGetPing(vmID string) (*CHPing, error) {
 }
 
 // chGetCounters calls GET /api/v1/vm.counters for per-device I/O stats.
-func chGetCounters(vmID string) (CHCounters, error) {
+func chGetCounters(ctx context.Context, vmID string) (CHCounters, error) {
 	sock := chSocketPath(vmID)
 	if sock == "" {
 		return nil, fmt.Errorf("no CH socket for VM %s", vmID)
 	}
-	data, err := chGet(sock, "/api/v1/vm.counters")
+	data, err := chGet(ctx, sock, "/api/v1/vm.counters")
 	if err != nil {
 		return nil, err
 	}

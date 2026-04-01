@@ -219,7 +219,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Post-boot inject + probes.
 	go p.postBootInject(ctx, pod, vm)
-	go p.startProbes(context.Background(), pod, vm)
+	go p.startProbes(ctx, pod, vm)
 
 	klog.Infof("wakeVM %s: complete (ip=%s)", key, fresh.ip)
 	go p.notifyPodStatus(pod.Namespace, pod.Name)

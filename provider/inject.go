@@ -11,7 +11,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,7 +108,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 	if len(envs) == 0 {
 		return "", nil
 	}
-	sort.Strings(envs)
+	slices.Sort(envs)
 	content := strings.Join(envs, "\n") + "\n"
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 
