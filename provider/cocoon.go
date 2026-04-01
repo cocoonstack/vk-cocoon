@@ -487,7 +487,6 @@ func (p *CocoonProvider) reconcileLoop(ctx context.Context) {
 }
 
 func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
-
 	// Check for hibernate/wake annotation changes (VK framework doesn't
 	// call UpdatePod for annotation-only changes, so we poll here).
 	p.reconcileHibernateAnnotations(ctx)
