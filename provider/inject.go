@@ -16,7 +16,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 )
 
@@ -274,7 +273,3 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 	// #24: Resource enforcement via CH API
 	p.enforceResources(ctx, pod, vm)
 }
-
-// suppress unused linter
-var _ corev1listers.ConfigMapLister = nil
-var _ corev1listers.SecretLister = nil
