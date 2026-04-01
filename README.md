@@ -50,6 +50,37 @@ Kubernetes API
 | `cocoon.cis/fork-from` | Source VM name for live-fork |
 | `cocoon.cis/snapshot-policy` | `always`, `main-only`, or `never` |
 
+## Installation
+
+### Prerequisites
+
+- Go 1.25 or later
+- A running Kubernetes cluster with `kubectl` configured
+- [Cocoon](https://github.com/cocoonstack/cocoon) runtime installed on the target node
+- `sshpass` for SSH-based VM access
+- (Optional) An [Epoch](https://github.com/cocoonstack/epoch) registry for snapshot storage
+
+### From source
+
+```bash
+git clone https://github.com/cocoonstack/vk-cocoon.git
+cd vk-cocoon
+make build
+sudo mv vk-cocoon /usr/local/bin/
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig |
+| `VK_NODE_NAME` | `cocoon-pool` | Virtual node name in Kubernetes |
+| `VK_NODE_IP` | auto-detected | IP address of the host running vk-cocoon |
+| `COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary |
+| `COCOON_SSH_PASSWORD` | (none) | Default SSH password for VM access |
+| `EPOCH_REGISTRY_TOKEN` | (none) | Bearer token for Epoch registry auth |
+| `VK_TLS_CERT` / `VK_TLS_KEY` | self-signed | TLS cert/key for the kubelet API |
+
 ## Quick start
 
 ```bash
