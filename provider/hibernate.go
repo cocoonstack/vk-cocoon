@@ -169,21 +169,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	}
 
 	// Resource limits.
-	cpu := "2"
-	mem := "8G"
-	if c := pod.Spec.Containers; len(c) > 0 {
-		if q := c[0].Resources.Limits.Cpu(); q != nil && !q.IsZero() {
-			cpu = fmt.Sprintf("%d", q.Value())
-		}
-		if q := c[0].Resources.Limits.Memory(); q != nil && !q.IsZero() {
-			mb := q.Value() / (1024 * 1024)
-			if mb >= 1024 {
-				mem = fmt.Sprintf("%dG", mb/1024)
-			} else {
-				mem = fmt.Sprintf("%dM", mb)
-			}
-		}
-	}
+	cpu, mem := podResourceLimits(pod)
 	storage := ann(pod, AnnStorage, "100G")
 
 	// Clean up any stale VM with same name.

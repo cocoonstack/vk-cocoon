@@ -27,7 +27,7 @@ import (
 // Each init container's command is run inside the VM. If any fails,
 // the pod is marked as failed. Called before starting main containers.
 func (p *CocoonProvider) runInitContainers(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) error {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return nil
 	}
 	pw := p.sshPass(vm)
@@ -53,7 +53,7 @@ func (p *CocoonProvider) runInitContainers(ctx context.Context, pod *corev1.Pod,
 // Container[0] is the primary; additional containers are sidecar services.
 // Each service gets its own env file and command.
 func (p *CocoonProvider) installContainerServices(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.OS == "windows" || vm.IP == "" || len(pod.Spec.Containers) <= 1 {
+	if vm.skipSSH() || len(pod.Spec.Containers) <= 1 {
 		return // single container handled by deploy.sh / standard flow
 	}
 	pw := p.sshPass(vm)
@@ -110,7 +110,7 @@ WantedBy=multi-user.target
 // For VMs, the main mapping is runAsUser → create/switch Linux user.
 // Capabilities, seccomp, apparmor are N/A (VM provides kernel-level isolation).
 func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return
 	}
 	sc := pod.Spec.SecurityContext
@@ -180,7 +180,7 @@ func (p *CocoonProvider) injectDownwardAPIEnv(pod *corev1.Pod, vm *CocoonVM) map
 // getContainerRestartCount reads the systemd service restart count via SSH.
 // For VMs, "container restart" = systemd service restart.
 func (p *CocoonProvider) getContainerRestartCount(ctx context.Context, vm *CocoonVM, serviceName string) int32 {
-	if vm.OS == "windows" || vm.IP == "" || serviceName == "" {
+	if vm.skipSSH() || serviceName == "" {
 		return 0
 	}
 	pw := p.sshPass(vm)
@@ -248,7 +248,7 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 // injectSSHKey writes an SSH public key to the VM's authorized_keys.
 // If annotation cocoon.cis/ssh-pubkey is set, inject it.
 func (p *CocoonProvider) injectSSHKey(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return
 	}
 	pubkey := ann(pod, "cocoon.cis/ssh-pubkey", "")

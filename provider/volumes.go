@@ -29,7 +29,7 @@ const (
 // setupVolumes creates non-configMap/secret volumes in the VM.
 // Called from postBootInject after VM has SSH.
 func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return
 	}
 

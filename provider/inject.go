@@ -95,7 +95,7 @@ func waitForSSH(ctx context.Context, vm *CocoonVM, password string, timeout time
 // The VK framework has already resolved configMapKeyRef/secretKeyRef/fieldRef.
 // Returns a content hash for change detection.
 func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) (string, error) {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return "", nil
 	}
 	envs := []string{}
@@ -131,7 +131,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 // injectVolumes writes ConfigMap/Secret volume data as files in the VM.
 // Returns a content hash for change detection.
 func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) (string, error) {
-	if vm.OS == "windows" || vm.IP == "" {
+	if vm.skipSSH() {
 		return "", nil
 	}
 	if p.configMapLister == nil && p.secretLister == nil {

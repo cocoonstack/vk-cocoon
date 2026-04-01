@@ -48,7 +48,6 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -184,10 +183,6 @@ func NewCocoonProvider(cocoonBin, nodeIP string, kubeClient kubernetes.Interface
 	go p.reconcileLoop()
 
 	return p
-}
-
-func isWindowsOS(osType string) bool {
-	return strings.EqualFold(strings.TrimSpace(osType), "windows")
 }
 
 func buildRunArgs(vmName, cpu, mem, storage, nics, dns, rootPwd, image, osType string) []string {
@@ -546,32 +541,6 @@ func (p *CocoonProvider) reconcileOnce() {
 	}
 }
 
-func podKey(ns, name string) string { return ns + "/" + name }
-func ann(pod *corev1.Pod, key, def string) string {
-	if v, ok := pod.Annotations[key]; ok && v != "" {
-		return v
-	}
-	return def
-}
-
-// parseImageRef splits an image reference into (registryURL, snapshotName).
-// Supports:
-//
-//	"https://registry.example.com/ubuntu-dev-base" → ("https://registry.example.com", "ubuntu-dev-base")
-//	"http://127.0.0.1:4300/ubuntu-dev-base"        → ("http://127.0.0.1:4300", "ubuntu-dev-base")
-//	"ubuntu-dev-base"                              → ("", "ubuntu-dev-base")
-func parseImageRef(image string) (registryURL, snapshotName string) {
-	if strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://") {
-		// Find the last "/" that separates the registry URL from the snapshot name.
-		// URL path could be just /name or /path/name.
-		idx := strings.LastIndex(image, "/")
-		if idx > 8 { // after "https://"
-			return image[:idx], image[idx+1:]
-		}
-	}
-	return "", image
-}
-
 // getPuller returns an EpochPuller for the given registry URL, creating one on demand.
 func (p *CocoonProvider) getPuller(registryURL string) *EpochPuller {
 	if registryURL == "" {
@@ -739,21 +708,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	// Resource limits → cocoon flags
-	cpu := "2"
-	mem := "8G"
-	if c := pod.Spec.Containers; len(c) > 0 {
-		if q := c[0].Resources.Limits.Cpu(); q != nil && !q.IsZero() {
-			cpu = fmt.Sprintf("%d", q.Value())
-		}
-		if q := c[0].Resources.Limits.Memory(); q != nil && !q.IsZero() {
-			mb := q.Value() / (1024 * 1024)
-			if mb >= 1024 {
-				mem = fmt.Sprintf("%dG", mb/1024)
-			} else {
-				mem = fmt.Sprintf("%dM", mb)
-			}
-		}
-	}
+	cpu, mem := podResourceLimits(pod)
 
 	// Auto-pull snapshot from epoch registry if not available locally.
 	puller := p.getPuller(registryURL)
@@ -1851,49 +1806,3 @@ func (p *CocoonProvider) resolveIPFromLease(hostnameOrMAC string) string {
 	return ""
 }
 
-// shellQuoteJoin joins command args into a single shell-safe string.
-// For SSH, the remote command is passed as a single string to the remote shell.
-func shellQuoteJoin(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	// If the command is "sh -c <script>", pass the script directly
-	if len(args) >= 3 && args[0] == "sh" && args[1] == "-c" {
-		return strings.Join(args[2:], " ")
-	}
-	// For simple commands like "hostname", "uptime", "bash -l"
-	quoted := make([]string, len(args))
-	for i, a := range args {
-		if strings.ContainsAny(a, " \t'\"\\$(){}|&;<>!") {
-			quoted[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
-		} else {
-			quoted[i] = a
-		}
-	}
-	return strings.Join(quoted, " ")
-}
-
-// NotFound satisfies the errdefs interface.
-type notFoundError struct{ msg string }
-
-func (e *notFoundError) Error() string  { return e.msg }
-func (e *notFoundError) NotFound() bool { return true }
-
-// NodeCapacity returns the resource capacity for the virtual node.
-// Reads real CPU/MEM from host /proc (like kubelet cAdvisor).
-func NodeCapacity() corev1.ResourceList {
-	cpuCount := readHostCPUCount()
-	if cpuCount <= 0 {
-		cpuCount = 256 // fallback
-	}
-	memBytes := readHostMemoryBytes()
-	if memBytes == 0 {
-		memBytes = 1536 * 1024 * 1024 * 1024 // fallback 1536Gi
-	}
-	return corev1.ResourceList{
-		corev1.ResourceCPU:              *resource.NewQuantity(int64(cpuCount), resource.DecimalSI),
-		corev1.ResourceMemory:           *resource.NewQuantity(int64(memBytes), resource.BinarySI),
-		corev1.ResourceEphemeralStorage: *resource.NewQuantity(3500*1024*1024*1024, resource.BinarySI), // /data01
-		corev1.ResourcePods:             *resource.NewQuantity(241, resource.DecimalSI),
-	}
-}
