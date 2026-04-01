@@ -1,75 +1,95 @@
 # vk-cocoon
 
-`vk-cocoon` is a Virtual Kubelet provider for running Kubernetes pods as Cocoon-managed MicroVMs. It maps pod lifecycle events to VM operations such as run, clone, restore, snapshot, hibernate, and delete.
+Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs.
 
-This public bundle contains the provider and generic examples only. It intentionally excludes internal bootstrap scripts, agent templates, and private runtime payloads.
+## What it does
 
-## Scope
+`vk-cocoon` registers a virtual node in Kubernetes and translates pod lifecycle operations into VM operations. Each pod becomes a full MicroVM managed by the Cocoon runtime and Cloud Hypervisor.
 
-- pod-to-VM lifecycle mapping
-- snapshot-aware create and recovery
-- Windows and Linux guest support
-- `kubectl exec`, `logs`, `attach`, and `port-forward` bridges
-- integration with `epoch` for remote snapshot pulls
-- optional integration with `cocoon-operator`, `cocoon-webhook`, and `glance`
+Key capabilities:
 
-External dependencies:
-
-- `cocoon`
-- `cloud-hypervisor`
-- a Kubernetes cluster with Virtual Kubelet support
-
-Those dependencies are not bundled in this public export.
+- **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake.
+- **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation.
+- **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots.
+- **Full kubectl support** -- `exec`, `logs`, `attach`, and `port-forward` bridged through SSH.
+- **Liveness and readiness probes** -- exec, TCP, and HTTP probes run against the guest VM.
+- **ConfigMap and Secret injection** -- volumes and env vars written into the VM via SSH after boot.
+- **Windows guests** -- first-class support with RDP access on port 3389.
+- **Real metrics** -- CPU and memory stats from Cloud Hypervisor API and host `/proc`.
 
 ## Architecture
 
-```mermaid
-graph TB
-    API["Kubernetes API"]
-    VK["vk-cocoon"]
-    EPOCH["Epoch"]
-    COCOON["Cocoon runtime"]
-    VM["Guest VM"]
-
-    API -->|"CreatePod / UpdatePod / DeletePod"| VK
-    VK -->|"pull snapshot"| EPOCH
-    VK -->|"vm run / clone / rm / snapshot"| COCOON
-    COCOON --> VM
+```
+Kubernetes API
+      |
+      v
+  vk-cocoon  --->  Epoch (snapshot registry)
+      |
+      v
+  Cocoon runtime  --->  Cloud Hypervisor  --->  Guest VM
 ```
 
-## Pod Modes
+## Pod modes
 
-| Annotation | Meaning |
-|---|---|
-| `cocoon.cis/mode=clone` | clone from a local or remote snapshot |
-| `cocoon.cis/mode=run` | boot directly from an image |
-| `cocoon.cis/mode=adopt` | attach an already existing VM |
-| `cocoon.cis/mode=static` | represent an externally managed VM |
+| Mode | Annotation | Behavior |
+|---|---|---|
+| clone | `cocoon.cis/mode=clone` | Cold-clone from a local or remote snapshot (default) |
+| run | `cocoon.cis/mode=run` | Boot from a cloud image |
+| adopt | `cocoon.cis/mode=adopt` | Attach to an existing Cocoon VM |
+| static | `cocoon.cis/mode=static` | Track an externally managed VM by IP |
 
-Useful annotations:
+## Common annotations
 
 | Annotation | Purpose |
 |---|---|
-| `cocoon.cis/image` | snapshot name or image reference |
-| `cocoon.cis/os` | guest OS type, for example `linux` or `windows` |
-| `cocoon.cis/storage` | requested guest disk size |
-| `cocoon.cis/managed` | marks pods managed by Cocoon |
-| `cocoon.cis/vm-name` | stable VM name used for restart recovery |
-| `cocoon.cis/fork-from` | source VM for live-fork scenarios |
+| `cocoon.cis/image` | Snapshot name or Epoch URL |
+| `cocoon.cis/os` | Guest OS: `linux` (default) or `windows` |
+| `cocoon.cis/storage` | COW disk size, e.g. `100G` |
+| `cocoon.cis/hibernate` | Set to `true` to hibernate the VM |
+| `cocoon.cis/vm-name` | Stable VM name for restart recovery |
+| `cocoon.cis/fork-from` | Source VM name for live-fork |
+| `cocoon.cis/snapshot-policy` | `always`, `main-only`, or `never` |
+
+## Quick start
+
+```bash
+export KUBECONFIG=$HOME/.kube/config
+export VK_NODE_NAME=cocoon-pool
+export COCOON_BIN=/usr/local/bin/cocoon
+
+./vk-cocoon
+```
+
+See [DEPLOY.md](DEPLOY.md) for worker prerequisites and environment variables.
+
+## Build
+
+```bash
+make build    # produces ./vk-cocoon
+make test     # runs tests with race detection
+make lint     # runs golangci-lint
+```
 
 ## Examples
 
-- [manifests/test-ubuntu.yaml](./manifests/test-ubuntu.yaml)
-- [manifests/windows-vm.yaml](./manifests/windows-vm.yaml)
-- [manifests/test-cocoonset.yaml](./manifests/test-cocoonset.yaml)
+- [manifests/test-ubuntu.yaml](manifests/test-ubuntu.yaml) -- Linux VM pod
+- [manifests/windows-vm.yaml](manifests/windows-vm.yaml) -- Windows VM pod
+- [manifests/test-cocoonset.yaml](manifests/test-cocoonset.yaml) -- CocoonSet with fork
 
-## Related Components
+## Design
 
-- `epoch`: snapshot registry
-- `cocoon-operator`: `CocoonSet` and `Hibernation` controllers
-- `cocoon-webhook`: optional sticky scheduling webhook
-- `glance`: cluster dashboard for SSH, RDP, and VNC access
+See [DESIGN.md](DESIGN.md) for the provider's design rationale covering restart recovery, networking, hibernation, and Windows support.
+
+## Related projects
+
+| Project | Role |
+|---|---|
+| [cocoon](https://github.com/cocoonstack/cocoon) | MicroVM runtime |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
+| [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and Hibernation controllers |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Sticky scheduling webhook |
+| [glance](https://github.com/cocoonstack/glance) | Browser-based SSH, RDP, and VNC access |
 
 ## License
 
-MIT
+[MIT](LICENSE)
