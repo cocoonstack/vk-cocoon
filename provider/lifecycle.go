@@ -199,7 +199,9 @@ func (p *CocoonProvider) enforceResources(ctx context.Context, pod *corev1.Pod, 
 		return
 	}
 
-	// CPU resize
+	// CPU resize via CH API Unix socket.
+	// Uses sudo curl because the API socket is root-owned; a Go-native
+	// Unix socket client would require running the provider as root.
 	if cpuQ := limits.Cpu(); cpuQ != nil && !cpuQ.IsZero() { //nolint:nestif // CH API resize with validation
 		desiredCPU := int(cpuQ.Value())
 		if desiredCPU > 0 && desiredCPU != vm.cpu {

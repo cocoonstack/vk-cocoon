@@ -93,7 +93,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 	if vm.skipSSH() {
 		return "", nil
 	}
-	envs := []string{}
+	var envs []string
 	if len(pod.Spec.Containers) > 0 {
 		for _, e := range pod.Spec.Containers[0].Env {
 			if e.Value != "" {

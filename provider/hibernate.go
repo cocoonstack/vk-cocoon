@@ -86,7 +86,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 		imageRaw = pod.Spec.Containers[0].Image
 	}
 	registryURL, _ := parseImageRef(imageRaw)
-	puller := p.getPuller(registryURL)
+	puller := p.getPuller(ctx, registryURL)
 
 	// 1. Snapshot the running VM.
 	snapshotName := vm.vmName + "-suspend"
@@ -164,7 +164,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	}
 
 	// Pull from epoch.
-	puller := p.getPuller(registryURL)
+	puller := p.getPuller(ctx, registryURL)
 	if puller != nil {
 		if err := puller.EnsureSnapshot(ctx, cloneImage); err != nil {
 			logger.Warnf(ctx, "%s: epoch pull %s failed: %v", key, cloneImage, err)
@@ -198,7 +198,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 		time.Sleep(2 * time.Second)
 	}
 	if fresh == nil {
-		logger.Errorf(ctx, nil, "%s: VM not found after clone", key)
+		logger.Warnf(ctx, "%s: VM not found after clone", key)
 		return
 	}
 

@@ -8,6 +8,25 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+// NodeCapacity returns the resource capacity for the virtual node.
+// Reads real CPU/MEM from host /proc (like kubelet cAdvisor).
+func NodeCapacity() corev1.ResourceList {
+	cpuCount := readHostCPUCount()
+	if cpuCount <= 0 {
+		cpuCount = 256 // fallback
+	}
+	memBytes := readHostMemoryBytes()
+	if memBytes == 0 {
+		memBytes = 1536 * 1024 * 1024 * 1024 // fallback 1536Gi
+	}
+	return corev1.ResourceList{
+		corev1.ResourceCPU:              *resource.NewQuantity(int64(cpuCount), resource.DecimalSI),
+		corev1.ResourceMemory:           *resource.NewQuantity(int64(memBytes), resource.BinarySI), //nolint:gosec // memBytes fits in int64
+		corev1.ResourceEphemeralStorage: *resource.NewQuantity(3500*1024*1024*1024, resource.BinarySI),
+		corev1.ResourcePods:             *resource.NewQuantity(241, resource.DecimalSI),
+	}
+}
+
 // skipSSH returns true when the VM cannot be reached via SSH.
 // This is the case for Windows guests (which use RDP) or when
 // no IP has been assigned yet.
@@ -103,23 +122,4 @@ func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
 		}
 	}
 	return cpu, mem
-}
-
-// NodeCapacity returns the resource capacity for the virtual node.
-// Reads real CPU/MEM from host /proc (like kubelet cAdvisor).
-func NodeCapacity() corev1.ResourceList {
-	cpuCount := readHostCPUCount()
-	if cpuCount <= 0 {
-		cpuCount = 256 // fallback
-	}
-	memBytes := readHostMemoryBytes()
-	if memBytes == 0 {
-		memBytes = 1536 * 1024 * 1024 * 1024 // fallback 1536Gi
-	}
-	return corev1.ResourceList{
-		corev1.ResourceCPU:              *resource.NewQuantity(int64(cpuCount), resource.DecimalSI),
-		corev1.ResourceMemory:           *resource.NewQuantity(int64(memBytes), resource.BinarySI), //nolint:gosec // memBytes fits in int64
-		corev1.ResourceEphemeralStorage: *resource.NewQuantity(3500*1024*1024*1024, resource.BinarySI),
-		corev1.ResourcePods:             *resource.NewQuantity(241, resource.DecimalSI),
-	}
 }

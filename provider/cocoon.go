@@ -170,6 +170,7 @@ type CocoonProvider struct {
 
 var _ nodeutil.Provider = (*CocoonProvider)(nil)
 
+// NewCocoonProvider creates a CocoonProvider that maps Kubernetes pods to Cocoon MicroVMs.
 func NewCocoonProvider(ctx context.Context, cocoonBin, nodeIP string, kubeClient kubernetes.Interface, cfg nodeutil.ProviderConfig) *CocoonProvider {
 	p := &CocoonProvider{
 		cocoonBin:       cocoonBin,
@@ -318,9 +319,6 @@ func applyVMPodAnnotations(pod *corev1.Pod, vm *CocoonVM) map[string]string {
 func (p *CocoonProvider) patchPodAnnotations(ctx context.Context, ns, name string, annotations map[string]string) {
 	if p.kubeClient == nil || len(annotations) == 0 {
 		return
-	}
-	if ctx == nil {
-		ctx = context.Background() // defensive nil guard
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -566,7 +564,7 @@ func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 }
 
 // getPuller returns an EpochPuller for the given registry URL, creating one on demand.
-func (p *CocoonProvider) getPuller(registryURL string) *EpochPuller {
+func (p *CocoonProvider) getPuller(ctx context.Context, registryURL string) *EpochPuller {
 	if registryURL == "" {
 		return nil
 	}
@@ -581,7 +579,7 @@ func (p *CocoonProvider) getPuller(registryURL string) *EpochPuller {
 	}
 	ep := NewEpochPuller(registryURL, rootDir, p.cocoonBin)
 	p.pullers[registryURL] = ep
-	log.WithFunc("provider.getPuller").Infof(context.Background(), "epoch puller created for %s (root=%s)", registryURL, rootDir)
+	log.WithFunc("provider.getPuller").Infof(ctx, "epoch puller created for %s (root=%s)", registryURL, rootDir)
 	return ep
 }
 
@@ -736,7 +734,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	cpu, mem := podResourceLimits(pod)
 
 	// Auto-pull snapshot from epoch registry if not available locally.
-	puller := p.getPuller(registryURL)
+	puller := p.getPuller(ctx, registryURL)
 	effectiveMode := mode
 	effectiveCloneImage := cloneImage
 	if puller != nil { //nolint:nestif // epoch pull logic with mode-specific handling
@@ -929,7 +927,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 				imageRaw = pod.Spec.Containers[0].Image
 			}
 			delRegistryURL, _ := parseImageRef(imageRaw)
-			puller := p.getPuller(delRegistryURL)
+			puller := p.getPuller(ctx, delRegistryURL)
 
 			snapshotName := vm.vmName + "-suspend"
 			logger.Infof(ctx, "%s: creating snapshot %s from running VM %s", key, snapshotName, vm.vmID)
@@ -1240,7 +1238,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, ns, podName, cont
 
 	// Windows VMs don't have SSH/journalctl — suggest RDP + Event Viewer
 	if vm.os == osWindows {
-		msg := fmt.Sprintf("Windows VM %s (IP: %s) — use RDP (port 3389) for access.\n"+
+		msg := fmt.Sprintf("Windows VM %s (IP: %s) - use RDP (port 3389) for access.\n"+
 			"  kubectl port-forward %s 3389:3389 -n %s\n"+
 			"  Then connect with Remote Desktop to localhost:3389\n", vm.vmName, vm.ip, podName, ns)
 		return io.NopCloser(strings.NewReader(msg)), nil
@@ -1790,12 +1788,14 @@ func resolveIPFromLeaseByMAC(mac string) string {
 
 // waitForDHCPIP polls dnsmasq leases until a DHCP IP (10.88.100.x) appears for the VM.
 // Only accepts leases newer than the VM creation time to avoid stale entries.
+// Uses context.Background because the polling must complete even if the parent
+// ctx is cancelled (e.g. during graceful shutdown).
 func (p *CocoonProvider) waitForDHCPIP(_ context.Context, vm *CocoonVM, timeout time.Duration) string {
 	deadline := time.Now().Add(timeout)
 	mac := vm.mac
 	notBefore := time.Now().Add(-60 * time.Second) // lease must be recent
 	logger := log.WithFunc("provider.waitForDHCPIP")
-	ctx := context.Background() // polling goroutine must outlive parent ctx
+	ctx := context.Background()
 	logger.Infof(ctx, "VM %s mac=%s, polling leases (timeout %s)", vm.vmName, mac, timeout)
 	for time.Now().Before(deadline) {
 		if mac != "" {

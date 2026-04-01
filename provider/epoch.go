@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -316,7 +317,8 @@ func (p *EpochPuller) curlRead(ctx context.Context, url string) ([]byte, error) 
 	if err == nil {
 		return out, nil
 	}
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		return nil, fmt.Errorf("curl GET %s: %s", url, strings.TrimSpace(string(ee.Stderr)))
 	}
 	return nil, fmt.Errorf("curl GET %s: %w", url, err)
@@ -860,7 +862,7 @@ func (p *EpochPuller) cloudImageExists(ctx context.Context, name string) bool {
 }
 
 func (p *EpochPuller) cocoonExec(ctx context.Context, args ...string) (string, error) {
-	sudoArgs := []string{}
+	var sudoArgs []string
 	root := strings.TrimSpace(os.Getenv("COCOON_ROOT_DIR"))
 	if root == "" {
 		root = strings.TrimSpace(p.rootDir)
