@@ -44,7 +44,7 @@ func TestBuildRunArgsWindows(t *testing.T) {
 }
 
 func TestBuildCloneArgs(t *testing.T) {
-	got := buildCloneArgs("vm-clone", "snapshot-ref")
+	got := buildCloneArgs("vm-clone", "", "snapshot-ref")
 	want := []string{
 		"vm", "clone",
 		"--name", "vm-clone",

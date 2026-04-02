@@ -79,7 +79,7 @@ func chGet(ctx context.Context, socketPath, endpoint string) ([]byte, error) {
 		"http://localhost"+endpoint)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("CH API %s: %w", endpoint, err)
+		return nil, fmt.Errorf("ch api %s: %w", endpoint, err)
 	}
 	return out, nil
 }
@@ -228,5 +228,5 @@ func readProcMemoryRSS(pid int) (uint64, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("VmRSS not found for pid %d", pid)
+	return 0, fmt.Errorf("vmrss not found for pid %d", pid)
 }

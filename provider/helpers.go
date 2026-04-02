@@ -117,7 +117,7 @@ func formatResourceCPU(q *resource.Quantity) string {
 // podResourceLimits extracts CPU and memory limits from a pod spec,
 // returning cocoon CLI-friendly strings with sensible defaults.
 func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
-	cpu = "2"
+	cpu = defaultCPUForOS(ann(pod, AnnOS, defaultOSType))
 	mem = defaultMemoryForOS(ann(pod, AnnOS, defaultOSType))
 	if c := pod.Spec.Containers; len(c) > 0 {
 		if s := formatResourceCPU(c[0].Resources.Limits.Cpu()); s != "" {
@@ -128,6 +128,13 @@ func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
 		}
 	}
 	return cpu, mem
+}
+
+func defaultCPUForOS(osType string) string {
+	if osType == osWindows {
+		return "4"
+	}
+	return "2"
 }
 
 func defaultMemoryForOS(osType string) string {

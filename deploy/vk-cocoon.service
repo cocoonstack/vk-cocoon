@@ -15,6 +15,7 @@ Environment=VK_TLS_CERT=/etc/cocoon/vk/tls/vk-kubelet.crt
 Environment=VK_TLS_KEY=/etc/cocoon/vk/tls/vk-kubelet.key
 EnvironmentFile=-/etc/cocoon/vk-cocoon.env
 ExecStart=/usr/local/bin/vk-cocoon
+KillMode=process
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536

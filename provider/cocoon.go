@@ -61,6 +61,7 @@ const (
 	AnnIP           = meta.AnnotationIP
 	AnnMAC          = "cocoon.cis/mac"
 	AnnSnapshotFrom = "cocoon.cis/snapshot-from"
+	AnnNetwork      = "cocoon.cis/network"     // CNI conflist name (empty = cocoon default)
 	AnnHibernate    = meta.AnnotationHibernate // "true" → hibernate VM (pod stays)
 
 	// CocoonSet controller annotations
@@ -211,10 +212,14 @@ type runConfig struct {
 	rootPwd string
 	image   string
 	osType  string
+	network string
 }
 
 func buildRunArgs(rc runConfig) []string {
 	args := []string{"run", "--name", rc.vmName, "--cpus", rc.cpu, "--memory", rc.mem, "--disk", rc.storage}
+	if rc.network != "" {
+		args = append(args, "--network", rc.network)
+	}
 	return append(args, rc.image)
 }
 
@@ -222,6 +227,9 @@ func buildLegacyRunArgs(rc runConfig) []string {
 	args := []string{"vm", "run", "--name", rc.vmName, "--cpu", rc.cpu, "--memory", rc.mem, "--storage", rc.storage}
 	if rc.nics != "" {
 		args = append(args, "--nics", rc.nics)
+	}
+	if rc.network != "" {
+		args = append(args, "--network", rc.network)
 	}
 	if rc.dns != "" {
 		args = append(args, "--dns", rc.dns)
@@ -235,6 +243,10 @@ func buildLegacyRunArgs(rc runConfig) []string {
 	return append(args, rc.image)
 }
 
-func buildCloneArgs(vmName, snapshot string) []string {
-	return []string{"vm", "clone", "--name", vmName, snapshot}
+func buildCloneArgs(vmName, network, snapshot string) []string {
+	args := []string{"vm", "clone", "--name", vmName}
+	if network != "" {
+		args = append(args, "--network", network)
+	}
+	return append(args, snapshot)
 }

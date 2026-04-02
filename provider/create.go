@@ -22,6 +22,7 @@ type createRequest struct {
 	dns        string
 	rootPwd    string
 	osType     string
+	network    string
 	loggerFunc string
 }
 
@@ -39,6 +40,7 @@ type createPlan struct {
 	dns           string
 	rootPwd       string
 	osType        string
+	network       string
 }
 
 func newCreateRequest(pod *corev1.Pod) createRequest {
@@ -56,6 +58,7 @@ func newCreateRequest(pod *corev1.Pod) createRequest {
 		dns:        spec.dns,
 		rootPwd:    spec.rootPwd,
 		osType:     spec.osType,
+		network:    spec.network,
 		loggerFunc: "provider.CreatePod",
 	}
 }
@@ -73,9 +76,10 @@ func (p createPlan) cocoonArgs() []string {
 			rootPwd: p.rootPwd,
 			image:   p.runImage,
 			osType:  p.osType,
+			network: p.network,
 		})
 	default:
-		return buildCloneArgs(p.vmName, p.cloneImage)
+		return buildCloneArgs(p.vmName, p.network, p.cloneImage)
 	}
 }
 
@@ -200,6 +204,7 @@ func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest,
 		dns:           req.dns,
 		rootPwd:       req.rootPwd,
 		osType:        req.osType,
+		network:       req.network,
 	}
 	c.applyEpochCreateSource(ctx, req, &plan)
 	return plan
@@ -297,7 +302,7 @@ func (c *CocoonProvider) runCreatePlan(ctx context.Context, req createRequest, p
 
 func (c *CocoonProvider) runPlanCommand(ctx context.Context, plan createPlan) (string, error) {
 	if plan.effectiveMode == modeClone {
-		out, err := c.cocoonExec(ctx, buildCloneArgs(plan.vmName, plan.cloneImage)...)
+		out, err := c.cocoonExec(ctx, buildCloneArgs(plan.vmName, plan.network, plan.cloneImage)...)
 		if err == nil {
 			return out, nil
 		}
@@ -313,6 +318,7 @@ func (c *CocoonProvider) runPlanCommand(ctx context.Context, plan createPlan) (s
 			storage: plan.storage,
 			image:   resolved,
 			osType:  plan.osType,
+			network: plan.network,
 		})...)
 	}
 
@@ -330,6 +336,7 @@ func (c *CocoonProvider) runPlanCommand(ctx context.Context, plan createPlan) (s
 		rootPwd: plan.rootPwd,
 		image:   plan.runImage,
 		osType:  plan.osType,
+		network: plan.network,
 	})...)
 }
 

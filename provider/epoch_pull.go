@@ -113,7 +113,7 @@ func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manif
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET manifest %s:%s: %d %s", name, tag, resp.StatusCode, readLimitedBody(resp.Body))
+		return nil, fmt.Errorf("get manifest %s:%s: %d %s", name, tag, resp.StatusCode, readLimitedBody(resp.Body))
 	}
 
 	return decodeJSON[manifest.Manifest](resp.Body)
@@ -137,7 +137,7 @@ func (p *EpochPuller) downloadBlob(ctx context.Context, name, digest, destPath s
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+		return fmt.Errorf("get blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
 	}
 
 	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config

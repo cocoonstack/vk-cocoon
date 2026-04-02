@@ -195,7 +195,7 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET source image %s: %d %s", imageURL, resp.StatusCode, readLimitedBody(resp.Body))
+		return fmt.Errorf("get source image %s: %d %s", imageURL, resp.StatusCode, readLimitedBody(resp.Body))
 	}
 
 	tmpPath := destPath + ".tmp"

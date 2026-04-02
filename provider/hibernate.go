@@ -144,7 +144,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	}
 
 	// Clone VM from snapshot.
-	out, err := p.cocoonExec(ctx, buildCloneArgs(vm.vmName, cloneImage)...)
+	out, err := p.cocoonExec(ctx, buildCloneArgs(vm.vmName, spec.network, cloneImage)...)
 	if err != nil {
 		resolved := resolveCloneBootImage(cloneImage)
 		if resolved == cloneImage {
@@ -159,6 +159,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 			storage: storage,
 			image:   resolved,
 			osType:  spec.osType,
+			network: spec.network,
 		})...)
 		if err != nil {
 			logger.Errorf(ctx, err, "%s: clone fallback failed: %s", key, out)

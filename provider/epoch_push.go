@@ -164,12 +164,12 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 
 	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
-		return "", 0, fmt.Errorf("PUT blob: %w", err)
+		return "", 0, fmt.Errorf("put blob: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return "", 0, fmt.Errorf("PUT blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+		return "", 0, fmt.Errorf("put blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
 	}
 
 	return digest, size, nil
@@ -192,12 +192,12 @@ func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *man
 
 	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
-		return fmt.Errorf("PUT manifest: %w", err)
+		return fmt.Errorf("put manifest: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("PUT manifest %s:%s: %d %s", name, tag, resp.StatusCode, readLimitedBody(resp.Body))
+		return fmt.Errorf("put manifest %s:%s: %d %s", name, tag, resp.StatusCode, readLimitedBody(resp.Body))
 	}
 	return nil
 }

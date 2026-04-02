@@ -302,7 +302,7 @@ func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeou
 	logger.Infof(ctx, "VM %s mac=%s, polling leases (timeout %s)", vm.vmName, vm.mac, timeout)
 	for time.Now().Before(deadline) {
 		if vm.mac != "" {
-			if ip := resolveLeaseByMAC(vm.mac, notBefore); ip != "" && strings.HasPrefix(ip, "10.88.100.") {
+			if ip := resolveLeaseByMAC(vm.mac, notBefore); ip != "" {
 				logger.Infof(ctx, "VM %s got DHCP IP %s (by MAC)", vm.vmName, ip)
 				return ip
 			}

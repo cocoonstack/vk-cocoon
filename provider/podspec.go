@@ -23,6 +23,7 @@ type podSpecResolution struct {
 	dns         string
 	rootPwd     string
 	osType      string
+	network     string
 }
 
 func resolvePodSpec(pod *corev1.Pod) podSpecResolution {
@@ -45,6 +46,7 @@ func resolvePodSpec(pod *corev1.Pod) podSpecResolution {
 		dns:         ann(pod, AnnDNS, ""),
 		rootPwd:     ann(pod, AnnRootPassword, ""),
 		osType:      osType,
+		network:     ann(pod, AnnNetwork, ""),
 	}
 }
 

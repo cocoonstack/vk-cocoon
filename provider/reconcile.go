@@ -16,7 +16,7 @@ type managedVMSnapshot struct {
 
 // reconcileLoop periodically checks all managed VMs and refreshes any that still exist.
 func (p *CocoonProvider) reconcileLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -70,8 +70,9 @@ func (p *CocoonProvider) reconciledVMState(ctx context.Context, snap managedVMSn
 
 	fresh := p.lookupRecoverableVM(ctx, snap.vmID, snap.name)
 	if fresh == nil {
-		log.WithFunc("provider.reconcileOnce").Warnf(ctx, "VM %s (%s) not found by cocoon", snap.name, snap.vmID)
-		return nil, false
+		log.WithFunc("provider.reconcileOnce").Warnf(ctx, "VM %s (%s) not found by cocoon, marking stopped", snap.name, snap.vmID)
+		updated.state = stateStopped
+		return &updated, true
 	}
 
 	if snap.vmID == "" && fresh.vmID != "" {
