@@ -93,6 +93,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 
 	// 3. Destroy VM.
 	p.removeVM(ctx, vm.vmID)
+	p.podMap.Delete(key)
 
 	// 4. Mark as hibernated (pod stays, VM gone).
 	p.mu.Lock()
@@ -210,6 +211,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	go p.postBootInject(ctx, pod, vm)
 	go p.startProbes(ctx, pod, vm)
 
+	p.podMap.Store(key, fresh.vmID, fresh.vmName, fresh.image)
 	logger.Infof(ctx, "%s: complete (ip=%s)", key, fresh.ip)
 	go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 }

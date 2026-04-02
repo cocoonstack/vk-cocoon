@@ -162,6 +162,12 @@ type CocoonProvider struct {
 	// Content hashes for change detection (env + volumes).
 	injectHashes map[string]string // podKey+"/env" or podKey+"/vol" -> sha256
 
+	// VM state cache fed by cocoon vm status --event stream.
+	vmState *vmCache
+
+	// Persistent pod → VM mapping for crash recovery.
+	podMap *podMap
+
 	// Probe state per pod.
 	probeStates map[string]*probeResult
 
@@ -195,7 +201,12 @@ func NewCocoonProvider(ctx context.Context, cocoonBin, nodeIP string, kubeClient
 
 	log.WithFunc("provider.NewCocoonProvider").Infof(ctx, "initialized (bin=%s, nodeIP=%s)", cocoonBin, nodeIP)
 
-	// Start reconciliation loop (like kubelet's syncPod).
+	p.podMap = newPodMap()
+
+	// Start VM event stream watcher (inotify-backed, ~200ms latency).
+	p.startVMWatcher(ctx)
+
+	// Start reconciliation loop as fallback (10s ticker).
 	go p.reconcileLoop(ctx)
 
 	return p

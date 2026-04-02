@@ -94,10 +94,15 @@ func (p *CocoonProvider) inspectVM(ctx context.Context, ref string) *CocoonVM {
 	return inspectToVM(inspect)
 }
 
-// discoverVM finds a VM by name using `cocoon inspect` and `cocoon list`.
+// discoverVM finds a VM by name, checking the event stream cache first.
 func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM {
 	if p.discoverVMFn != nil {
 		return p.discoverVMFn(ctx, name)
+	}
+	if p.vmState != nil {
+		if cv := p.vmState.findByName(name); cv != nil {
+			return cv.toCocoonVM()
+		}
 	}
 	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
 		var vms []cocoonVMJSON
@@ -128,10 +133,15 @@ func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM 
 	return nil
 }
 
-// discoverVMByID finds a VM by ID, preferring JSON output when available.
+// discoverVMByID finds a VM by ID, checking the event stream cache first.
 func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *CocoonVM {
 	if p.discoverVMByIDFn != nil {
 		return p.discoverVMByIDFn(ctx, vmID)
+	}
+	if p.vmState != nil {
+		if cv := p.vmState.findByID(vmID); cv != nil {
+			return cv.toCocoonVM()
+		}
 	}
 	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
 		var vms []cocoonVMJSON

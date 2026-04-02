@@ -114,6 +114,14 @@ func (c *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	vmName := c.reserveManagedVMName(ctx, req)
+
+	// Before removing a same-name VM, check if it's running and adoptable.
+	// This handles vk-cocoon restart: pods are re-sent by VK without vm-id
+	// annotation, but the VM is still running from before the restart.
+	if vm := c.adoptRunningVM(ctx, req, vmName); vm != nil {
+		return nil
+	}
+
 	plan := c.buildCreatePlan(ctx, req, vmName)
 	c.removeStaleVM(ctx, req.key, vmName)
 
@@ -245,6 +253,52 @@ func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createReque
 	}
 
 	return cloneImage, registryURL
+}
+
+// adoptRunningVM checks the persistent podMap for a previously tracked VM
+// and adopts it if still running. This handles vk-cocoon restart where the
+// VK framework re-sends CreatePod without vm-id annotation.
+func (c *CocoonProvider) adoptRunningVM(ctx context.Context, req createRequest, vmName string) *CocoonVM {
+	entry, ok := c.podMap.Lookup(req.key)
+	if !ok {
+		return nil
+	}
+	existing := c.lookupRecoverableVM(ctx, entry.VMID, entry.VMName)
+	if existing == nil || !shouldReuseExistingVMState(existing.state) {
+		c.podMap.Delete(req.key)
+		return nil
+	}
+	logger := log.WithFunc(req.loggerFunc)
+	logger.Infof(ctx, "%s: adopting persisted VM %s (%s) ip=%s", req.key, existing.vmName, existing.vmID, existing.ip)
+
+	if existing.ip == "" && existing.mac != "" {
+		if dhcpIP := resolveIPFromLeaseByMAC(existing.mac); dhcpIP != "" {
+			existing.ip = dhcpIP
+		}
+	}
+	if existing.ip == "" {
+		existing.ip = c.resolveIPFromLease(vmName)
+	}
+	existing.podNamespace = req.pod.Namespace
+	existing.podName = req.pod.Name
+	existing.os = req.osType
+	existing.managed = true
+	if existing.image == "" {
+		existing.image = req.image
+	}
+	now := time.Now()
+	if existing.createdAt.IsZero() {
+		existing.createdAt = now
+	}
+	if existing.startedAt.IsZero() {
+		existing.startedAt = now
+	}
+
+	c.storePodVM(ctx, req.key, req.pod, existing)
+	c.podMap.Store(req.key, existing.vmID, existing.vmName, existing.image)
+	go c.startProbes(ctx, req.pod, existing)
+	go c.notifyPodStatus(ctx, req.pod.Namespace, req.pod.Name)
+	return existing
 }
 
 func (c *CocoonProvider) removeStaleVM(ctx context.Context, key, vmName string) {
@@ -379,6 +433,7 @@ func (c *CocoonProvider) finishCreate(ctx context.Context, req createRequest, pl
 	vm.ip = c.waitForDHCPIP(ctx, vm, 120*time.Second)
 
 	c.storePodVM(ctx, req.key, req.pod, vm, podAnnotation{key: AnnSnapshotFrom, value: plan.snapshotFrom()})
+	c.podMap.Store(req.key, vm.vmID, vm.vmName, vm.image)
 	go c.postBootInject(ctx, req.pod, vm)
 	go c.startProbes(ctx, req.pod, vm)
 	go c.notifyPodStatus(ctx, req.pod.Namespace, req.pod.Name)

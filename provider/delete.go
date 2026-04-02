@@ -115,6 +115,7 @@ func (p *CocoonProvider) destroyVM(ctx context.Context, key, vmName, vmID string
 func (p *CocoonProvider) cleanupDeletedPod(key, podName string) {
 	p.stopProbes(key)
 	removePodDNS(podName)
+	p.podMap.Delete(key)
 	p.mu.Lock()
 	delete(p.pods, key)
 	delete(p.vms, key)

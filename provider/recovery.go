@@ -153,6 +153,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 		}
 
 		p.storePodVM(ctx, key, pod, vm)
+		p.podMap.Store(key, vm.vmID, vm.vmName, vm.image)
 		log.WithFunc("provider.recoverManagedPod").Infof(ctx, "CreatePod %s: recovered existing VM %s (%s) state=%s ip=%s", key, vm.vmName, vm.vmID, vm.state, vm.ip)
 		go p.startProbes(ctx, pod, vm)
 		go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
