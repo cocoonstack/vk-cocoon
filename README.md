@@ -75,7 +75,7 @@ sudo mv vk-cocoon /usr/local/bin/
 
 | Variable | Default | Description |
 |---|---|---|
-| `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig |
+| `KUBECONFIG` | `/etc/cocoon/kubeconfig` when present, otherwise standard fallback | Path to kubeconfig |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name in Kubernetes |
 | `VK_NODE_IP` | auto-detected | IP address of the host running vk-cocoon |
 | `VK_LOG_LEVEL` | `info` | Log level for the provider process |
@@ -87,14 +87,34 @@ sudo mv vk-cocoon /usr/local/bin/
 ## Quick Start
 
 ```bash
-export KUBECONFIG=$HOME/.kube/config
+sudo install -d -m 0755 /etc/cocoon
+sudo cp /path/to/kubeconfig /etc/cocoon/kubeconfig
+
+export KUBECONFIG=/etc/cocoon/kubeconfig
 export VK_NODE_NAME=cocoon-pool
 export COCOON_BIN=/usr/local/bin/cocoon
 
 ./vk-cocoon
 ```
 
-See [DEPLOY.md](DEPLOY.md) for worker prerequisites and environment variables.
+### Run with systemd
+
+```bash
+sudo install -D -m 0644 deploy/vk-cocoon.service /etc/systemd/system/vk-cocoon.service
+sudo install -d -m 0755 /etc/cocoon
+sudo cp /path/to/kubeconfig /etc/cocoon/kubeconfig
+sudo systemctl daemon-reload
+sudo systemctl enable --now vk-cocoon
+```
+
+Optional overrides can go in `/etc/cocoon/vk-cocoon.env`, for example:
+
+```bash
+VK_NODE_NAME=cocoon-pool
+VK_NODE_IP=192.0.2.10
+COCOON_BIN=/usr/local/bin/cocoon
+VK_LOG_LEVEL=info
+```
 
 ## Usage
 

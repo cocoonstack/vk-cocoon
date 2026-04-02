@@ -25,7 +25,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
@@ -49,7 +48,7 @@ func main() {
 		nodeIP = detectNodeIP()
 	}
 
-	config, err := commonk8s.LoadConfig()
+	config, err := loadKubeConfig(ctx)
 	if err != nil {
 		logger.Fatalf(ctx, err, "load kubeconfig: %v", err)
 	}
