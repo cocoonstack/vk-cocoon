@@ -202,6 +202,12 @@ func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest,
 		osType:        req.osType,
 	}
 	c.applyEpochCreateSource(ctx, req, &plan)
+	if plan.effectiveMode == modeClone {
+		if resolved := resolveCloneBootImage(plan.cloneImage); resolved != plan.cloneImage {
+			log.WithFunc(req.loggerFunc).Infof(ctx, "%s: resolved clone source %s -> %s", req.key, plan.cloneImage, resolved)
+			plan.cloneImage = resolved
+		}
+	}
 	return plan
 }
 
@@ -245,7 +251,7 @@ func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createReque
 func (c *CocoonProvider) removeStaleVM(ctx context.Context, key, vmName string) {
 	if existing := c.discoverVM(ctx, vmName); existing != nil && existing.vmID != "" {
 		log.WithFunc("provider.CreatePod").Infof(ctx, "%s: stale VM %s exists (%s), removing", key, vmName, existing.state)
-		_, _ = c.cocoonExec(ctx, "vm", "rm", "--force", existing.vmID)
+		c.removeVM(ctx, existing.vmID)
 	}
 }
 
@@ -288,7 +294,7 @@ func (c *CocoonProvider) runCreatePlan(ctx context.Context, req createRequest, p
 	}
 
 	log.WithFunc(req.loggerFunc).Infof(ctx, "%s: cocoon %s OK (requested=%s image=%s)", req.key, plan.effectiveMode, req.mode, plan.logImage())
-	vm := c.discoverCreatedVM(ctx, plan.vmName)
+	vm := c.discoverCreatedVM(ctx, plan.vmName, parseVMID(out))
 	if vm == nil {
 		vm = &CocoonVM{vmName: plan.vmName, state: stateRunning, cpu: 2, memoryMB: 8192}
 	}
@@ -301,8 +307,13 @@ func (c *CocoonProvider) releaseReservedVM(key string) {
 	c.mu.Unlock()
 }
 
-func (c *CocoonProvider) discoverCreatedVM(ctx context.Context, vmName string) *CocoonVM {
+func (c *CocoonProvider) discoverCreatedVM(ctx context.Context, vmName, vmID string) *CocoonVM {
 	for range 5 {
+		if vmID != "" {
+			if vm := c.discoverVMByID(ctx, vmID); vm != nil {
+				return vm
+			}
+		}
 		vm := c.discoverVM(ctx, vmName)
 		if vm != nil && vm.vmID != "" {
 			return vm

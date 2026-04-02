@@ -5,7 +5,8 @@
 //
 //	CreatePod  → derive stable VM name (with slot for Deployments)
 //	           → check ConfigMap for suspended snapshot → pull from epoch
-//	           → cocoon vm clone --cold → VM running
+//	           → resolve snapshot to local bootable disk
+//	           → cocoon run → VM running
 //	DeletePod  → detect scale-down vs restart:
 //	           → restart/kill: snapshot save → push epoch → record → destroy VM
 //	           → scale-down:   clear snapshot record → destroy VM (no snapshot)
@@ -93,31 +94,22 @@ type CocoonVM struct {
 	startedAt    time.Time
 }
 
-// cocoonVMJSON matches `cocoon vm list --format json` output.
-type cocoonVMJSON struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	State   string `json:"state"`
-	CPU     int    `json:"cpu"`
-	Memory  int64  `json:"memory"`  // bytes
-	Storage int64  `json:"storage"` // bytes
-	IP      string `json:"ip"`
-	Image   string `json:"image"`
-	Created string `json:"created"`
-	Config  struct {
-		Name    string `json:"name"`
-		CPU     int    `json:"cpu"`
-		Memory  int64  `json:"memory"`
-		Storage int64  `json:"storage"`
-		Image   string `json:"image"`
-		NICs    int    `json:"nics"`
-	} `json:"config"`
-	NetworkConfigs []struct {
-		MAC     string `json:"mac"`
-		Network struct {
-			IP string `json:"ip"`
-		} `json:"network"`
-	} `json:"network_configs"`
+// cocoonInspectJSON matches `cocoon inspect` and `cocoon list --format json`.
+type cocoonInspectJSON struct {
+	VMID  string `json:"vm_id"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+	Image struct {
+		Ref string `json:"ref"`
+	} `json:"image"`
+	BootConfig struct {
+		CPUs     int   `json:"cpus"`
+		MemoryMB int64 `json:"memory_mb"`
+	} `json:"boot_config"`
+	Timestamps struct {
+		CreatedAt string `json:"created_at"`
+		StartedAt string `json:"started_at"`
+	} `json:"timestamps"`
 }
 
 // CocoonProvider implements nodeutil.Provider and node.PodNotifier.
@@ -196,20 +188,16 @@ type runConfig struct {
 }
 
 func buildRunArgs(rc runConfig) []string {
-	args := []string{"vm", "run", "--name", rc.vmName, "--cpu", rc.cpu, "--memory", rc.mem, "--storage", rc.storage, "--nics", rc.nics}
-	if isWindowsOS(rc.osType) {
-		args = append(args, "--windows")
-	}
-	if rc.dns != "" {
-		args = append(args, "--dns", rc.dns)
-	}
-	// Windows guests do not consume Cocoon's cloud-init root password path.
-	if rc.rootPwd != "" && !isWindowsOS(rc.osType) {
-		args = append(args, "--default-root-password", rc.rootPwd)
-	}
+	args := []string{"run", "--name", rc.vmName, "--cpus", rc.cpu, "--memory", rc.mem, "--disk", rc.storage}
 	return append(args, rc.image)
 }
 
 func buildCloneArgs(vmName, cpu, mem, storage, snapshot string) []string {
-	return []string{"vm", "clone", "--cold", "--name", vmName, "--cpu", cpu, "--memory", mem, "--storage", storage, snapshot}
+	return buildRunArgs(runConfig{
+		vmName:  vmName,
+		cpu:     cpu,
+		mem:     mem,
+		storage: storage,
+		image:   snapshot,
+	})
 }

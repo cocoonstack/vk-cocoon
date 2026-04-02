@@ -12,14 +12,11 @@ func TestBuildRunArgsLinux(t *testing.T) {
 		image: "ubuntu.img", osType: "linux",
 	})
 	want := []string{
-		"vm", "run",
+		"run",
 		"--name", "vm-linux",
-		"--cpu", "2",
+		"--cpus", "2",
 		"--memory", "8G",
-		"--storage", "100G",
-		"--nics", "1",
-		"--dns", "8.8.8.8,1.1.1.1",
-		"--default-root-password", "rootpass",
+		"--disk", "100G",
 		"ubuntu.img",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -34,14 +31,11 @@ func TestBuildRunArgsWindows(t *testing.T) {
 		image: "win1125h2", osType: "windows",
 	})
 	want := []string{
-		"vm", "run",
+		"run",
 		"--name", "vm-win",
-		"--cpu", "4",
+		"--cpus", "4",
 		"--memory", "8G",
-		"--storage", "100G",
-		"--nics", "1",
-		"--windows",
-		"--dns", "10.8.8.8,10.8.8.9",
+		"--disk", "100G",
 		"win1125h2",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -52,11 +46,11 @@ func TestBuildRunArgsWindows(t *testing.T) {
 func TestBuildCloneArgs(t *testing.T) {
 	got := buildCloneArgs("vm-clone", "2", "8G", "40G", "snapshot-ref")
 	want := []string{
-		"vm", "clone", "--cold",
+		"run",
 		"--name", "vm-clone",
-		"--cpu", "2",
+		"--cpus", "2",
 		"--memory", "8G",
-		"--storage", "40G",
+		"--disk", "40G",
 		"snapshot-ref",
 	}
 	if !reflect.DeepEqual(got, want) {

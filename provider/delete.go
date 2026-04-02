@@ -104,12 +104,12 @@ func (p *CocoonProvider) deleteFallbackVM(ctx context.Context, req deleteRequest
 	}
 
 	logger.Infof(ctx, "%s: fallback destroy via annotation vm-id=%s", req.key, vmID)
-	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vmID)
+	p.removeVM(ctx, vmID)
 }
 
 func (p *CocoonProvider) destroyVM(ctx context.Context, key, vmName, vmID string) {
 	log.WithFunc("provider.DeletePod").Infof(ctx, "%s: destroying VM %s (%s)", key, vmName, vmID)
-	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vmID)
+	p.removeVM(ctx, vmID)
 }
 
 func (p *CocoonProvider) cleanupDeletedPod(key, podName string) {

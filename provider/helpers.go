@@ -45,11 +45,6 @@ func ann(pod *corev1.Pod, key, def string) string {
 	return def
 }
 
-// isWindowsOS returns true if the OS type string indicates Windows.
-func isWindowsOS(osType string) bool {
-	return strings.EqualFold(strings.TrimSpace(osType), osWindows)
-}
-
 // parseImageRef splits an image reference into (registryURL, snapshotName).
 // Supports:
 //
@@ -85,6 +80,16 @@ func shellQuoteJoin(args []string) string {
 		}
 	}
 	return strings.Join(quoted, " ")
+}
+
+func parseVMID(out string) string {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "vm-") {
+			return line
+		}
+	}
+	return ""
 }
 
 // formatResourceMemory converts a Kubernetes memory quantity to a cocoon

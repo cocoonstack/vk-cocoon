@@ -92,7 +92,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	logger.Infof(ctx, "%s: suspended snapshot recorded as %s", key, fullRef)
 
 	// 3. Destroy VM.
-	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.vmID)
+	p.removeVM(ctx, vm.vmID)
 
 	// 4. Mark as hibernated (pod stays, VM gone).
 	p.mu.Lock()
@@ -133,6 +133,10 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 			logger.Warnf(ctx, "%s: epoch pull %s failed: %v", key, cloneImage, err)
 		}
 	}
+	if resolved := resolveCloneBootImage(cloneImage); resolved != cloneImage {
+		logger.Infof(ctx, "%s: resolved wake snapshot %s -> %s", key, cloneImage, resolved)
+		cloneImage = resolved
+	}
 
 	// Resource limits.
 	cpu, mem := podResourceLimits(pod)
@@ -140,7 +144,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Clean up any stale VM with same name.
 	if existing := p.discoverVM(ctx, vm.vmName); existing != nil && existing.vmID != "" {
-		_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", existing.vmID)
+		p.removeVM(ctx, existing.vmID)
 	}
 
 	// Clone VM from snapshot.
@@ -151,10 +155,16 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 		return
 	}
 
+	vmID := parseVMID(out)
 	// Discover new VM.
 	var fresh *CocoonVM
 	for range 5 {
-		fresh = p.discoverVM(ctx, vm.vmName)
+		if vmID != "" {
+			fresh = p.discoverVMByID(ctx, vmID)
+		}
+		if fresh == nil {
+			fresh = p.discoverVM(ctx, vm.vmName)
+		}
 		if fresh != nil && fresh.vmID != "" {
 			break
 		}
