@@ -6,7 +6,7 @@
 //
 // Usage:
 //
-//	puller := NewEpochPuller("http://epoch-server:8080", "/data01/cocoon")
+//	puller := NewEpochPuller("http://epoch-server:8080", "/var/lib/cocoon")
 //	puller.EnsureSnapshot(ctx, "ubuntu-dev-base")         // pull
 //	puller.PushSnapshot(ctx, "vk-default-demo-0", "latest") // push
 package provider

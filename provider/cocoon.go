@@ -575,7 +575,7 @@ func (p *CocoonProvider) getPuller(ctx context.Context, registryURL string) *Epo
 	}
 	rootDir := os.Getenv("COCOON_ROOT")
 	if rootDir == "" {
-		rootDir = "/data01/cocoon"
+		rootDir = "/var/lib/cocoon"
 	}
 	ep := NewEpochPuller(registryURL, rootDir, p.cocoonBin)
 	p.pullers[registryURL] = ep

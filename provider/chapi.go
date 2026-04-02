@@ -2,7 +2,7 @@
 //
 // Each Cloud Hypervisor process exposes a Unix socket API at:
 //
-//	/data01/cocoon/run/cloudhypervisor/{vmid}/api.sock
+//	/var/lib/cocoon/run/cloudhypervisor/{vmid}/api.sock
 //	  (or /var/lib/cocoon/run/cloudhypervisor/{vmid}/api.sock)
 //
 // Endpoints used:
@@ -55,10 +55,10 @@ type CHCounters map[string]map[string]uint64
 // ---------- Socket discovery ----------
 
 // chSocketPath returns the CH API socket path for a given VM ID.
-// Checks both /data01/cocoon/run and /var/lib/cocoon/run.
+// Checks both /var/lib/cocoon/run and /var/lib/cocoon/run.
 func chSocketPath(vmID string) string {
 	for _, base := range []string{
-		"/data01/cocoon/run/cloudhypervisor",
+		"/var/lib/cocoon/run/cloudhypervisor",
 		"/var/lib/cocoon/run/cloudhypervisor",
 	} {
 		sock := filepath.Join(base, vmID, "api.sock")
