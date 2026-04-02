@@ -35,12 +35,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/projecteru2/core/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	corev1listers "k8s.io/client-go/listers/core/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 const (

@@ -79,7 +79,7 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, ns, podName, contai
 		return fmt.Errorf("exec not supported on Windows VM (use RDP port 3389)")
 	}
 
-	remoteArgs := []string{}
+	var remoteArgs []string
 	if len(cmd) > 0 {
 		remoteArgs = append(remoteArgs, "--", shellQuoteJoin(cmd))
 	}

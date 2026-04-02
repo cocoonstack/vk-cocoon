@@ -18,8 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
-	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/projecteru2/core/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
@@ -27,6 +25,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
@@ -51,11 +51,11 @@ func main() {
 
 	config, err := commonk8s.LoadConfig()
 	if err != nil {
-		logger.Fatalf(ctx, err, "kubeconfig: %v", err)
+		logger.Fatalf(ctx, err, "load kubeconfig")
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "clientset: %v", err)
+		logger.Fatalf(ctx, err, "create clientset")
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -94,14 +94,14 @@ func main() {
 		var loadErr error
 		tlsCert, loadErr = tls.LoadX509KeyPair(certPath, keyPath)
 		if loadErr != nil {
-			logger.Fatalf(ctx, loadErr, "load TLS cert: %v", loadErr)
+			logger.Fatalf(ctx, loadErr, "load TLS cert")
 		}
 		logger.Infof(ctx, "using TLS cert from %s", certPath)
 	} else {
 		var genErr error
 		tlsCert, genErr = generateSelfSignedCert(nodeName, nodeIP)
 		if genErr != nil {
-			logger.Fatalf(ctx, genErr, "generate TLS cert: %v", genErr)
+			logger.Fatalf(ctx, genErr, "generate TLS cert")
 		}
 		logger.Info(ctx, "using self-signed TLS cert")
 	}
@@ -117,12 +117,12 @@ func main() {
 		}),
 	)
 	if err != nil {
-		logger.Fatalf(ctx, err, "create node: %v", err)
+		logger.Fatalf(ctx, err, "create node")
 	}
 
 	go func() {
 		if err := n.Run(ctx); err != nil {
-			logger.Fatalf(ctx, err, "node exited: %v", err)
+			logger.Fatalf(ctx, err, "node exited")
 		}
 	}()
 

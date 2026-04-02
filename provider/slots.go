@@ -6,8 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cocoonstack/cocoon-common/meta"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // allocateSlotLocked finds the first available replica slot. Caller must hold p.mu.

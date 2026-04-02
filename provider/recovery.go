@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
 func shouldRecoverManagedPod(mode string, pod *corev1.Pod) bool {

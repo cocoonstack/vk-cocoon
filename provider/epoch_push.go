@@ -14,9 +14,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/projecteru2/core/log"
+
 	"github.com/cocoonstack/epoch/cocoon"
 	"github.com/cocoonstack/epoch/manifest"
-	"github.com/projecteru2/core/log"
 )
 
 // PushSnapshot uploads a local snapshot to the epoch registry via HTTP.

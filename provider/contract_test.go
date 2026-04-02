@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cocoonstack/cocoon-common/meta"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 func TestDeriveStableVMNameMatchesSharedContract(t *testing.T) {
