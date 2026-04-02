@@ -100,12 +100,15 @@ export COCOON_BIN=/usr/local/bin/cocoon
 ### Run with systemd
 
 ```bash
+sudo install -m 0755 vk-cocoon /usr/local/bin/vk-cocoon
 sudo install -D -m 0644 deploy/vk-cocoon.service /etc/systemd/system/vk-cocoon.service
 sudo install -d -m 0755 /etc/cocoon
 sudo cp /path/to/kubeconfig /etc/cocoon/kubeconfig
 sudo systemctl daemon-reload
 sudo systemctl enable --now vk-cocoon
 ```
+
+The bundled unit starts `/usr/local/bin/vk-cocoon` and reads kubeconfig from `/etc/cocoon/kubeconfig`.
 
 Optional overrides can go in `/etc/cocoon/vk-cocoon.env`, for example:
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=vk-cocoon Virtual Kubelet provider
+Description=Virtual Kubelet Cocoon provider
 Documentation=https://github.com/cocoonstack/vk-cocoon
 Wants=network-online.target
 After=network-online.target
@@ -14,7 +14,7 @@ Environment=KUBECONFIG=/etc/cocoon/kubeconfig
 Environment=VK_TLS_CERT=/etc/cocoon/vk/tls/vk-kubelet.crt
 Environment=VK_TLS_KEY=/etc/cocoon/vk/tls/vk-kubelet.key
 EnvironmentFile=-/etc/cocoon/vk-cocoon.env
-ExecStart=/usr/bin/vk-cocoon
+ExecStart=/usr/local/bin/vk-cocoon
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
