@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -50,6 +51,13 @@ func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 		if updated.state != stateRunning {
 			log.WithFunc("provider.reconcileOnce").Warnf(ctx, "VM %s (%s) state=%s (not auto-restarting — VMs are ephemeral now)",
 				snap.name, snap.vmID, updated.state)
+		}
+
+		// Re-notify pod status so the VK framework can patch the API server.
+		// The initial notify from CreatePod may be lost if the VK informer
+		// has not yet synced the pod into knownPods.
+		if ns, name, ok := strings.Cut(snap.key, "/"); ok {
+			go p.notifyPodStatus(ctx, ns, name)
 		}
 	}
 }
