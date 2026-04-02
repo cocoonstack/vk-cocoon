@@ -137,7 +137,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 					if pr.livenessReady {
 						logger.Warnf(ctx, "%s/%s liveness FAILED (%dx): %v", ns, name, pr.liveFailCount, err)
 						pr.livenessReady = false
-						go p.notifyPodStatus(ns, name)
+						go p.notifyPodStatus(ctx, ns, name)
 					}
 				}
 			}
@@ -147,7 +147,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 				pr.readyFailCount = 0
 				if pr.readySuccCount >= succThresh && !pr.readinessReady {
 					pr.readinessReady = true
-					go p.notifyPodStatus(ns, name)
+					go p.notifyPodStatus(ctx, ns, name)
 				}
 			} else {
 				pr.readyFailCount++
@@ -157,7 +157,7 @@ func (p *CocoonProvider) runProbeLoop(ctx context.Context, ns, name string, vm *
 					if pr.readinessReady {
 						logger.Warnf(ctx, "%s/%s readiness FAILED (%dx): %v", ns, name, pr.readyFailCount, err)
 						pr.readinessReady = false
-						go p.notifyPodStatus(ns, name)
+						go p.notifyPodStatus(ctx, ns, name)
 					}
 				}
 			}

@@ -135,7 +135,7 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	p.mu.Unlock()
 
 	logger.Infof(ctx, "%s: complete — pod stays alive, VM destroyed", key)
-	go p.notifyPodStatus(pod.Namespace, pod.Name)
+	go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 }
 
 // wakeVM restores a hibernated VM from its epoch snapshot.
@@ -226,5 +226,5 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	go p.startProbes(ctx, pod, vm)
 
 	logger.Infof(ctx, "%s: complete (ip=%s)", key, fresh.ip)
-	go p.notifyPodStatus(pod.Namespace, pod.Name)
+	go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 }

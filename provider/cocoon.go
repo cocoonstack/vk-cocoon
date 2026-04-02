@@ -434,7 +434,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 		p.storeRecoveredPodVM(ctx, key, pod, vm)
 		log.WithFunc("provider.recoverManagedPod").Infof(ctx, "CreatePod %s: recovered existing VM %s (%s) state=%s ip=%s", key, vm.vmName, vm.vmID, vm.state, vm.ip)
 		go p.startProbes(ctx, pod, vm)
-		go p.notifyPodStatus(pod.Namespace, pod.Name)
+		go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 		return true
 	}
 
@@ -454,7 +454,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 			}
 			p.storeRecoveredPodVM(ctx, key, pod, vm)
 			log.WithFunc("provider.recoverManagedPod").Infof(ctx, "CreatePod %s: recovered hibernated pod %s from snapshot %s", key, vmName, ref)
-			go p.notifyPodStatus(pod.Namespace, pod.Name)
+			go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 			return true
 		}
 	}
@@ -637,7 +637,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.mu.Unlock()
 		p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, changed)
 		logger.Infof(ctx, "%s: static VM ip=%s os=%s", key, vm.ip, vm.os)
-		go p.notifyPodStatus(pod.Namespace, pod.Name)
+		go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 		return nil
 	}
 
@@ -845,7 +845,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	go p.startProbes(ctx, pod, vm)
 
 	// Async notify pod status to avoid 5s polling delay.
-	go p.notifyPodStatus(pod.Namespace, pod.Name)
+	go p.notifyPodStatus(ctx, pod.Namespace, pod.Name)
 	return nil
 }
 
@@ -1560,9 +1560,7 @@ func (p *CocoonProvider) NotifyPods(ctx context.Context, cb func(*corev1.Pod)) {
 }
 
 // notifyPodStatus pushes a pod status update to the VK pod controller.
-func (p *CocoonProvider) notifyPodStatus(ns, name string) {
-	// fire-and-forget notification; goroutine must outlive parent ctx
-	ctx := context.Background()
+func (p *CocoonProvider) notifyPodStatus(ctx context.Context, ns, name string) {
 	logger := log.WithFunc("provider.notifyPodStatus")
 	if p.notifyPodCb == nil {
 		logger.Debugf(ctx, "%s/%s: callback is nil", ns, name)
@@ -1788,14 +1786,11 @@ func resolveIPFromLeaseByMAC(mac string) string {
 
 // waitForDHCPIP polls dnsmasq leases until a DHCP IP (10.88.100.x) appears for the VM.
 // Only accepts leases newer than the VM creation time to avoid stale entries.
-// Uses context.Background because the polling must complete even if the parent
-// ctx is canceled (e.g. during graceful shutdown).
-func (p *CocoonProvider) waitForDHCPIP(_ context.Context, vm *CocoonVM, timeout time.Duration) string {
+func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeout time.Duration) string {
 	deadline := time.Now().Add(timeout)
 	mac := vm.mac
 	notBefore := time.Now().Add(-60 * time.Second) // lease must be recent
 	logger := log.WithFunc("provider.waitForDHCPIP")
-	ctx := context.Background()
 	logger.Infof(ctx, "VM %s mac=%s, polling leases (timeout %s)", vm.vmName, mac, timeout)
 	for time.Now().Before(deadline) {
 		if mac != "" {
