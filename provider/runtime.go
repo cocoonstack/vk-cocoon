@@ -76,10 +76,10 @@ func (p *CocoonProvider) removeVM(ctx context.Context, ref string) {
 	if strings.TrimSpace(ref) == "" {
 		return
 	}
-	if _, err := p.cocoonExec(ctx, buildDeleteArgs(ref)...); err == nil {
+	if _, err := p.cocoonExec(ctx, buildLegacyDeleteArgs(ref)...); err == nil {
 		return
 	}
-	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", ref)
+	_, _ = p.cocoonExec(ctx, buildDeleteArgs(ref)...)
 }
 
 func (p *CocoonProvider) inspectVM(ctx context.Context, ref string) *CocoonVM {
@@ -98,6 +98,16 @@ func (p *CocoonProvider) inspectVM(ctx context.Context, ref string) *CocoonVM {
 func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM {
 	if p.discoverVMFn != nil {
 		return p.discoverVMFn(ctx, name)
+	}
+	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
+		var vms []cocoonVMJSON
+		if err := json.Unmarshal([]byte(out), &vms); err == nil {
+			for _, v := range vms {
+				if v.Name == name || v.Config.Name == name {
+					return jsonToVM(v)
+				}
+			}
+		}
 	}
 	if vm := p.inspectVM(ctx, name); vm != nil {
 		return vm
@@ -123,6 +133,16 @@ func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *Cocoo
 	if p.discoverVMByIDFn != nil {
 		return p.discoverVMByIDFn(ctx, vmID)
 	}
+	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
+		var vms []cocoonVMJSON
+		if err := json.Unmarshal([]byte(out), &vms); err == nil {
+			for _, v := range vms {
+				if v.ID == vmID || strings.HasPrefix(v.ID, vmID) {
+					return jsonToVM(v)
+				}
+			}
+		}
+	}
 	if vm := p.inspectVM(ctx, vmID); vm != nil {
 		return vm
 	}
@@ -136,7 +156,7 @@ func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *Cocoo
 			}
 		}
 	}
-	out, _ := p.cocoonExec(ctx, "list", "--all")
+	out, _ := p.cocoonExec(ctx, buildLegacyTextListArgs()...)
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		line := sc.Text()
@@ -169,7 +189,7 @@ func discoverTextVMState(line string) string {
 }
 
 func (p *CocoonProvider) discoverVMText(ctx context.Context, name string) *CocoonVM {
-	out, _ := p.cocoonExec(ctx, "list", "--all")
+	out, _ := p.cocoonExec(ctx, buildLegacyTextListArgs()...)
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		vm := parseTextVMLine(sc.Text())
@@ -179,6 +199,50 @@ func (p *CocoonProvider) discoverVMText(ctx context.Context, name string) *Cocoo
 		}
 	}
 	return nil
+}
+
+func jsonToVM(v cocoonVMJSON) *CocoonVM {
+	cniIP := v.IP
+	mac := ""
+	if len(v.NetworkConfigs) > 0 {
+		if v.NetworkConfigs[0].Network.IP != "" {
+			cniIP = v.NetworkConfigs[0].Network.IP
+		}
+		mac = v.NetworkConfigs[0].MAC
+	}
+	if cniIP == "-" || cniIP == "" {
+		cniIP = ""
+	}
+
+	ip := cniIP
+	if mac != "" {
+		if dhcpIP := resolveLeaseByMAC(mac, time.Time{}); dhcpIP != "" {
+			ip = dhcpIP
+		}
+	}
+
+	memMB := int(v.Memory / (1024 * 1024))
+	if memMB == 0 && v.Config.Memory > 0 {
+		memMB = int(v.Config.Memory / (1024 * 1024))
+	}
+	cpu := v.CPU
+	if cpu == 0 {
+		cpu = v.Config.CPU
+	}
+	vmName := v.Name
+	if vmName == "" {
+		vmName = v.Config.Name
+	}
+	return &CocoonVM{
+		vmID:     v.ID,
+		vmName:   vmName,
+		state:    normalizedState(v.State),
+		ip:       ip,
+		mac:      mac,
+		cpu:      cpu,
+		memoryMB: memMB,
+		image:    v.Image,
+	}
 }
 
 func parseTextVMLine(line string) *CocoonVM {

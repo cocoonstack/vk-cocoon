@@ -5,8 +5,7 @@
 //
 //	CreatePod  → derive stable VM name (with slot for Deployments)
 //	           → check ConfigMap for suspended snapshot → pull from epoch
-//	           → resolve snapshot to local bootable disk
-//	           → cocoon run → VM running
+//	           → cocoon vm clone --name <vm> <snapshot> → VM running
 //	DeletePod  → detect scale-down vs restart:
 //	           → restart/kill: snapshot save → push epoch → record → destroy VM
 //	           → scale-down:   clear snapshot record → destroy VM (no snapshot)
@@ -94,7 +93,34 @@ type CocoonVM struct {
 	startedAt    time.Time
 }
 
-// cocoonInspectJSON matches `cocoon inspect` and `cocoon list --format json`.
+// cocoonVMJSON matches legacy `cocoon vm list --format json` output.
+type cocoonVMJSON struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	CPU     int    `json:"cpu"`
+	Memory  int64  `json:"memory"`  // bytes
+	Storage int64  `json:"storage"` // bytes
+	IP      string `json:"ip"`
+	Image   string `json:"image"`
+	Created string `json:"created"`
+	Config  struct {
+		Name    string `json:"name"`
+		CPU     int    `json:"cpu"`
+		Memory  int64  `json:"memory"`
+		Storage int64  `json:"storage"`
+		Image   string `json:"image"`
+		NICs    int    `json:"nics"`
+	} `json:"config"`
+	NetworkConfigs []struct {
+		MAC     string `json:"mac"`
+		Network struct {
+			IP string `json:"ip"`
+		} `json:"network"`
+	} `json:"network_configs"`
+}
+
+// cocoonInspectJSON matches newer `cocoon inspect` and `cocoon list --format json`.
 type cocoonInspectJSON struct {
 	VMID  string `json:"vm_id"`
 	Name  string `json:"name"`
@@ -192,12 +218,23 @@ func buildRunArgs(rc runConfig) []string {
 	return append(args, rc.image)
 }
 
-func buildCloneArgs(vmName, cpu, mem, storage, snapshot string) []string {
-	return buildRunArgs(runConfig{
-		vmName:  vmName,
-		cpu:     cpu,
-		mem:     mem,
-		storage: storage,
-		image:   snapshot,
-	})
+func buildLegacyRunArgs(rc runConfig) []string {
+	args := []string{"vm", "run", "--name", rc.vmName, "--cpu", rc.cpu, "--memory", rc.mem, "--storage", rc.storage}
+	if rc.nics != "" {
+		args = append(args, "--nics", rc.nics)
+	}
+	if rc.dns != "" {
+		args = append(args, "--dns", rc.dns)
+	}
+	if rc.rootPwd != "" && rc.osType != osWindows {
+		args = append(args, "--default-root-password", rc.rootPwd)
+	}
+	if rc.osType == osWindows {
+		args = append(args, "--windows")
+	}
+	return append(args, rc.image)
+}
+
+func buildCloneArgs(vmName, snapshot string) []string {
+	return []string{"vm", "clone", "--name", vmName, snapshot}
 }

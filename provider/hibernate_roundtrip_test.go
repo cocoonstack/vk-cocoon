@@ -32,7 +32,7 @@ func TestHibernateAndWakeVMRoundTrip(t *testing.T) {
 			return "", nil
 		case len(args) >= 2 && args[0] == "delete":
 			return "", nil
-		case len(args) >= 1 && args[0] == "run":
+		case len(args) >= 2 && args[0] == "vm" && args[1] == "clone":
 			cloneStarted = true
 			return "clone ok", nil
 		default:

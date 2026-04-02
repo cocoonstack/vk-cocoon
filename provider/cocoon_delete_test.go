@@ -133,7 +133,7 @@ func TestDeletePodStillDestroysWhenOnlyVMNameMatches(t *testing.T) {
 		t.Fatalf("expected cocoon exec calls")
 	}
 	last := calls[len(calls)-1]
-	want := []string{"delete", "--force", "vm-old"}
+	want := []string{"vm", "rm", "--force", "vm-old"}
 	if len(last) != len(want) {
 		t.Fatalf("last cocoon exec = %v, want %v", last, want)
 	}

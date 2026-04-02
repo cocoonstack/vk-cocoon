@@ -14,12 +14,24 @@ func buildDeleteArgs(ref string) []string {
 	return []string{"delete", "--force", ref}
 }
 
+func buildLegacyDeleteArgs(ref string) []string {
+	return []string{"vm", "rm", "--force", ref}
+}
+
 func buildInspectArgs(ref string) []string {
 	return []string{"inspect", ref}
 }
 
 func buildListArgs() []string {
 	return []string{"list", "--all", "--format", "json"}
+}
+
+func buildLegacyListArgs() []string {
+	return []string{"vm", "list", "--format", "json"}
+}
+
+func buildLegacyTextListArgs() []string {
+	return []string{"vm", "list"}
 }
 
 func cocoonRootDir() string {

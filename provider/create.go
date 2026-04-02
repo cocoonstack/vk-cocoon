@@ -75,7 +75,7 @@ func (p createPlan) cocoonArgs() []string {
 			osType:  p.osType,
 		})
 	default:
-		return buildCloneArgs(p.vmName, p.cpu, p.mem, p.storage, p.cloneImage)
+		return buildCloneArgs(p.vmName, p.cloneImage)
 	}
 }
 
@@ -202,12 +202,6 @@ func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest,
 		osType:        req.osType,
 	}
 	c.applyEpochCreateSource(ctx, req, &plan)
-	if plan.effectiveMode == modeClone {
-		if resolved := resolveCloneBootImage(plan.cloneImage); resolved != plan.cloneImage {
-			log.WithFunc(req.loggerFunc).Infof(ctx, "%s: resolved clone source %s -> %s", req.key, plan.cloneImage, resolved)
-			plan.cloneImage = resolved
-		}
-	}
 	return plan
 }
 
@@ -286,7 +280,7 @@ func (c *CocoonProvider) applyEpochCreateSource(ctx context.Context, req createR
 }
 
 func (c *CocoonProvider) runCreatePlan(ctx context.Context, req createRequest, plan createPlan) (*CocoonVM, error) {
-	out, err := c.cocoonExec(ctx, plan.cocoonArgs()...)
+	out, err := c.runPlanCommand(ctx, plan)
 	if err != nil {
 		log.WithFunc(req.loggerFunc).Errorf(ctx, err, "%s: %s", req.key, out)
 		c.releaseReservedVM(req.key)
@@ -299,6 +293,44 @@ func (c *CocoonProvider) runCreatePlan(ctx context.Context, req createRequest, p
 		vm = fallbackCreatedVM(plan)
 	}
 	return vm, nil
+}
+
+func (c *CocoonProvider) runPlanCommand(ctx context.Context, plan createPlan) (string, error) {
+	if plan.effectiveMode == modeClone {
+		out, err := c.cocoonExec(ctx, buildCloneArgs(plan.vmName, plan.cloneImage)...)
+		if err == nil {
+			return out, nil
+		}
+
+		resolved := resolveCloneBootImage(plan.cloneImage)
+		if resolved == plan.cloneImage {
+			return out, err
+		}
+		return c.cocoonExec(ctx, buildRunArgs(runConfig{
+			vmName:  plan.vmName,
+			cpu:     plan.cpu,
+			mem:     plan.mem,
+			storage: plan.storage,
+			image:   resolved,
+			osType:  plan.osType,
+		})...)
+	}
+
+	out, err := c.cocoonExec(ctx, plan.cocoonArgs()...)
+	if err == nil {
+		return out, nil
+	}
+	return c.cocoonExec(ctx, buildLegacyRunArgs(runConfig{
+		vmName:  plan.vmName,
+		cpu:     plan.cpu,
+		mem:     plan.mem,
+		storage: plan.storage,
+		nics:    plan.nics,
+		dns:     plan.dns,
+		rootPwd: plan.rootPwd,
+		image:   plan.runImage,
+		osType:  plan.osType,
+	})...)
 }
 
 func (c *CocoonProvider) releaseReservedVM(key string) {

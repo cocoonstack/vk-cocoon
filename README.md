@@ -4,7 +4,7 @@ Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.co
 
 ## Overview
 
-- **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and cold-restore on wake
+- **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake
 - **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation
 - **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots
 - **Full kubectl support** -- `exec`, `logs`, `attach`, and `port-forward` bridged through SSH
@@ -31,7 +31,7 @@ Kubernetes API
 
 | Mode | Annotation | Behavior |
 |---|---|---|
-| clone | `cocoon.cis/mode=clone` | Ensure a snapshot exists locally, resolve its bootable disk, then cold-boot it (default) |
+| clone | `cocoon.cis/mode=clone` | Ensure a snapshot exists locally, then clone the VM from that snapshot (default) |
 | run | `cocoon.cis/mode=run` | Boot from a cloud image |
 | adopt | `cocoon.cis/mode=adopt` | Attach to an existing Cocoon VM |
 | static | `cocoon.cis/mode=static` | Track an externally managed VM by IP |

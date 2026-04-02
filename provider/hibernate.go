@@ -133,10 +133,6 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 			logger.Warnf(ctx, "%s: epoch pull %s failed: %v", key, cloneImage, err)
 		}
 	}
-	if resolved := resolveCloneBootImage(cloneImage); resolved != cloneImage {
-		logger.Infof(ctx, "%s: resolved wake snapshot %s -> %s", key, cloneImage, resolved)
-		cloneImage = resolved
-	}
 
 	// Resource limits.
 	cpu, mem := podResourceLimits(pod)
@@ -148,11 +144,26 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	}
 
 	// Clone VM from snapshot.
-	args := buildCloneArgs(vm.vmName, cpu, mem, storage, cloneImage)
-	out, err := p.cocoonExec(ctx, args...)
+	out, err := p.cocoonExec(ctx, buildCloneArgs(vm.vmName, cloneImage)...)
 	if err != nil {
-		logger.Errorf(ctx, err, "%s: clone failed: %s", key, out)
-		return
+		resolved := resolveCloneBootImage(cloneImage)
+		if resolved == cloneImage {
+			logger.Errorf(ctx, err, "%s: clone failed: %s", key, out)
+			return
+		}
+		logger.Warnf(ctx, "%s: cocoon vm clone failed, falling back to cold boot from %s", key, resolved)
+		out, err = p.cocoonExec(ctx, buildRunArgs(runConfig{
+			vmName:  vm.vmName,
+			cpu:     cpu,
+			mem:     mem,
+			storage: storage,
+			image:   resolved,
+			osType:  spec.osType,
+		})...)
+		if err != nil {
+			logger.Errorf(ctx, err, "%s: clone fallback failed: %s", key, out)
+			return
+		}
 	}
 
 	vmID := parseVMID(out)

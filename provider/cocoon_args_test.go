@@ -44,13 +44,10 @@ func TestBuildRunArgsWindows(t *testing.T) {
 }
 
 func TestBuildCloneArgs(t *testing.T) {
-	got := buildCloneArgs("vm-clone", "2", "8G", "40G", "snapshot-ref")
+	got := buildCloneArgs("vm-clone", "snapshot-ref")
 	want := []string{
-		"run",
+		"vm", "clone",
 		"--name", "vm-clone",
-		"--cpus", "2",
-		"--memory", "8G",
-		"--disk", "40G",
 		"snapshot-ref",
 	}
 	if !reflect.DeepEqual(got, want) {
