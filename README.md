@@ -101,7 +101,7 @@ export COCOON_BIN=/usr/local/bin/cocoon
 
 ```bash
 sudo install -m 0755 vk-cocoon /usr/local/bin/vk-cocoon
-sudo install -D -m 0644 deploy/vk-cocoon.service /etc/systemd/system/vk-cocoon.service
+sudo install -D -m 0644 vk-cocoon.service /etc/systemd/system/vk-cocoon.service
 sudo install -d -m 0755 /etc/cocoon
 sudo cp /path/to/kubeconfig /etc/cocoon/kubeconfig
 sudo systemctl daemon-reload
@@ -139,7 +139,7 @@ make fmt            # format code
 make help           # show all targets
 ```
 
-See [DESIGN.md](DESIGN.md) for the provider's design rationale covering restart recovery, networking, hibernation, and Windows support.
+See [Design](https://github.com/cocoonstack/.github/blob/main/docs/vk-cocoon/design.md) for the provider's design rationale covering restart recovery, networking, hibernation, and Windows support.
 
 ## Related Projects
 
@@ -149,7 +149,6 @@ See [DESIGN.md](DESIGN.md) for the provider's design rationale covering restart 
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and Hibernation controllers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Sticky scheduling webhook |
 | [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
-| [glance](https://github.com/cocoonstack/glance) | Browser-based SSH, RDP, and VNC access |
 
 ## License
 
