@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -53,15 +52,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, ns, podName, cont
 		journalctlArgs = append(journalctlArgs, fmt.Sprintf("--since=%s", opts.SinceTime.Format("2006-01-02 15:04:05")))
 	}
 
-	sshArgs := []string{
-		"-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-		fmt.Sprintf("root@%s", vm.ip),
-	}
-	sshArgs = append(sshArgs, journalctlArgs...)
-
-	fullArgs := append([]string{"-p", p.sshPass(vm), "ssh"}, sshArgs...)
-	cmd := exec.CommandContext(ctx, "sshpass", fullArgs...) //nolint:gosec // SSH args from pod spec
+	cmd := p.guestExecutor().command(ctx, vm, p.sshPass(vm), false, journalctlArgs...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return io.NopCloser(strings.NewReader(fmt.Sprintf("pipe error: %v\n", err))), nil
@@ -88,19 +79,12 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, ns, podName, contai
 		return fmt.Errorf("exec not supported on Windows VM (use RDP port 3389)")
 	}
 
-	sshArgs := []string{"-p", p.sshPass(vm), "ssh"}
-	if attach.TTY() {
-		sshArgs = append(sshArgs, "-tt")
-	}
-	sshArgs = append(sshArgs,
-		"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-		fmt.Sprintf("root@%s", vm.ip),
-	)
+	remoteArgs := []string{}
 	if len(cmd) > 0 {
-		sshArgs = append(sshArgs, "--", shellQuoteJoin(cmd))
+		remoteArgs = append(remoteArgs, "--", shellQuoteJoin(cmd))
 	}
 
-	sshCmd := exec.CommandContext(ctx, "sshpass", sshArgs...) //nolint:gosec // SSH exec from pod spec
+	sshCmd := p.guestExecutor().command(ctx, vm, p.sshPass(vm), attach.TTY(), remoteArgs...)
 	stdinPipe, _ := sshCmd.StdinPipe()
 	stdoutPipe, _ := sshCmd.StdoutPipe()
 	stderrPipe, _ := sshCmd.StderrPipe()

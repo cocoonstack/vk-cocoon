@@ -215,6 +215,9 @@ func resolveIPFromLeaseByMAC(mac string) string {
 
 // waitForDHCPIP polls dnsmasq leases until a DHCP IP appears for the VM.
 func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeout time.Duration) string {
+	if p.waitForDHCPIPFn != nil {
+		return p.waitForDHCPIPFn(ctx, vm, timeout)
+	}
 	deadline := time.Now().Add(timeout)
 	notBefore := time.Now().Add(-60 * time.Second)
 	logger := log.WithFunc("provider.waitForDHCPIP")

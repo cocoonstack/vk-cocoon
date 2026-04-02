@@ -2,8 +2,6 @@ package provider
 
 import (
 	"context"
-	"os/exec"
-	"path/filepath"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -74,43 +72,14 @@ func (p *CocoonProvider) snapshotBeforeDelete(ctx context.Context, req deleteReq
 	spec := resolvePodSpec(req.pod)
 	puller := p.getPuller(ctx, spec.registryURL)
 	snapshots := p.snapshotManager()
-	snapshotName := req.vm.vmName + "-suspend"
 
-	logger.Infof(ctx, "%s: creating snapshot %s from running VM %s", req.key, snapshotName, req.vm.vmID)
-	out, err := snapshots.saveSnapshot(ctx, snapshotName, req.vm.vmID)
+	logger.Infof(ctx, "%s: creating suspended snapshot from running VM %s", req.key, req.vm.vmID)
+	fullRef, err := snapshots.suspendVM(ctx, req.pod, req.vm, spec.registryURL, puller)
 	if err != nil {
-		logger.Errorf(ctx, err, "%s: snapshot failed: %s", req.key, out)
+		logger.Errorf(ctx, err, "%s: snapshot failed", req.key)
 		return
 	}
-
-	logger.Infof(ctx, "%s: snapshot %s created", req.key, snapshotName)
-	pushedToEpoch := p.pushDeleteSnapshot(ctx, req, puller, snapshotName)
-	fullRef := snapshotName
-	if spec.registryURL != "" && pushedToEpoch {
-		fullRef = spec.registryURL + "/" + snapshotName
-	}
-	snapshots.recordSuspendedSnapshot(ctx, req.pod, req.vm.vmName, fullRef)
-	if pushedToEpoch {
-		snapshots.removeSnapshot(ctx, snapshotName)
-	}
-}
-
-func (p *CocoonProvider) pushDeleteSnapshot(ctx context.Context, req deleteRequest, puller *EpochPuller, snapshotName string) bool {
-	if puller == nil {
-		return false
-	}
-
-	logger := log.WithFunc("provider.DeletePod")
-	_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX", //nolint:gosec // trusted path from config
-		filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
-
-	if err := puller.PushSnapshot(ctx, snapshotName, "latest"); err != nil {
-		logger.Errorf(ctx, err, "%s: epoch push failed", req.key)
-		return false
-	}
-
-	logger.Infof(ctx, "%s: snapshot pushed to epoch", req.key)
-	return true
+	logger.Infof(ctx, "%s: suspended snapshot recorded as %s", req.key, fullRef)
 }
 
 func (p *CocoonProvider) clearScaleDownSnapshot(ctx context.Context, req deleteRequest) {

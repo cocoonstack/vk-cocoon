@@ -14,8 +14,6 @@ package provider
 
 import (
 	"context"
-	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -85,39 +83,13 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	puller := p.getPuller(ctx, spec.registryURL)
 	snapshots := p.snapshotManager()
 
-	// 1. Snapshot the running VM.
-	snapshotName := vm.vmName + "-suspend"
-	out, err := snapshots.saveSnapshot(ctx, snapshotName, vm.vmID)
+	// 1. Snapshot the running VM and record the restore ref.
+	fullRef, err := snapshots.suspendVM(ctx, pod, vm, spec.registryURL, puller)
 	if err != nil {
-		logger.Errorf(ctx, err, "%s: snapshot failed: %s", key, out)
+		logger.Errorf(ctx, err, "%s: snapshot failed", key)
 		return
 	}
-	logger.Infof(ctx, "%s: snapshot %s created", key, snapshotName)
-
-	// 2. Push to epoch.
-	pushedToEpoch := false
-	if puller != nil {
-		_ = exec.CommandContext(ctx, "sudo", "chmod", "-R", "a+rX", //nolint:gosec // trusted path from config
-			filepath.Join(puller.RootDir(), "snapshot", "localfile")).Run()
-
-		if pushErr := puller.PushSnapshot(ctx, snapshotName, "latest"); pushErr != nil {
-			logger.Errorf(ctx, pushErr, "%s: epoch push failed", key)
-		} else {
-			logger.Infof(ctx, "%s: pushed to epoch", key)
-			pushedToEpoch = true
-		}
-	}
-
-	// Record snapshot ref for wake.
-	fullRef := snapshotName
-	if spec.registryURL != "" && pushedToEpoch {
-		fullRef = spec.registryURL + "/" + snapshotName
-	}
-	snapshots.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
-
-	if pushedToEpoch {
-		snapshots.removeSnapshot(ctx, snapshotName)
-	}
+	logger.Infof(ctx, "%s: suspended snapshot recorded as %s", key, fullRef)
 
 	// 3. Destroy VM.
 	_, _ = p.cocoonExec(ctx, "vm", "rm", "--force", vm.vmID)
@@ -146,14 +118,12 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	cloneImage := spec.cloneImage()
 	snapshots := p.snapshotManager()
 
-	if ref := snapshots.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
-		logger.Infof(ctx, "%s: found suspended snapshot %s", key, ref)
-		suspendRegistry, suspendName := parseImageRef(ref)
-		cloneImage = suspendName
-		if suspendRegistry != "" {
-			registryURL = suspendRegistry
+	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, pod.Namespace, vm.vmName, true); ok {
+		logger.Infof(ctx, "%s: found suspended snapshot %s", key, suspended.ref)
+		cloneImage = suspended.snapshot
+		if suspended.registryURL != "" {
+			registryURL = suspended.registryURL
 		}
-		snapshots.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 	}
 
 	// Pull from epoch.

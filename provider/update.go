@@ -51,14 +51,30 @@ func (p *CocoonProvider) triggerHibernateTransition(ctx context.Context, pod *co
 		return false
 	}
 	if !wasHibernated && wantHibernate && vm.state == stateRunning {
-		go p.hibernateVM(ctx, pod, vm)
+		go p.runHibernateTransition(ctx, pod, vm)
 		return true
 	}
 	if wasHibernated && !wantHibernate && vm.state == stateHibernated {
-		go p.wakeVM(ctx, pod, vm)
+		go p.runWakeTransition(ctx, pod, vm)
 		return true
 	}
 	return false
+}
+
+func (p *CocoonProvider) runHibernateTransition(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
+	if p.hibernateVMFn != nil {
+		p.hibernateVMFn(ctx, pod, vm)
+		return
+	}
+	p.hibernateVM(ctx, pod, vm)
+}
+
+func (p *CocoonProvider) runWakeTransition(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
+	if p.wakeVMFn != nil {
+		p.wakeVMFn(ctx, pod, vm)
+		return
+	}
+	p.wakeVM(ctx, pod, vm)
 }
 
 func (p *CocoonProvider) reinjectUpdatedPod(ctx context.Context, key string, pod *corev1.Pod) {

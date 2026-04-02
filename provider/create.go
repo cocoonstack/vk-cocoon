@@ -216,15 +216,11 @@ func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createReque
 	slot := extractSlotFromVMName(vmName)
 	snapshots := c.snapshotManager()
 
-	if ref := snapshots.lookupSuspendedSnapshot(ctx, req.pod.Namespace, vmName); ref != "" {
-		logger.Infof(ctx, "%s: restoring from suspended snapshot %s", req.key, ref)
-		suspendRegistry, suspendName := parseImageRef(ref)
-		cloneImage = suspendName
-		if suspendRegistry != "" {
-			registryURL = suspendRegistry
-		}
-		if slot == 0 {
-			snapshots.clearSuspendedSnapshot(ctx, req.pod.Namespace, vmName)
+	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, req.pod.Namespace, vmName, slot == 0); ok {
+		logger.Infof(ctx, "%s: restoring from suspended snapshot %s", req.key, suspended.ref)
+		cloneImage = suspended.snapshot
+		if suspended.registryURL != "" {
+			registryURL = suspended.registryURL
 		}
 		return cloneImage, registryURL
 	}

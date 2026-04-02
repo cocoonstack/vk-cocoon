@@ -150,6 +150,9 @@ type CocoonProvider struct {
 	discoverVMByIDFn          func(context.Context, string) *CocoonVM
 	lookupSuspendedSnapshotFn func(context.Context, string, string) string
 	cocoonExecFn              func(context.Context, ...string) (string, error)
+	waitForDHCPIPFn           func(context.Context, *CocoonVM, time.Duration) string
+	hibernateVMFn             func(context.Context, *corev1.Pod, *CocoonVM)
+	wakeVMFn                  func(context.Context, *corev1.Pod, *CocoonVM)
 }
 
 var _ nodeutil.Provider = (*CocoonProvider)(nil)

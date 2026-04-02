@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -14,12 +15,24 @@ func (p *CocoonProvider) guestExecutor() guestExecutor {
 	return guestExecutor{}
 }
 
+func (guestExecutor) command(ctx context.Context, vm *CocoonVM, password string, tty bool, remoteArgs ...string) *exec.Cmd {
+	args := []string{"-p", password, "ssh"}
+	if tty {
+		args = append(args, "-tt")
+	}
+	args = slices.Concat(args, []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		fmt.Sprintf("root@%s", vm.ip),
+	}, remoteArgs)
+	return exec.CommandContext(ctx, "sshpass", args...) //nolint:gosec // SSH args from pod spec
+}
+
 func (guestExecutor) writeFile(ctx context.Context, vm *CocoonVM, password, path string, data []byte, mode int) error {
 	dir := path[:strings.LastIndex(path, "/")]
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
-		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
-		fmt.Sprintf("root@%s", vm.ip),
+	cmd := guestExecutor{}.command(ctx, vm, password, false,
 		fmt.Sprintf("mkdir -p %s && cat > %s && chmod %04o %s", dir, path, mode, path))
 	cmd.Stdin = strings.NewReader(string(data))
 	out, err := cmd.CombinedOutput()
@@ -30,10 +43,7 @@ func (guestExecutor) writeFile(ctx context.Context, vm *CocoonVM, password, path
 }
 
 func (guestExecutor) execSimple(ctx context.Context, vm *CocoonVM, password, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
-		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
-		fmt.Sprintf("root@%s", vm.ip), command)
+	cmd := guestExecutor{}.command(ctx, vm, password, false, command)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
