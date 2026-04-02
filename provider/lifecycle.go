@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -548,10 +549,10 @@ func (p *CocoonProvider) deriveStableVMNameLocked(ctx context.Context, pod *core
 
 	if deployName := p.getOwnerDeploymentName(ctx, pod); deployName != "" {
 		slot := p.allocateSlotLocked(pod.Namespace, deployName)
-		return fmt.Sprintf("vk-%s-%s-%d", pod.Namespace, deployName, slot)
+		return cocoonmeta.VMNameForDeployment(pod.Namespace, deployName, slot)
 	}
 
-	return fmt.Sprintf("vk-%s-%s", pod.Namespace, pod.Name)
+	return cocoonmeta.VMNameForPod(pod.Namespace, pod.Name)
 }
 
 // ---------- Fork / Slot Helpers ----------
@@ -559,25 +560,13 @@ func (p *CocoonProvider) deriveStableVMNameLocked(ctx context.Context, pod *core
 // extractSlotFromVMName extracts the slot number from a Deployment VM name.
 // "vk-prod-deploy-2" -> 2.  Returns -1 for non-Deployment names.
 func extractSlotFromVMName(vmName string) int {
-	idx := strings.LastIndex(vmName, "-")
-	if idx < 0 {
-		return -1
-	}
-	n, err := strconv.Atoi(vmName[idx+1:])
-	if err != nil {
-		return -1
-	}
-	return n
+	return cocoonmeta.ExtractSlotFromVMName(vmName)
 }
 
 // mainAgentVMName derives the slot-0 VM name from any slot's VM name.
 // "vk-prod-deploy-2" -> "vk-prod-deploy-0"
 func mainAgentVMName(vmName string) string {
-	idx := strings.LastIndex(vmName, "-")
-	if idx < 0 {
-		return vmName
-	}
-	return vmName[:idx] + "-0"
+	return cocoonmeta.MainAgentVMName(vmName)
 }
 
 // forkFromMainAgent creates a live snapshot of the main agent (slot-0) VM
@@ -649,5 +638,5 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 
 // isMainAgent returns true if the VM name represents slot-0 (the main agent).
 func isMainAgent(vmName string) bool {
-	return extractSlotFromVMName(vmName) == 0
+	return cocoonmeta.InferRoleFromVMName(vmName) == cocoonmeta.RoleMain
 }

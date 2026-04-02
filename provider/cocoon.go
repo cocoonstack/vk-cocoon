@@ -45,6 +45,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	"github.com/projecteru2/core/log"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -59,26 +60,26 @@ import (
 
 const (
 	// Annotation keys
-	AnnImage        = "cocoon.cis/image"
-	AnnMode         = "cocoon.cis/mode" // clone | run
-	AnnStorage      = "cocoon.cis/storage"
+	AnnImage        = cocoonmeta.AnnotationImage
+	AnnMode         = cocoonmeta.AnnotationMode // clone | run
+	AnnStorage      = cocoonmeta.AnnotationStorage
 	AnnNICs         = "cocoon.cis/nics"
 	AnnStaticIP     = "cocoon.cis/static-ip"
 	AnnDNS          = "cocoon.cis/dns"
 	AnnRootPassword = "cocoon.cis/root-password" //nolint:gosec // annotation key, not a credential
 	AnnSSHPassword  = "cocoon.cis/ssh-password"  //nolint:gosec // annotation key, not a credential
-	AnnManaged      = "cocoon.cis/managed"
-	AnnOS           = "cocoon.cis/os" // linux | windows
-	AnnVMName       = "cocoon.cis/vm-name"
-	AnnVMID         = "cocoon.cis/vm-id"
-	AnnIP           = "cocoon.cis/ip"
+	AnnManaged      = cocoonmeta.AnnotationManaged
+	AnnOS           = cocoonmeta.AnnotationOS // linux | windows
+	AnnVMName       = cocoonmeta.AnnotationVMName
+	AnnVMID         = cocoonmeta.AnnotationVMID
+	AnnIP           = cocoonmeta.AnnotationIP
 	AnnMAC          = "cocoon.cis/mac"
 	AnnSnapshotFrom = "cocoon.cis/snapshot-from"
-	AnnHibernate    = "cocoon.cis/hibernate" // "true" → hibernate VM (pod stays)
+	AnnHibernate    = cocoonmeta.AnnotationHibernate // "true" → hibernate VM (pod stays)
 
 	// CocoonSet controller annotations
-	AnnForkFrom       = "cocoon.cis/fork-from"       // VM name to fork from (set by CocoonSet controller)
-	AnnSnapshotPolicy = "cocoon.cis/snapshot-policy" // always | main-only | never (set by CocoonSet controller)
+	AnnForkFrom       = cocoonmeta.AnnotationForkFrom       // VM name to fork from (set by CocoonSet controller)
+	AnnSnapshotPolicy = cocoonmeta.AnnotationSnapshotPolicy // always | main-only | never (set by CocoonSet controller)
 
 	// VM state constants
 	stateRunning    = "running"
