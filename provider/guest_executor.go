@@ -58,15 +58,3 @@ func (guestExecutor) waitForSSH(ctx context.Context, vm *CocoonVM, password stri
 		time.Sleep(sshReadyPollInterval)
 	}
 }
-
-func sshWriteFile(ctx context.Context, vm *CocoonVM, password, path string, data []byte, mode int) error {
-	return guestExecutor{}.writeFile(ctx, vm, password, path, data, mode)
-}
-
-func sshExecSimple(ctx context.Context, vm *CocoonVM, password, command string) (string, error) {
-	return guestExecutor{}.execSimple(ctx, vm, password, command)
-}
-
-func waitForSSH(ctx context.Context, vm *CocoonVM, password string, timeout time.Duration) error {
-	return guestExecutor{}.waitForSSH(ctx, vm, password, timeout)
-}

@@ -223,7 +223,7 @@ func probeHTTP(ctx context.Context, scheme, ip string, port int, path string, ti
 	if err != nil {
 		return fmt.Errorf("http %s: %w", url, err)
 	}
-	resp, err := probeClient.Do(req)
+	resp, err := probeClient.Do(req) //nolint:gosec // probe target is derived from pod IP and probe configuration
 	if err != nil {
 		return fmt.Errorf("http %s: %w", url, err)
 	}

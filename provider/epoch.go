@@ -227,7 +227,7 @@ func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manif
 	}
 	p.setAuth(req)
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ func (p *EpochPuller) downloadBlob(ctx context.Context, name, digest, destPath s
 	}
 	p.setAuth(req)
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
 		return err
 	}
@@ -474,7 +474,7 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 	if err != nil {
 		return err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // source image URL comes from trusted snapshot manifest metadata
 	if err != nil {
 		return err
 	}
@@ -664,7 +664,7 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 	headReq, headErr := http.NewRequestWithContext(ctx, http.MethodHead, headURL, nil)
 	if headErr == nil {
 		p.setAuth(headReq)
-		if headResp, doErr := p.client.Do(headReq); doErr == nil {
+		if headResp, doErr := p.client.Do(headReq); doErr == nil { //nolint:gosec // registry endpoint comes from trusted snapshot registry configuration
 			_ = headResp.Body.Close()
 			if headResp.StatusCode == 200 {
 				return digest, size, nil
@@ -688,7 +688,7 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 	req.Header.Set("Content-Type", "application/octet-stream")
 	p.setAuth(req)
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
 		return "", 0, fmt.Errorf("PUT blob: %w", err)
 	}
@@ -718,7 +718,7 @@ func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *man
 	req.Header.Set("Content-Type", "application/vnd.epoch.manifest.v1+json")
 	p.setAuth(req)
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
 		return fmt.Errorf("PUT manifest: %w", err)
 	}
@@ -739,7 +739,7 @@ func (p *EpochPuller) DeleteSnapshot(ctx context.Context, name, tag string) erro
 		return err
 	}
 	p.setAuth(req)
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
 		return err
 	}

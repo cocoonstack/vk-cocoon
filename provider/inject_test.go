@@ -32,7 +32,7 @@ func TestWaitForSSHEventuallySucceeds(t *testing.T) {
 	}
 
 	vm := &CocoonVM{ip: "10.88.100.10"}
-	if err := waitForSSH(context.Background(), vm, "secret", time.Second); err != nil {
+	if err := (guestExecutor{}).waitForSSH(context.Background(), vm, "secret", time.Second); err != nil {
 		t.Fatalf("waitForSSH: %v", err)
 	}
 	if attempts != 3 {
@@ -54,7 +54,7 @@ func TestWaitForSSHTimesOut(t *testing.T) {
 	}
 
 	vm := &CocoonVM{ip: "10.88.100.11"}
-	if err := waitForSSH(context.Background(), vm, "secret", 10*time.Millisecond); err == nil {
+	if err := (guestExecutor{}).waitForSSH(context.Background(), vm, "secret", 10*time.Millisecond); err == nil {
 		t.Fatal("waitForSSH: expected timeout error")
 	}
 }

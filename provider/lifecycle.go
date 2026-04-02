@@ -276,26 +276,6 @@ func removePodDNS(podName string) {
 	_ = exec.Command("bash", "-c", cmd).Run() //nolint:gosec
 }
 
-// ---------- Suspended Snapshot Tracking ----------
-
-// recordSuspendedSnapshot writes {vm-name: snapshot-ref} to the
-// cocoon-vm-snapshots ConfigMap. On next CreatePod, the provider reads
-// this to pull the suspended snapshot from epoch instead of the base image.
-func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev1.Pod, vmName, snapshotRef string) {
-	p.snapshotManager().recordSuspendedSnapshot(ctx, pod, vmName, snapshotRef)
-}
-
-// lookupSuspendedSnapshot reads the cocoon-vm-snapshots ConfigMap to
-// find the epoch snapshot reference for a VM name. Returns "" if not found.
-func (p *CocoonProvider) lookupSuspendedSnapshot(ctx context.Context, ns, vmName string) string {
-	return p.snapshotManager().lookupSuspendedSnapshot(ctx, ns, vmName)
-}
-
-// clearSuspendedSnapshot removes a VM's entry from the cocoon-vm-snapshots ConfigMap.
-func (p *CocoonProvider) clearSuspendedSnapshot(ctx context.Context, ns, vmName string) {
-	p.snapshotManager().clearSuspendedSnapshot(ctx, ns, vmName)
-}
-
 // ---------- Owner Detection ----------
 
 // getOwnerDeploymentName returns the Deployment name for a pod owned via

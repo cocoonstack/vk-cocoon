@@ -90,7 +90,7 @@ func main() {
 	}
 
 	var tlsCert tls.Certificate
-	if _, statErr := os.Stat(certPath); statErr == nil {
+	if _, statErr := os.Stat(certPath); statErr == nil { //nolint:gosec // certificate path comes from local process configuration
 		var loadErr error
 		tlsCert, loadErr = tls.LoadX509KeyPair(certPath, keyPath)
 		if loadErr != nil {

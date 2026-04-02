@@ -1,8 +1,10 @@
 package provider
 
-import "context"
+import (
+	"context"
 
-import corev1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
+)
 
 const (
 	modeClone  = "clone"
