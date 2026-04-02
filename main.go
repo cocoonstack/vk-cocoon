@@ -83,10 +83,10 @@ func main() {
 	certPath := os.Getenv("VK_TLS_CERT")
 	keyPath := os.Getenv("VK_TLS_KEY")
 	if certPath == "" {
-		certPath = "/home/tiger/bin/tls/vk-kubelet.crt"
+		certPath = "/etc/cocoon/vk/tls/vk-kubelet.crt"
 	}
 	if keyPath == "" {
-		keyPath = "/home/tiger/bin/tls/vk-kubelet.key"
+		keyPath = "/etc/cocoon/vk/tls/vk-kubelet.key"
 	}
 
 	var tlsCert tls.Certificate
