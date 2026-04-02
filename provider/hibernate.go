@@ -83,12 +83,11 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	// Resolve epoch registry URL.
 	spec := resolvePodSpec(pod)
 	puller := p.getPuller(ctx, spec.registryURL)
+	snapshots := p.snapshotManager()
 
 	// 1. Snapshot the running VM.
 	snapshotName := vm.vmName + "-suspend"
-	_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
-
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.vmID)
+	out, err := snapshots.saveSnapshot(ctx, snapshotName, vm.vmID)
 	if err != nil {
 		logger.Errorf(ctx, err, "%s: snapshot failed: %s", key, out)
 		return
@@ -114,10 +113,10 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	if spec.registryURL != "" && pushedToEpoch {
 		fullRef = spec.registryURL + "/" + snapshotName
 	}
-	p.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
+	snapshots.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
 
 	if pushedToEpoch {
-		_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
+		snapshots.removeSnapshot(ctx, snapshotName)
 	}
 
 	// 3. Destroy VM.
@@ -145,15 +144,16 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	spec := resolvePodSpec(pod)
 	registryURL := spec.registryURL
 	cloneImage := spec.cloneImage()
+	snapshots := p.snapshotManager()
 
-	if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
+	if ref := snapshots.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
 		logger.Infof(ctx, "%s: found suspended snapshot %s", key, ref)
 		suspendRegistry, suspendName := parseImageRef(ref)
 		cloneImage = suspendName
 		if suspendRegistry != "" {
 			registryURL = suspendRegistry
 		}
-		p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
+		snapshots.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 	}
 
 	// Pull from epoch.

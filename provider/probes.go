@@ -194,7 +194,7 @@ func (p *CocoonProvider) executeProbe(ctx context.Context, vm *CocoonVM, probe *
 		cmd := strings.Join(probe.Exec.Command, " ")
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		_, err := sshExecSimple(probeCtx, vm, pw, cmd)
+		_, err := p.guestExecutor().execSimple(probeCtx, vm, pw, cmd)
 		return err
 	}
 	return nil // no probe handler defined

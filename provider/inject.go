@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -29,60 +28,10 @@ var (
 	sshReadyTimeout      = 45 * time.Second
 	sshReadyPollInterval = 2 * time.Second
 	sshReadyProbe        = func(ctx context.Context, vm *CocoonVM, password string) error {
-		_, err := sshExecSimple(ctx, vm, password, "true")
+		_, err := guestExecutor{}.execSimple(ctx, vm, password, "true")
 		return err
 	}
 )
-
-// sshWriteFile writes data to a file on the VM via SSH stdin pipe.
-// Creates parent directories. Does NOT use SCP (avoids binary dependency).
-func sshWriteFile(ctx context.Context, vm *CocoonVM, password, path string, data []byte, mode int) error {
-	dir := path[:strings.LastIndex(path, "/")]
-	// Pass the script as a single SSH remote command (not via bash -c which
-	// has quoting issues). SSH concatenates all trailing args as the command.
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
-		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
-		fmt.Sprintf("root@%s", vm.ip),
-		fmt.Sprintf("mkdir -p %s && cat > %s && chmod %04o %s", dir, path, mode, path))
-	cmd.Stdin = strings.NewReader(string(data))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("sshWriteFile %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// sshExecSimple runs a command on the VM and returns combined output.
-func sshExecSimple(ctx context.Context, vm *CocoonVM, password, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sshpass", "-p", password, //nolint:gosec // SSH args from pod spec
-		"ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
-		fmt.Sprintf("root@%s", vm.ip), command)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-func waitForSSH(ctx context.Context, vm *CocoonVM, password string, timeout time.Duration) error {
-	if vm == nil || vm.ip == "" {
-		return fmt.Errorf("vm has no IP")
-	}
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		lastErr = sshReadyProbe(ctx, vm, password)
-		if lastErr == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("ssh not ready after %s: %w", timeout, lastErr)
-		}
-		time.Sleep(sshReadyPollInterval)
-	}
-}
 
 // ---------- Environment variable injection ----------
 
@@ -114,7 +63,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 
 	target := ann(pod, AnnEnvFile, "/opt/agent/pod.env")
 	pw := p.sshPass(vm)
-	if err := sshWriteFile(ctx, vm, pw, target, []byte(content), 0o600); err != nil {
+	if err := p.guestExecutor().writeFile(ctx, vm, pw, target, []byte(content), 0o600); err != nil {
 		return "", fmt.Errorf("injectEnvVars: %w", err)
 	}
 	log.WithFunc("provider.injectEnvVars").Infof(ctx, "%s/%s: wrote %d vars to %s", pod.Namespace, pod.Name, len(envs), target)
@@ -189,7 +138,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 		// Write string data
 		for key, val := range data {
 			path := mountPath + "/" + key
-			if err := sshWriteFile(ctx, vm, pw, path, []byte(val), mode); err != nil {
+			if err := p.guestExecutor().writeFile(ctx, vm, pw, path, []byte(val), mode); err != nil {
 				return "", err
 			}
 			allContent.WriteString(key + "=" + val + "\n")
@@ -198,7 +147,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 		// Write binary data
 		for key, val := range binData {
 			path := mountPath + "/" + key
-			if err := sshWriteFile(ctx, vm, pw, path, val, mode); err != nil {
+			if err := p.guestExecutor().writeFile(ctx, vm, pw, path, val, mode); err != nil {
 				return "", err
 			}
 			allContent.Write(val)
@@ -224,7 +173,7 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 	key := podKey(pod.Namespace, pod.Name)
 	pw := p.sshPass(vm)
 
-	if err := waitForSSH(ctx, vm, pw, sshReadyTimeout); err != nil {
+	if err := p.guestExecutor().waitForSSH(ctx, vm, pw, sshReadyTimeout); err != nil {
 		logger.Warnf(ctx, "%s: SSH not ready: %v", key, err)
 		return
 	}

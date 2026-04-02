@@ -51,13 +51,13 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 			if vol.EmptyDir.Medium == corev1.StorageMediumMemory {
 				cmd := fmt.Sprintf("mkdir -p '%s' && mount -t tmpfs -o size=64m tmpfs '%s'",
 					mount.MountPath, mount.MountPath)
-				if _, err := sshExecSimple(ctx, vm, pw, cmd); err != nil {
+				if _, err := p.guestExecutor().execSimple(ctx, vm, pw, cmd); err != nil {
 					logger.Warnf(ctx, "%s/%s: emptyDir tmpfs %s: %v",
 						pod.Namespace, pod.Name, mount.MountPath, err)
 				}
 			} else {
 				cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
-				_, _ = sshExecSimple(ctx, vm, pw, cmd)
+				_, _ = p.guestExecutor().execSimple(ctx, vm, pw, cmd)
 			}
 			logger.Debugf(ctx, "emptyDir %s at %s", vol.Name, mount.MountPath)
 
@@ -66,7 +66,7 @@ func (p *CocoonProvider) setupVolumes(ctx context.Context, pod *corev1.Pod, vm *
 			// accessible from inside a VM). For true host sharing, use virtiofs.
 			// Here we just ensure the path exists.
 			cmd := fmt.Sprintf("mkdir -p '%s'", mount.MountPath)
-			_, _ = sshExecSimple(ctx, vm, pw, cmd)
+			_, _ = p.guestExecutor().execSimple(ctx, vm, pw, cmd)
 			logger.Debugf(ctx, "hostPath %s -> VM %s (dir created, not shared)",
 				vol.HostPath.Path, mount.MountPath)
 
@@ -90,7 +90,7 @@ func (p *CocoonProvider) injectProjectedVolume(ctx context.Context, pod *corev1.
 				val := resolveDownwardAPIField(pod, item.FieldRef)
 				if val != "" {
 					path := filepath.Join(mountPath, item.Path)
-					_ = sshWriteFile(ctx, vm, pw, path, []byte(val), 0o444)
+					_ = p.guestExecutor().writeFile(ctx, vm, pw, path, []byte(val), 0o444)
 				}
 			}
 		}

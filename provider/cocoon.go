@@ -375,7 +375,7 @@ func (p *CocoonProvider) recoverManagedPod(ctx context.Context, pod *corev1.Pod,
 	}
 
 	if ann(pod, AnnHibernate, "") == valTrue && vmName != "" {
-		if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vmName); ref != "" {
+		if ref := p.snapshotManager().lookupSuspendedSnapshot(ctx, pod.Namespace, vmName); ref != "" {
 			now := time.Now()
 			vm = &CocoonVM{
 				podNamespace: pod.Namespace,
@@ -609,9 +609,10 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// Priority: 1. suspended snapshot (restore) → 2. fork from slot-0 (sub-agent) → 3. base image (new main)
 	cloneImage := image
 	slot := extractSlotFromVMName(vmName)
+	snapshots := p.snapshotManager()
 
 	if mode == modeClone { //nolint:nestif // clone source resolution has multiple fallback paths
-		if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vmName); ref != "" {
+		if ref := snapshots.lookupSuspendedSnapshot(ctx, pod.Namespace, vmName); ref != "" {
 			// Restore from previously saved snapshot.
 			logger.Infof(ctx, "%s: restoring from suspended snapshot %s", key, ref)
 			suspendRegistry, suspendName := parseImageRef(ref)
@@ -621,7 +622,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			}
 			// Don't clear for non-0 agents — their snapshots are permanent.
 			if slot == 0 {
-				p.clearSuspendedSnapshot(ctx, pod.Namespace, vmName)
+				snapshots.clearSuspendedSnapshot(ctx, pod.Namespace, vmName)
 			}
 		} else if forkSource := ann(pod, AnnForkFrom, ""); forkSource != "" {
 			// CocoonSet controller specified fork source
@@ -815,6 +816,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.RLock()
 	vm, ok := p.vms[key]
 	p.mu.RUnlock()
+	snapshots := p.snapshotManager()
 
 	switch {
 	case ok && vm.vmID != "" && vm.managed:
@@ -836,10 +838,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 			snapshotName := vm.vmName + "-suspend"
 			logger.Infof(ctx, "%s: creating snapshot %s from running VM %s", key, snapshotName, vm.vmID)
 
-			// Remove old snapshot with same name first (cocoon rejects duplicate names).
-			_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
-
-			out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", snapshotName, vm.vmID)
+			out, err := snapshots.saveSnapshot(ctx, snapshotName, vm.vmID)
 			if err != nil {
 				logger.Errorf(ctx, err, "%s: snapshot failed: %s", key, out)
 			} else {
@@ -864,11 +863,11 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 				if spec.registryURL != "" && pushedToEpoch {
 					fullRef = spec.registryURL + "/" + snapshotName
 				}
-				p.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
+				snapshots.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
 
 				// Only clean up local snapshot if safely in epoch.
 				if pushedToEpoch {
-					_, _ = p.cocoonExec(ctx, "snapshot", "rm", snapshotName)
+					snapshots.removeSnapshot(ctx, snapshotName)
 				}
 			}
 		} else {
@@ -877,7 +876,7 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 			// Only clear snapshot for slot-0 (main agent). Sub-agent snapshots
 			// are permanent — they can be restored via Hibernation CRD.
 			if isMainAgent(vm.vmName) {
-				p.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
+				snapshots.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 			}
 		}
 

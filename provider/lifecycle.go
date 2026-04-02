@@ -12,7 +12,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -22,7 +21,6 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // ---------- #13: Init Containers ----------
@@ -42,7 +40,7 @@ func (p *CocoonProvider) runInitContainers(ctx context.Context, pod *corev1.Pod,
 			continue
 		}
 		logger.Infof(ctx, "initContainer[%d] %s/%s: running %q", i, pod.Namespace, pod.Name, cmd)
-		out, err := sshExecSimple(ctx, vm, pw, cmd)
+		out, err := p.guestExecutor().execSimple(ctx, vm, pw, cmd)
 		if err != nil {
 			logger.Errorf(ctx, err, "initContainer[%d] %s/%s failed: %s", i, pod.Namespace, pod.Name, out)
 			return fmt.Errorf("init container %s failed: %w", ic.Name, err)
@@ -82,7 +80,7 @@ func (p *CocoonProvider) installContainerServices(ctx context.Context, pod *core
 		}
 		if envContent != "" {
 			envPath := fmt.Sprintf("/opt/agent/sidecar-%s.env", c.Name)
-			_ = sshWriteFile(ctx, vm, pw, envPath, []byte(envContent), 0o600)
+			_ = p.guestExecutor().writeFile(ctx, vm, pw, envPath, []byte(envContent), 0o600)
 		}
 
 		// Create systemd service
@@ -104,8 +102,8 @@ WantedBy=multi-user.target
 `, c.Name, cmd, c.Name, svcName, svcName)
 
 		unitPath := fmt.Sprintf("/etc/systemd/system/%s.service", svcName)
-		_ = sshWriteFile(ctx, vm, pw, unitPath, []byte(unit), 0o644)
-		_, _ = sshExecSimple(ctx, vm, pw, fmt.Sprintf("systemctl daemon-reload && systemctl enable %s && systemctl start %s", svcName, svcName))
+		_ = p.guestExecutor().writeFile(ctx, vm, pw, unitPath, []byte(unit), 0o644)
+		_, _ = p.guestExecutor().execSimple(ctx, vm, pw, fmt.Sprintf("systemctl daemon-reload && systemctl enable %s && systemctl start %s", svcName, svcName))
 		logger.Infof(ctx, "%s/%s: sidecar %s started", pod.Namespace, pod.Name, svcName)
 	}
 }
@@ -144,7 +142,7 @@ func (p *CocoonProvider) applySecurityContext(ctx context.Context, pod *corev1.P
 		// Ensure user exists
 		username := fmt.Sprintf("app-%d", *uid)
 		cmd := fmt.Sprintf("id -u %d >/dev/null 2>&1 || useradd -u %d -m %s", *uid, *uid, username)
-		_, _ = sshExecSimple(ctx, vm, pw, cmd)
+		_, _ = p.guestExecutor().execSimple(ctx, vm, pw, cmd)
 		logger.Infof(ctx, "%s/%s: runAsUser=%d (user=%s)",
 			pod.Namespace, pod.Name, *uid, username)
 	}
@@ -250,7 +248,7 @@ func (p *CocoonProvider) injectSSHKey(ctx context.Context, pod *corev1.Pod, vm *
 	pw := p.sshPass(vm)
 	cmd := fmt.Sprintf("mkdir -p /root/.ssh && echo '%s' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys",
 		pubkey)
-	if _, err := sshExecSimple(ctx, vm, pw, cmd); err != nil {
+	if _, err := p.guestExecutor().execSimple(ctx, vm, pw, cmd); err != nil {
 		logger.Warnf(ctx, "%s/%s: %v", pod.Namespace, pod.Name, err)
 	} else {
 		logger.Infof(ctx, "%s/%s: SSH pubkey injected", pod.Namespace, pod.Name)
@@ -284,54 +282,18 @@ func removePodDNS(podName string) {
 // cocoon-vm-snapshots ConfigMap. On next CreatePod, the provider reads
 // this to pull the suspended snapshot from epoch instead of the base image.
 func (p *CocoonProvider) recordSuspendedSnapshot(ctx context.Context, pod *corev1.Pod, vmName, snapshotRef string) {
-	if vmName == "" || snapshotRef == "" {
-		return
-	}
-	logger := log.WithFunc("provider.recordSuspendedSnapshot")
-	ns := pod.Namespace
-	cmClient := p.kubeClient.CoreV1().ConfigMaps(ns)
-
-	// Ensure the ConfigMap exists.
-	_, err := cmClient.Get(ctx, "cocoon-vm-snapshots", metav1.GetOptions{})
-	if err != nil {
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "cocoon-vm-snapshots", Namespace: ns},
-			Data:       map[string]string{},
-		}
-		if _, createErr := cmClient.Create(ctx, cm, metav1.CreateOptions{}); createErr != nil {
-			logger.Warnf(ctx, "%s: create configmap: %v", vmName, createErr)
-			return
-		}
-	}
-
-	// Patch the data key.
-	patch, _ := json.Marshal(map[string]any{
-		"data": map[string]string{vmName: snapshotRef},
-	})
-	if _, err := cmClient.Patch(ctx, "cocoon-vm-snapshots", types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		logger.Warnf(ctx, "%s: %v", vmName, err)
-	} else {
-		logger.Infof(ctx, "%s -> %s", vmName, snapshotRef)
-	}
+	p.snapshotManager().recordSuspendedSnapshot(ctx, pod, vmName, snapshotRef)
 }
 
 // lookupSuspendedSnapshot reads the cocoon-vm-snapshots ConfigMap to
 // find the epoch snapshot reference for a VM name. Returns "" if not found.
 func (p *CocoonProvider) lookupSuspendedSnapshot(ctx context.Context, ns, vmName string) string {
-	if p.lookupSuspendedSnapshotFn != nil {
-		return p.lookupSuspendedSnapshotFn(ctx, ns, vmName)
-	}
-	cm, err := p.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "cocoon-vm-snapshots", metav1.GetOptions{})
-	if err != nil {
-		return ""
-	}
-	return cm.Data[vmName]
+	return p.snapshotManager().lookupSuspendedSnapshot(ctx, ns, vmName)
 }
 
 // clearSuspendedSnapshot removes a VM's entry from the cocoon-vm-snapshots ConfigMap.
 func (p *CocoonProvider) clearSuspendedSnapshot(ctx context.Context, ns, vmName string) {
-	patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, vmName)
-	_, _ = p.kubeClient.CoreV1().ConfigMaps(ns).Patch(ctx, "cocoon-vm-snapshots", types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	p.snapshotManager().clearSuspendedSnapshot(ctx, ns, vmName)
 }
 
 // ---------- Owner Detection ----------
@@ -575,6 +537,7 @@ func mainAgentVMName(vmName string) string {
 func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string) string {
 	logger := log.WithFunc("provider.forkFromMainAgent")
 	mainVM := mainAgentVMName(vmName)
+	snapshots := p.snapshotManager()
 
 	// Find the slot-0 VM.
 	p.mu.RLock()
@@ -594,9 +557,7 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 
 	// Live snapshot the main agent.
 	forkSnap := vmName + "-fork"
-	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
-
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
+	out, err := snapshots.saveSnapshot(ctx, forkSnap, sourceVM.vmID)
 	if err != nil {
 		logger.Errorf(ctx, err, "snapshot %s failed: %s", mainVM, out)
 		return ""
@@ -609,6 +570,7 @@ func (p *CocoonProvider) forkFromMainAgent(ctx context.Context, _, vmName string
 // Used by CocoonSet controller via cocoon.cis/fork-from annotation.
 func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, targetVMName string) string {
 	logger := log.WithFunc("provider.forkFromVM")
+	snapshots := p.snapshotManager()
 	p.mu.RLock()
 	var sourceVM *CocoonVM
 	for _, vm := range p.vms {
@@ -625,9 +587,7 @@ func (p *CocoonProvider) forkFromVM(ctx context.Context, _, sourceVMName, target
 	}
 
 	forkSnap := targetVMName + "-fork"
-	_, _ = p.cocoonExec(ctx, "snapshot", "rm", forkSnap)
-
-	out, err := p.cocoonExec(ctx, "snapshot", "save", "--name", forkSnap, sourceVM.vmID)
+	out, err := snapshots.saveSnapshot(ctx, forkSnap, sourceVM.vmID)
 	if err != nil {
 		logger.Errorf(ctx, err, "snapshot %s failed: %s", sourceVMName, out)
 		return ""
