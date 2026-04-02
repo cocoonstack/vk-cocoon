@@ -516,7 +516,7 @@ func (p *CocoonProvider) allocateSlotLocked(ns, deployName string) int {
 	maxSlot := -1
 	for _, vm := range p.vms {
 		if strings.HasPrefix(vm.vmName, prefix) {
-			if vm.state == "suspending" || vm.state == "hibernated" {
+			if vm.state == stateSuspending || vm.state == stateHibernated {
 				continue
 			}
 			slotStr := vm.vmName[len(prefix):]

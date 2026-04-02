@@ -130,7 +130,7 @@ func TestCreatePodRecoversManagedVMWhenDiscoveryInitiallyReturnsStale(t *testing
 			return &CocoonVM{
 				vmID:   vmID,
 				vmName: "vk-testns-app-stale",
-				state:  "stopped (stale)",
+				state:  stateStoppedStale,
 			}
 		}
 		return &CocoonVM{

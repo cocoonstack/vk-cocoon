@@ -81,12 +81,8 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 	p.stopProbes(key)
 
 	// Resolve epoch registry URL.
-	imageRaw := ann(pod, AnnImage, "")
-	if imageRaw == "" && len(pod.Spec.Containers) > 0 {
-		imageRaw = pod.Spec.Containers[0].Image
-	}
-	registryURL, _ := parseImageRef(imageRaw)
-	puller := p.getPuller(ctx, registryURL)
+	spec := resolvePodSpec(pod)
+	puller := p.getPuller(ctx, spec.registryURL)
 
 	// 1. Snapshot the running VM.
 	snapshotName := vm.vmName + "-suspend"
@@ -115,8 +111,8 @@ func (p *CocoonProvider) hibernateVM(ctx context.Context, pod *corev1.Pod, vm *C
 
 	// Record snapshot ref for wake.
 	fullRef := snapshotName
-	if registryURL != "" && pushedToEpoch {
-		fullRef = registryURL + "/" + snapshotName
+	if spec.registryURL != "" && pushedToEpoch {
+		fullRef = spec.registryURL + "/" + snapshotName
 	}
 	p.recordSuspendedSnapshot(ctx, pod, vm.vmName, fullRef)
 
@@ -146,12 +142,9 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	logger.Infof(ctx, "%s: starting (vm=%s)", key, vm.vmName)
 
 	// Resolve image and check for suspended snapshot.
-	imageRaw := ann(pod, AnnImage, "")
-	if imageRaw == "" && len(pod.Spec.Containers) > 0 {
-		imageRaw = pod.Spec.Containers[0].Image
-	}
-	registryURL, image := parseImageRef(imageRaw)
-	cloneImage := image
+	spec := resolvePodSpec(pod)
+	registryURL := spec.registryURL
+	cloneImage := spec.cloneImage()
 
 	if ref := p.lookupSuspendedSnapshot(ctx, pod.Namespace, vm.vmName); ref != "" {
 		logger.Infof(ctx, "%s: found suspended snapshot %s", key, ref)
@@ -173,7 +166,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Resource limits.
 	cpu, mem := podResourceLimits(pod)
-	storage := ann(pod, AnnStorage, "100G")
+	storage := spec.storage
 
 	// Clean up any stale VM with same name.
 	if existing := p.discoverVM(ctx, vm.vmName); existing != nil && existing.vmID != "" {
@@ -205,7 +198,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	// Wait for DHCP IP.
 	fresh.podNamespace = pod.Namespace
 	fresh.podName = pod.Name
-	fresh.os = ann(pod, AnnOS, "linux")
+	fresh.os = spec.osType
 	fresh.managed = true
 	fresh.ip = p.waitForDHCPIP(ctx, fresh, 120*time.Second)
 
