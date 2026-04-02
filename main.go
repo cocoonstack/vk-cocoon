@@ -51,11 +51,11 @@ func main() {
 
 	config, err := commonk8s.LoadConfig()
 	if err != nil {
-		logger.Fatalf(ctx, err, "load kubeconfig")
+		logger.Fatalf(ctx, err, "load kubeconfig: %v", err)
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "create clientset")
+		logger.Fatalf(ctx, err, "create clientset: %v", err)
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -94,14 +94,14 @@ func main() {
 		var loadErr error
 		tlsCert, loadErr = tls.LoadX509KeyPair(certPath, keyPath)
 		if loadErr != nil {
-			logger.Fatalf(ctx, loadErr, "load TLS cert")
+			logger.Fatalf(ctx, loadErr, "load TLS cert: %v", loadErr)
 		}
 		logger.Infof(ctx, "using TLS cert from %s", certPath)
 	} else {
 		var genErr error
 		tlsCert, genErr = generateSelfSignedCert(nodeName, nodeIP)
 		if genErr != nil {
-			logger.Fatalf(ctx, genErr, "generate TLS cert")
+			logger.Fatalf(ctx, genErr, "generate TLS cert: %v", genErr)
 		}
 		logger.Info(ctx, "using self-signed TLS cert")
 	}
@@ -117,12 +117,12 @@ func main() {
 		}),
 	)
 	if err != nil {
-		logger.Fatalf(ctx, err, "create node")
+		logger.Fatalf(ctx, err, "create node: %v", err)
 	}
 
 	go func() {
 		if err := n.Run(ctx); err != nil {
-			logger.Fatalf(ctx, err, "node exited")
+			logger.Fatalf(ctx, err, "node exited: %v", err)
 		}
 	}()
 
