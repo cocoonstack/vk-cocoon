@@ -4,8 +4,6 @@ Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.co
 
 ## Overview
 
-`vk-cocoon` registers a virtual node in Kubernetes and translates pod lifecycle operations into VM operations. Each pod becomes a full MicroVM managed by the Cocoon runtime and Cloud Hypervisor.
-
 - **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake
 - **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation
 - **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots
@@ -13,7 +11,9 @@ Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.co
 - **Liveness and readiness probes** -- exec, TCP, and HTTP probes run against the guest VM
 - **ConfigMap and Secret injection** -- volumes and env vars written into the VM via SSH after boot
 - **Windows guests** -- first-class support with RDP access on port 3389
-- **Real metrics** -- CPU and memory stats from Cloud Hypervisor API and host `/proc`
+- **Real metrics** -- CPU and memory stats from the Cloud Hypervisor API and host `/proc`
+
+Each pod becomes a full MicroVM managed by the Cocoon runtime and Cloud Hypervisor.
 
 ## Architecture
 
@@ -56,7 +56,7 @@ Kubernetes API
 - A running Kubernetes cluster with `kubectl` configured
 - [Cocoon](https://github.com/cocoonstack/cocoon) runtime installed on the target node
 - `sshpass` for SSH-based VM access
-- (Optional) An [Epoch](https://github.com/cocoonstack/epoch) registry for snapshot storage
+- Optional [Epoch](https://github.com/cocoonstack/epoch) registry for snapshot storage
 
 ### Download
 
@@ -78,11 +78,11 @@ sudo mv vk-cocoon /usr/local/bin/
 | `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name in Kubernetes |
 | `VK_NODE_IP` | auto-detected | IP address of the host running vk-cocoon |
-| `VK_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+| `VK_LOG_LEVEL` | `info` | Log level for the provider process |
 | `COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary |
 | `COCOON_SSH_PASSWORD` | (none) | Default SSH password for VM access |
 | `EPOCH_REGISTRY_TOKEN` | (none) | Bearer token for Epoch registry auth |
-| `VK_TLS_CERT` / `VK_TLS_KEY` | self-signed | TLS cert/key for the kubelet API |
+| `VK_TLS_CERT` / `VK_TLS_KEY` | self-signed | TLS cert and key for the kubelet API |
 
 ## Quick Start
 
@@ -120,9 +120,10 @@ See [DESIGN.md](DESIGN.md) for the provider's design rationale covering restart 
 
 | Project | Role |
 |---|---|
+| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | Shared metadata, Kubernetes, and logging helpers |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and Hibernation controllers |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Sticky scheduling webhook |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry |
 | [glance](https://github.com/cocoonstack/glance) | Browser-based SSH, RDP, and VNC access |
 
 ## License
