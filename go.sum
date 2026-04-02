@@ -42,8 +42,8 @@ github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b h1:r6VH0faHjZe
 github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b/go.mod h1:Vz9DsVWQQhf3vs21MhPMZpMGSht7O/2vFW2xusFUVOs=
 github.com/cockroachdb/redact v1.1.3 h1:AKZds10rFSIj7qADf0g46UixK8NNLwWTNdCIGS5wfSQ=
 github.com/cockroachdb/redact v1.1.3/go.mod h1:BVNblN9mBWFyMyqK1k3AAiSxhvhfK2oOZZ2lK+dpvRg=
-github.com/cocoonstack/cocoon-operator v0.1.4 h1:rgm7R2azt+6g6x9Sx7iHnHBdKv79tROVjXNZoVB5pNs=
-github.com/cocoonstack/cocoon-operator v0.1.4/go.mod h1:ibOZQjIVq5gk2TtrKcA6krajwx3CoiV8c4cxK6wD3SI=
+github.com/cocoonstack/cocoon-common v0.1.0 h1:YqynC3/LoJWd0SewnaqPysW2Xmpxwh2f5upl6Fn+qW8=
+github.com/cocoonstack/cocoon-common v0.1.0/go.mod h1:K1HRRtnEMxB6S+AxByRELpXvyt5VDUrxjiTafPlCNFE=
 github.com/cocoonstack/epoch v0.1.1 h1:rZ5tno7crdpCltWjTkdWnin2jtrz7ZBjH7bneeEjqME=
 github.com/cocoonstack/epoch v0.1.1/go.mod h1:7bYBWilzj1a1Jb9uF5ihkbnVyqMwAGyNTfL1R6RjIxI=
 github.com/codegangsta/inject v0.0.0-20150114235600-33e0aa1cb7c0/go.mod h1:4Zcjuz89kmFXt9morQgcfYZAYZ5n8WHjt81YYWIwtTM=

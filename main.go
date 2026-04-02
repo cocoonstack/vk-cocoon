@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cocoonstack/cocoon-operator/k8sutil"
-	"github.com/cocoonstack/cocoon-operator/logutil"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/projecteru2/core/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
@@ -33,7 +33,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	logutil.Setup(ctx, "VK_LOG_LEVEL")
+	commonlog.Setup(ctx, "VK_LOG_LEVEL")
 	logger := log.WithFunc("main")
 
 	nodeName := os.Getenv("VK_NODE_NAME")
@@ -49,7 +49,7 @@ func main() {
 		nodeIP = detectNodeIP()
 	}
 
-	config, err := k8sutil.LoadConfig()
+	config, err := commonk8s.LoadConfig()
 	if err != nil {
 		logger.Fatalf(ctx, err, "kubeconfig: %v", err)
 	}

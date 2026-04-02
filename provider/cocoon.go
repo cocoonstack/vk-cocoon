@@ -45,7 +45,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/projecteru2/core/log"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -60,26 +60,26 @@ import (
 
 const (
 	// Annotation keys
-	AnnImage        = cocoonmeta.AnnotationImage
-	AnnMode         = cocoonmeta.AnnotationMode // clone | run
-	AnnStorage      = cocoonmeta.AnnotationStorage
+	AnnImage        = meta.AnnotationImage
+	AnnMode         = meta.AnnotationMode // clone | run
+	AnnStorage      = meta.AnnotationStorage
 	AnnNICs         = "cocoon.cis/nics"
 	AnnStaticIP     = "cocoon.cis/static-ip"
 	AnnDNS          = "cocoon.cis/dns"
 	AnnRootPassword = "cocoon.cis/root-password" //nolint:gosec // annotation key, not a credential
 	AnnSSHPassword  = "cocoon.cis/ssh-password"  //nolint:gosec // annotation key, not a credential
-	AnnManaged      = cocoonmeta.AnnotationManaged
-	AnnOS           = cocoonmeta.AnnotationOS // linux | windows
-	AnnVMName       = cocoonmeta.AnnotationVMName
-	AnnVMID         = cocoonmeta.AnnotationVMID
-	AnnIP           = cocoonmeta.AnnotationIP
+	AnnManaged      = meta.AnnotationManaged
+	AnnOS           = meta.AnnotationOS // linux | windows
+	AnnVMName       = meta.AnnotationVMName
+	AnnVMID         = meta.AnnotationVMID
+	AnnIP           = meta.AnnotationIP
 	AnnMAC          = "cocoon.cis/mac"
 	AnnSnapshotFrom = "cocoon.cis/snapshot-from"
-	AnnHibernate    = cocoonmeta.AnnotationHibernate // "true" → hibernate VM (pod stays)
+	AnnHibernate    = meta.AnnotationHibernate // "true" → hibernate VM (pod stays)
 
 	// CocoonSet controller annotations
-	AnnForkFrom       = cocoonmeta.AnnotationForkFrom       // VM name to fork from (set by CocoonSet controller)
-	AnnSnapshotPolicy = cocoonmeta.AnnotationSnapshotPolicy // always | main-only | never (set by CocoonSet controller)
+	AnnForkFrom       = meta.AnnotationForkFrom       // VM name to fork from (set by CocoonSet controller)
+	AnnSnapshotPolicy = meta.AnnotationSnapshotPolicy // always | main-only | never (set by CocoonSet controller)
 
 	// VM state constants
 	stateRunning    = "running"
