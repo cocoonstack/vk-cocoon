@@ -42,7 +42,7 @@ Kubernetes API
 |---|---|
 | `cocoon.cis/image` | Snapshot name or Epoch URL |
 | `cocoon.cis/os` | Guest OS: `linux` (default) or `windows` |
-| `cocoon.cis/storage` | COW disk size, e.g. `100G` |
+| `cocoon.cis/storage` | COW disk size, e.g. `100G` (defaults: Linux `100G`, Windows `15G`) |
 | `cocoon.cis/hibernate` | Set to `true` to hibernate the VM |
 | `cocoon.cis/vm-name` | Stable VM name for restart recovery |
 | `cocoon.cis/fork-from` | Source VM name for live-fork |
@@ -118,6 +118,8 @@ VK_NODE_IP=192.0.2.10
 COCOON_BIN=/usr/local/bin/cocoon
 VK_LOG_LEVEL=info
 ```
+
+Windows pods default to `2` vCPU, `4Gi` memory, and `15G` storage when limits or `cocoon.cis/storage` are not set.
 
 ## Usage
 

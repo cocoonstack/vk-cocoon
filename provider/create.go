@@ -296,7 +296,7 @@ func (c *CocoonProvider) runCreatePlan(ctx context.Context, req createRequest, p
 	log.WithFunc(req.loggerFunc).Infof(ctx, "%s: cocoon %s OK (requested=%s image=%s)", req.key, plan.effectiveMode, req.mode, plan.logImage())
 	vm := c.discoverCreatedVM(ctx, plan.vmName, parseVMID(out))
 	if vm == nil {
-		vm = &CocoonVM{vmName: plan.vmName, state: stateRunning, cpu: 2, memoryMB: 8192}
+		vm = fallbackCreatedVM(plan)
 	}
 	return vm, nil
 }
@@ -343,4 +343,13 @@ func (c *CocoonProvider) finishCreate(ctx context.Context, req createRequest, pl
 	go c.postBootInject(ctx, req.pod, vm)
 	go c.startProbes(ctx, req.pod, vm)
 	go c.notifyPodStatus(ctx, req.pod.Namespace, req.pod.Name)
+}
+
+func fallbackCreatedVM(plan createPlan) *CocoonVM {
+	return &CocoonVM{
+		vmName:   plan.vmName,
+		state:    stateRunning,
+		cpu:      parseCPUString(plan.cpu),
+		memoryMB: parseMemoryStringMB(plan.mem),
+	}
 }

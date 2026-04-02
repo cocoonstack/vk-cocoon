@@ -16,7 +16,7 @@
 //
 //	cocoon.cis/image          — snapshot or image name (default: container image field)
 //	cocoon.cis/mode           — "clone" (from snapshot) or "run" (from image). Default: clone
-//	cocoon.cis/storage        — COW disk size (e.g. "100G"). Default: "10G"
+//	cocoon.cis/storage        — COW disk size (e.g. "100G"). Default: linux "100G", windows "15G"
 //	cocoon.cis/nics           — NIC count (default: "1")
 //	cocoon.cis/static-ip      — static IP for bridge-static network
 //	cocoon.cis/dns            — comma-separated DNS servers

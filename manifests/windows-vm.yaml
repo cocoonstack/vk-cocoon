@@ -10,7 +10,7 @@ metadata:
     cocoon.cis/mode: "run"
     cocoon.cis/image: "https://registry.example.com/win11-base"
     cocoon.cis/os: "windows"
-    cocoon.cis/storage: "20G"
+    cocoon.cis/storage: "15G"
     cocoon.cis/managed: "true"
 spec:
   nodeName: cocoon-pool

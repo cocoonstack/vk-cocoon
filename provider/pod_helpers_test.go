@@ -62,8 +62,29 @@ func TestResolvePodSpecDefaultsFromContainerImage(t *testing.T) {
 	if got.image != "ubuntu-dev-base" {
 		t.Fatalf("image = %q, want ubuntu-dev-base", got.image)
 	}
-	if got.storage != defaultStorage || got.nics != defaultNICs || got.osType != defaultOSType {
+	if got.storage != defaultLinuxStorage || got.nics != defaultNICs || got.osType != defaultOSType {
 		t.Fatalf("defaults not applied: %#v", got)
+	}
+}
+
+func TestResolvePodSpecWindowsDefaults(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnOS: "windows",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Image: "win11-base"}},
+		},
+	}
+
+	got := resolvePodSpec(pod)
+	if got.osType != osWindows {
+		t.Fatalf("osType = %q, want %q", got.osType, osWindows)
+	}
+	if got.storage != defaultWindowsStorage {
+		t.Fatalf("storage = %q, want %q", got.storage, defaultWindowsStorage)
 	}
 }
 

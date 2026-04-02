@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -117,7 +118,7 @@ func formatResourceCPU(q *resource.Quantity) string {
 // returning cocoon CLI-friendly strings with sensible defaults.
 func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
 	cpu = "2"
-	mem = "8G"
+	mem = defaultMemoryForOS(ann(pod, AnnOS, defaultOSType))
 	if c := pod.Spec.Containers; len(c) > 0 {
 		if s := formatResourceCPU(c[0].Resources.Limits.Cpu()); s != "" {
 			cpu = s
@@ -127,4 +128,38 @@ func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
 		}
 	}
 	return cpu, mem
+}
+
+func defaultMemoryForOS(osType string) string {
+	if osType == osWindows {
+		return "4G"
+	}
+	return "8G"
+}
+
+func parseCPUString(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return 2
+	}
+	return n
+}
+
+func parseMemoryStringMB(raw string) int {
+	raw = strings.TrimSpace(strings.ToUpper(raw))
+	switch {
+	case raw == "":
+		return 8192
+	case strings.HasSuffix(raw, "GI"), strings.HasSuffix(raw, "G"):
+		raw = strings.TrimSuffix(strings.TrimSuffix(raw, "I"), "G")
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n * 1024
+		}
+	case strings.HasSuffix(raw, "MI"), strings.HasSuffix(raw, "M"):
+		raw = strings.TrimSuffix(strings.TrimSuffix(raw, "I"), "M")
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 8192
 }
