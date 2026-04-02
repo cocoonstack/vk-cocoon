@@ -28,8 +28,8 @@ func TestPodResourceLimitsWindowsDefaults(t *testing.T) {
 	}
 
 	cpu, mem := podResourceLimits(pod)
-	if cpu != "2" || mem != "4G" {
-		t.Fatalf("windows defaults = (%s, %s), want (2, 4G)", cpu, mem)
+	if cpu != "4" || mem != "4G" {
+		t.Fatalf("windows defaults = (%s, %s), want (4, 4G)", cpu, mem)
 	}
 }
 
