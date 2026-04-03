@@ -2,7 +2,6 @@ package provider
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"encoding/json"
 	"os"
@@ -94,7 +93,8 @@ func (p *CocoonProvider) inspectVM(ctx context.Context, ref string) *CocoonVM {
 	return inspectToVM(inspect)
 }
 
-// discoverVM finds a VM by name, checking the event stream cache first.
+// discoverVM finds a VM by name, checking the event stream cache first,
+// then falling back to a single cocoon inspect call.
 func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM {
 	if p.discoverVMFn != nil {
 		return p.discoverVMFn(ctx, name)
@@ -104,36 +104,11 @@ func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM 
 			return cv.toCocoonVM()
 		}
 	}
-	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
-		var vms []cocoonVMJSON
-		if err := json.Unmarshal([]byte(out), &vms); err == nil {
-			for _, v := range vms {
-				if v.Name == name || v.Config.Name == name {
-					return jsonToVM(v)
-				}
-			}
-		}
-	}
-	if vm := p.inspectVM(ctx, name); vm != nil {
-		return vm
-	}
-	out, err := p.cocoonExec(ctx, buildListArgs()...)
-	if err != nil {
-		return p.discoverVMText(ctx, name)
-	}
-	var vms []cocoonInspectJSON
-	if err := json.Unmarshal([]byte(out), &vms); err != nil {
-		return p.discoverVMText(ctx, name)
-	}
-	for _, v := range vms {
-		if v.Name == name {
-			return inspectToVM(v)
-		}
-	}
-	return nil
+	return p.inspectVM(ctx, name)
 }
 
-// discoverVMByID finds a VM by ID, checking the event stream cache first.
+// discoverVMByID finds a VM by ID, checking the event stream cache first,
+// then falling back to a single cocoon inspect call.
 func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *CocoonVM {
 	if p.discoverVMByIDFn != nil {
 		return p.discoverVMByIDFn(ctx, vmID)
@@ -143,135 +118,7 @@ func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *Cocoo
 			return cv.toCocoonVM()
 		}
 	}
-	if out, err := p.cocoonExec(ctx, buildLegacyListArgs()...); err == nil {
-		var vms []cocoonVMJSON
-		if err := json.Unmarshal([]byte(out), &vms); err == nil {
-			for _, v := range vms {
-				if v.ID == vmID || strings.HasPrefix(v.ID, vmID) {
-					return jsonToVM(v)
-				}
-			}
-		}
-	}
-	if vm := p.inspectVM(ctx, vmID); vm != nil {
-		return vm
-	}
-	if out, err := p.cocoonExec(ctx, buildListArgs()...); err == nil {
-		var vms []cocoonInspectJSON
-		if err := json.Unmarshal([]byte(out), &vms); err == nil {
-			for _, v := range vms {
-				if v.VMID == vmID || strings.HasPrefix(v.VMID, vmID) {
-					return inspectToVM(v)
-				}
-			}
-		}
-	}
-	out, _ := p.cocoonExec(ctx, buildLegacyTextListArgs()...)
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, vmID) || strings.HasPrefix(line, "VM ID") {
-			continue
-		}
-		vm := parseTextVMLine(sc.Text())
-		if vm == nil {
-			continue
-		}
-		return vm
-	}
-	return nil
-}
-
-func discoverTextVMState(line string) string {
-	line = strings.ToLower(line)
-	switch {
-	case strings.Contains(line, stateStopped) && strings.Contains(line, "stale"):
-		return stateStoppedStale
-	case strings.Contains(line, stateRunning):
-		return stateRunning
-	case strings.Contains(line, stateCreating):
-		return stateCreating
-	case strings.Contains(line, stateStopped):
-		return stateStopped
-	default:
-		return stateUnknown
-	}
-}
-
-func (p *CocoonProvider) discoverVMText(ctx context.Context, name string) *CocoonVM {
-	out, _ := p.cocoonExec(ctx, buildLegacyTextListArgs()...)
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		vm := parseTextVMLine(sc.Text())
-		if vm != nil && vm.vmName == name {
-			vm.ip = cmp.Or(vm.ip, p.resolveIPFromLease(vm.vmName))
-			return vm
-		}
-	}
-	return nil
-}
-
-func jsonToVM(v cocoonVMJSON) *CocoonVM {
-	cniIP := v.IP
-	mac := ""
-	if len(v.NetworkConfigs) > 0 {
-		if v.NetworkConfigs[0].Network.IP != "" {
-			cniIP = v.NetworkConfigs[0].Network.IP
-		}
-		mac = v.NetworkConfigs[0].MAC
-	}
-	if cniIP == "-" || cniIP == "" {
-		cniIP = ""
-	}
-
-	ip := cniIP
-	if mac != "" {
-		if dhcpIP := resolveLeaseByMAC(mac, time.Time{}); dhcpIP != "" {
-			ip = dhcpIP
-		}
-	}
-
-	memMB := int(v.Memory / (1024 * 1024))
-	if memMB == 0 && v.Config.Memory > 0 {
-		memMB = int(v.Config.Memory / (1024 * 1024))
-	}
-	cpu := v.CPU
-	if cpu == 0 {
-		cpu = v.Config.CPU
-	}
-	vmName := v.Name
-	if vmName == "" {
-		vmName = v.Config.Name
-	}
-	return &CocoonVM{
-		vmID:     v.ID,
-		vmName:   vmName,
-		state:    normalizedState(v.State),
-		ip:       ip,
-		mac:      mac,
-		cpu:      cpu,
-		memoryMB: memMB,
-		image:    v.Image,
-	}
-}
-
-func parseTextVMLine(line string) *CocoonVM {
-	fields := strings.Fields(line)
-	if len(fields) < 5 || fields[0] == "VM" {
-		return nil
-	}
-	cpu, _ := strconv.Atoi(fields[3])
-	memMB := 0
-	if trimmed, ok := strings.CutSuffix(fields[4], "MB"); ok {
-		memMB, _ = strconv.Atoi(trimmed)
-	}
-	return &CocoonVM{
-		vmID:     fields[0],
-		vmName:   fields[1],
-		state:    discoverTextVMState(line),
-		cpu:      cpu,
-		memoryMB: memMB,
-	}
+	return p.inspectVM(ctx, vmID)
 }
 
 func inspectToVM(v cocoonInspectJSON) *CocoonVM {

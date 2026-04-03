@@ -1,15 +1,17 @@
 package provider
 
 import (
+	"archive/tar"
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,7 +53,11 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	return nil
 }
 
+// pull streams a snapshot from the registry directly into cocoon via pipe.
+// Flow: GetManifest → stream gzip tar (snapshot.json + blobs) → cocoon snapshot import stdin.
 func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
+	logger := log.WithFunc("provider.pull")
+
 	m, err := p.getManifest(ctx, name, tag)
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
@@ -60,24 +66,7 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 		return fmt.Errorf("manifest %s:%s is a cloud image, not a snapshot", name, tag)
 	}
 
-	sid := m.SnapshotID
-	dataDir := p.paths.SnapshotDataDir(sid)
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dataDir, err)
-	}
-
-	for _, layer := range m.Layers {
-		destPath := filepath.Join(dataDir, layer.Filename)
-		if _, err := os.Stat(destPath); err == nil {
-			log.WithFunc("provider.pull").Infof(ctx, "[epoch]   %s exists, skip", layer.Filename)
-			continue
-		}
-		log.WithFunc("provider.pull").Infof(ctx, "[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
-		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
-			return fmt.Errorf("download %s: %w", layer.Filename, err)
-		}
-	}
-
+	// Download base images first (still file-based, shared blobs).
 	switch {
 	case len(m.BaseImages) > 0:
 		if err := p.downloadBaseImages(ctx, name, m.BaseImages); err != nil {
@@ -89,7 +78,117 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 		}
 	}
 
-	return p.importSnapshotViaCLI(ctx, name, dataDir, m)
+	// Stream snapshot tar.gz into cocoon snapshot import via pipe.
+	if err := p.pipeToImport(ctx, []string{"snapshot", "import", "--name", name}, func(w io.Writer) error {
+		return p.writeSnapshotStream(ctx, name, m, w)
+	}); err != nil {
+		return err
+	}
+
+	logger.Infof(ctx, "[epoch] snapshot %s:%s imported via stream", name, tag)
+	return nil
+}
+
+// writeSnapshotStream writes a gzip-compressed tar archive to w,
+// streaming each blob directly from the registry HTTP response.
+func (p *EpochPuller) writeSnapshotStream(ctx context.Context, name string, m *manifest.Manifest, w io.Writer) error {
+	logger := log.WithFunc("provider.writeSnapshotStream")
+
+	blobIDs := make(map[string]struct{}, len(m.ImageBlobIDs))
+	for k := range m.ImageBlobIDs {
+		blobIDs[k] = struct{}{}
+	}
+
+	envelope := snapshotExportEnvelope{
+		Version: 1,
+		Config: snapshotExportConfig{
+			ID:           m.SnapshotID,
+			Name:         name,
+			Image:        m.Image,
+			ImageBlobIDs: blobIDs,
+			CPU:          m.CPU,
+			Memory:       m.Memory,
+			Storage:      m.Storage,
+			NICs:         m.NICs,
+		},
+	}
+	jsonData, err := json.MarshalIndent(envelope, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal snapshot metadata: %w", err)
+	}
+	jsonData = append(jsonData, '\n')
+
+	now := time.Now()
+	bw := bufio.NewWriterSize(w, 256<<10)
+	gw, _ := gzip.NewWriterLevel(bw, gzip.BestSpeed)
+	tw := tar.NewWriter(gw)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: snapshotJSONName, Size: int64(len(jsonData)),
+		Mode: 0o644, ModTime: now,
+	}); err != nil {
+		return fmt.Errorf("write snapshot.json header: %w", err)
+	}
+	if _, err := tw.Write(jsonData); err != nil {
+		return fmt.Errorf("write snapshot.json: %w", err)
+	}
+
+	for _, layer := range m.Layers {
+		logger.Infof(ctx, "[epoch]   streaming %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
+
+		if err := p.streamBlobToTar(ctx, name, layer, tw, now); err != nil {
+			return fmt.Errorf("stream %s: %w", layer.Filename, err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close tar: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("close gzip: %w", err)
+	}
+	return bw.Flush()
+}
+
+// streamBlobToTar downloads a blob from the registry and writes it as a tar entry.
+func (p *EpochPuller) streamBlobToTar(ctx context.Context, name string, layer manifest.Layer, tw *tar.Writer, modTime time.Time) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name: layer.Filename, Size: layer.Size,
+		Mode: 0o640, ModTime: modTime,
+	}); err != nil {
+		return fmt.Errorf("write tar header: %w", err)
+	}
+
+	body, err := p.streamBlob(ctx, name, layer.Digest)
+	if err != nil {
+		return fmt.Errorf("get blob: %w", err)
+	}
+	defer body.Close() //nolint:errcheck
+
+	if _, err := io.Copy(tw, body); err != nil {
+		return fmt.Errorf("copy blob data: %w", err)
+	}
+	return nil
+}
+
+// streamBlob returns a streaming reader for a blob from the registry.
+func (p *EpochPuller) streamBlob(ctx context.Context, name, digest string) (io.ReadCloser, error) {
+	url := p.blobURL(name, digest)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	p.setAuth(req)
+
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer func() { _ = resp.Body.Close() }()
+		return nil, fmt.Errorf("get blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+	}
+	return resp.Body, nil
 }
 
 func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manifest.Manifest, error) {
@@ -116,60 +215,12 @@ func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manif
 	return decodeJSON[manifest.Manifest](resp.Body)
 }
 
-func (p *EpochPuller) downloadBlob(ctx context.Context, name, digest, destPath string) error {
-	url := p.blobURL(name, digest)
-	if p.authToken() != "" {
-		return p.downloadBlobWithCurl(ctx, url, destPath)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	p.setAuth(req)
-
-	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("get blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
-	}
-
-	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	_, err = io.Copy(f, resp.Body)
-	return err
-}
-
-// Epoch's public gateway intermittently rejects token-authenticated requests
-// from Go's client stack while equivalent curl requests succeed on the same host.
-// When a registry token is configured, use curl for the whole pull path so
-// manifest/blob requests stay on the same known-good client behavior.
 func (p *EpochPuller) getManifestWithCurl(ctx context.Context, url string) (*manifest.Manifest, error) {
 	data, err := p.curlRead(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	return decodeJSON[manifest.Manifest](strings.NewReader(string(data)))
-}
-
-func (p *EpochPuller) downloadBlobWithCurl(ctx context.Context, url, destPath string) error {
-	tmp := destPath + ".part"
-	if err := p.curlWriteFile(ctx, url, tmp); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, destPath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return decodeJSON[manifest.Manifest](bytes.NewReader(data))
 }
 
 func (p *EpochPuller) curlRead(ctx context.Context, url string) ([]byte, error) {
@@ -188,20 +239,6 @@ func (p *EpochPuller) curlRead(ctx context.Context, url string) ([]byte, error) 
 		return nil, fmt.Errorf("curl GET %s: %s", url, strings.TrimSpace(string(ee.Stderr)))
 	}
 	return nil, fmt.Errorf("curl GET %s: %w", url, err)
-}
-
-func (p *EpochPuller) curlWriteFile(ctx context.Context, url, destPath string) error {
-	args := []string{"-fsSL", "--retry", "3", "-o", destPath}
-	if token := p.authToken(); token != "" {
-		args = append(args, "-H", "Authorization: Bearer "+token)
-	}
-	args = append(args, url)
-	cmd := exec.CommandContext(ctx, "curl", args...) //nolint:gosec
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("curl GET %s: %s", url, strings.TrimSpace(string(out)))
 }
 
 func readLimitedBody(body io.Reader) string {

@@ -22,18 +22,6 @@ func buildInspectArgs(ref string) []string {
 	return []string{"inspect", ref}
 }
 
-func buildListArgs() []string {
-	return []string{"list", "--all", "--format", "json"}
-}
-
-func buildLegacyListArgs() []string {
-	return []string{"vm", "list", "--format", "json"}
-}
-
-func buildLegacyTextListArgs() []string {
-	return []string{"vm", "list"}
-}
-
 func cocoonRootDir() string {
 	return cmp.Or(strings.TrimSpace(os.Getenv("COCOON_ROOT_DIR")), epochcocoon.DefaultRootDir)
 }

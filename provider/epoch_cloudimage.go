@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,6 +25,7 @@ func (p *EpochPuller) EnsureCloudImage(ctx context.Context, name string) error {
 	return p.EnsureCloudImageTag(ctx, name, "latest")
 }
 
+// EnsureCloudImageTag ensures a specific cloud image tag is available locally.
 func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string) error {
 	if p.ensureCloudImageTagFn != nil {
 		return p.ensureCloudImageTagFn(ctx, name, tag)
@@ -68,7 +72,7 @@ func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseI
 			continue
 		}
 		log.WithFunc("provider.downloadBaseImages").Infof(ctx, "[epoch]   downloading base image %s...", bi.Filename)
-		if err := p.downloadBlob(ctx, name, bi.Digest, destPath); err != nil {
+		if err := p.downloadBlobToFile(ctx, name, bi.Digest, destPath); err != nil {
 			return fmt.Errorf("download base %s: %w", bi.Filename, err)
 		}
 		_ = os.Chmod(destPath, 0o444) //nolint:gosec // read-only base images
@@ -122,23 +126,83 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-	}()
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
-		return err
+	if _, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body); copyErr != nil {
+		f.Close()          //nolint:errcheck,gosec
+		os.Remove(tmpPath) //nolint:errcheck,gosec
+		return copyErr
 	}
 	gotHex := hex.EncodeToString(h.Sum(nil))
 	if expectedHex != "" && !strings.EqualFold(gotHex, expectedHex) {
+		f.Close()          //nolint:errcheck,gosec
+		os.Remove(tmpPath) //nolint:errcheck,gosec
 		return fmt.Errorf("source image digest mismatch: got %s want %s", gotHex, expectedHex)
 	}
 	if err := f.Close(); err != nil {
+		os.Remove(tmpPath) //nolint:errcheck,gosec
 		return err
 	}
 	return os.Rename(tmpPath, destPath)
+}
+
+// importCloudImage streams cloud image blobs directly into cocoon image import via pipe.
+// Flow: gzip(concat(blobs)) → cocoon image import <name> stdin.
+func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *manifest.Manifest) error {
+	if err := p.pipeToImport(ctx, []string{"image", "import", name}, func(w io.Writer) error {
+		return p.writeCloudImageStream(ctx, name, m, w)
+	}); err != nil {
+		return err
+	}
+
+	// Unregister any stale snapshot with the same name (may not exist).
+	_, _ = p.cocoonExec(ctx, "snapshot", "rm", name)
+
+	log.WithFunc("provider.importCloudImage").Infof(ctx, "[epoch] cloud image %s imported via stream", name)
+	return nil
+}
+
+func (p *EpochPuller) writeCloudImageStream(ctx context.Context, name string, m *manifest.Manifest, w io.Writer) error {
+	logger := log.WithFunc("provider.writeCloudImageStream")
+	bw := bufio.NewWriterSize(w, 256<<10)
+	gw, _ := gzip.NewWriterLevel(bw, gzip.BestSpeed)
+
+	for _, layer := range m.Layers {
+		logger.Infof(ctx, "[epoch]   streaming %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
+
+		body, err := p.streamBlob(ctx, name, layer.Digest)
+		if err != nil {
+			return fmt.Errorf("get blob %s: %w", layer.Filename, err)
+		}
+		if _, copyErr := io.Copy(gw, body); copyErr != nil {
+			body.Close() //nolint:errcheck,gosec
+			return fmt.Errorf("stream %s: %w", layer.Filename, copyErr)
+		}
+		body.Close() //nolint:errcheck,gosec
+	}
+
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("close gzip: %w", err)
+	}
+	return bw.Flush()
+}
+
+// downloadBlobToFile downloads a blob from the registry to a local file (used for base images).
+func (p *EpochPuller) downloadBlobToFile(ctx context.Context, name, digest, destPath string) error {
+	body, err := p.streamBlob(ctx, name, digest)
+	if err != nil {
+		return err
+	}
+	defer body.Close() //nolint:errcheck
+
+	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	_, err = io.Copy(f, body)
+	return err
 }
 
 type cloudImageIndex struct {
@@ -149,46 +213,11 @@ type cloudImageEntry struct {
 	Ref string `json:"ref"`
 }
 
-func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *manifest.Manifest) error {
-	dataDir := p.paths.SnapshotDataDir(m.SnapshotID)
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dataDir, err)
-	}
-
-	partFiles := make([]string, 0, len(m.Layers))
-	for _, layer := range m.Layers {
-		destPath := filepath.Join(dataDir, layer.Filename)
-		partFiles = append(partFiles, destPath)
-		if _, err := os.Stat(destPath); err == nil {
-			continue
-		}
-		log.WithFunc("provider.importCloudImage").Infof(ctx, "[epoch]   downloading %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
-		if err := p.downloadBlob(ctx, name, layer.Digest, destPath); err != nil {
-			return fmt.Errorf("download %s: %w", layer.Filename, err)
-		}
-	}
-
-	args := []string{"image", "import", name}
-	for _, part := range partFiles {
-		args = append(args, "--file", part)
-	}
-	if out, err := p.cocoonExec(ctx, args...); err != nil {
-		return fmt.Errorf("cocoon image import: %w (%s)", err, strings.TrimSpace(out))
-	}
-
-	// Unregister any stale snapshot with the same name (may not exist).
-	_, _ = p.cocoonExec(ctx, "snapshot", "rm", name)
-	if err := os.RemoveAll(dataDir); err != nil {
-		return fmt.Errorf("remove import cache %s: %w", dataDir, err)
-	}
-	return nil
-}
-
 func (p *EpochPuller) cloudImageExists(ctx context.Context, name string) bool {
 	imageDB := filepath.Join(p.rootDir, "cloudimg", "db", "images.json")
 	data, err := os.ReadFile(imageDB) //nolint:gosec // imageDB is from trusted config path
 	if err == nil {
-		if index, jsonErr := decodeJSON[cloudImageIndex](strings.NewReader(string(data))); jsonErr == nil {
+		if index, jsonErr := decodeJSON[cloudImageIndex](bytes.NewReader(data)); jsonErr == nil {
 			if entry := index.Images[name]; entry != nil {
 				return true
 			}
