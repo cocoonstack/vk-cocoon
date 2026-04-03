@@ -237,10 +237,7 @@ func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createReque
 		if suspended.registryURL != "" {
 			registryURL = suspended.registryURL
 		}
-		if slot == 0 {
-			return cloneImage, registryURL, suspended.ref
-		}
-		return cloneImage, registryURL, ""
+		return cloneImage, registryURL, suspended.ref
 	}
 
 	if forkSource := ann(req.pod, AnnForkFrom, ""); forkSource != "" {
