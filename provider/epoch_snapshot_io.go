@@ -12,9 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projecteru2/core/log"
-
 	"github.com/cocoonstack/epoch/manifest"
+	"github.com/projecteru2/core/log"
 )
 
 // snapshotExportEnvelope matches cocoon's types.SnapshotExport.

@@ -11,10 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/projecteru2/core/log"
-
 	"github.com/cocoonstack/epoch/cocoon"
 	"github.com/cocoonstack/epoch/manifest"
+	"github.com/projecteru2/core/log"
 )
 
 // EnsureCloudImage ensures a direct cloud image manifest is imported into the

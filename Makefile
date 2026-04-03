@@ -2,7 +2,7 @@
 
 REPO_PATH := github.com/cocoonstack/vk-cocoon
 BINARY_NAME := vk-cocoon
-GOIMPORTS_LOCAL_PREFIXES := github.com/cocoonstack/
+GOIMPORTS_LOCAL_PREFIXES := github.com/cocoonstack/vk-cocoon
 REVISION := $(shell git rev-parse HEAD || echo unknown)
 BUILTAT := $(shell date +%Y-%m-%dT%H:%M:%S)
 VERSION := $(shell git describe --tags $(shell git rev-list --tags --max-count=1) 2>/dev/null || echo dev)

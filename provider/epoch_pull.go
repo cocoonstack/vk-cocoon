@@ -13,10 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projecteru2/core/log"
-
 	"github.com/cocoonstack/epoch/cocoon"
 	"github.com/cocoonstack/epoch/manifest"
+	"github.com/projecteru2/core/log"
 )
 
 // EnsureSnapshot ensures a snapshot is available locally, pulling via HTTP if needed.

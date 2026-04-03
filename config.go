@@ -5,11 +5,10 @@ import (
 	"os"
 	"strings"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/projecteru2/core/log"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
 const defaultKubeconfigPath = "/etc/cocoon/kubeconfig"

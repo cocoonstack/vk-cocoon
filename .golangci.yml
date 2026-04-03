@@ -74,4 +74,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/cocoonstack/
+        - github.com/cocoonstack/vk-cocoon

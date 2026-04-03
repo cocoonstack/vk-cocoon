@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/projecteru2/core/log"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
@@ -25,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 

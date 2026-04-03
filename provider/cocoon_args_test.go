@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -19,7 +19,7 @@ func TestBuildRunArgsLinux(t *testing.T) {
 		"--disk", "100G",
 		"ubuntu.img",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("buildRunArgs(linux) mismatch:\n got: %#v\nwant: %#v", got, want)
 	}
 }
@@ -38,7 +38,7 @@ func TestBuildRunArgsWindows(t *testing.T) {
 		"--disk", "100G",
 		"win1125h2",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("buildRunArgs(windows) mismatch:\n got: %#v\nwant: %#v", got, want)
 	}
 }
@@ -50,7 +50,7 @@ func TestBuildCloneArgs(t *testing.T) {
 		"--name", "vm-clone",
 		"snapshot-ref",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("buildCloneArgs mismatch:\n got: %#v\nwant: %#v", got, want)
 	}
 }
