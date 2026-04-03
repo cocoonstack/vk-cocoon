@@ -33,8 +33,7 @@ func (p *CocoonProvider) findOtherActivePodForVMID(ctx context.Context, pod *cor
 			p.mu.RUnlock()
 			return key
 		}
-		p.mu.RUnlock()
-		return key
+		continue
 	}
 	p.mu.RUnlock()
 

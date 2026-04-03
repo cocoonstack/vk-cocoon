@@ -31,6 +31,7 @@ type createPlan struct {
 	requestedMode string
 	effectiveMode string
 	registryURL   string
+	suspendedRef  string
 	runImage      string
 	cloneImage    string
 	cpu           string
@@ -195,7 +196,7 @@ func (c *CocoonProvider) reserveManagedVMName(ctx context.Context, req createReq
 }
 
 func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest, vmName string) createPlan {
-	cloneImage, registryURL := c.resolveCloneSource(ctx, req, vmName)
+	cloneImage, registryURL, suspendedRef := c.resolveCloneSource(ctx, req, vmName)
 	cpu, mem := podResourceLimits(req.pod)
 
 	plan := createPlan{
@@ -203,6 +204,7 @@ func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest,
 		requestedMode: req.mode,
 		effectiveMode: req.mode,
 		registryURL:   registryURL,
+		suspendedRef:  suspendedRef,
 		runImage:      req.runImage,
 		cloneImage:    cloneImage,
 		cpu:           cpu,
@@ -218,41 +220,44 @@ func (c *CocoonProvider) buildCreatePlan(ctx context.Context, req createRequest,
 	return plan
 }
 
-func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createRequest, vmName string) (string, string) {
+func (c *CocoonProvider) resolveCloneSource(ctx context.Context, req createRequest, vmName string) (string, string, string) {
 	cloneImage := req.image
 	registryURL := req.registry
 	if req.mode != modeClone {
-		return cloneImage, registryURL
+		return cloneImage, registryURL, ""
 	}
 
 	logger := log.WithFunc(req.loggerFunc)
 	slot := extractSlotFromVMName(vmName)
 	snapshots := c.snapshotManager()
 
-	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, req.pod.Namespace, vmName, slot == 0); ok {
+	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, req.pod.Namespace, vmName, false); ok {
 		logger.Infof(ctx, "%s: restoring from suspended snapshot %s", req.key, suspended.ref)
 		cloneImage = suspended.snapshot
 		if suspended.registryURL != "" {
 			registryURL = suspended.registryURL
 		}
-		return cloneImage, registryURL
+		if slot == 0 {
+			return cloneImage, registryURL, suspended.ref
+		}
+		return cloneImage, registryURL, ""
 	}
 
 	if forkSource := ann(req.pod, AnnForkFrom, ""); forkSource != "" {
 		if forkSnap := c.forkFromVM(ctx, req.pod.Namespace, forkSource, vmName); forkSnap != "" {
 			logger.Infof(ctx, "%s: forking from %s (CocoonSet annotation), snapshot %s", req.key, forkSource, forkSnap)
-			return forkSnap, registryURL
+			return forkSnap, registryURL, ""
 		}
 	}
 
 	if slot > 0 {
 		if forkSnap := c.forkFromMainAgent(ctx, req.pod.Namespace, vmName); forkSnap != "" {
 			logger.Infof(ctx, "%s: forking sub-agent from slot-0 snapshot %s", req.key, forkSnap)
-			return forkSnap, registryURL
+			return forkSnap, registryURL, ""
 		}
 	}
 
-	return cloneImage, registryURL
+	return cloneImage, registryURL, ""
 }
 
 // adoptRunningVM checks the persistent podMap for a previously tracked VM
@@ -434,6 +439,9 @@ func (c *CocoonProvider) finishCreate(ctx context.Context, req createRequest, pl
 
 	c.storePodVM(ctx, req.key, req.pod, vm, podAnnotation{key: AnnSnapshotFrom, value: plan.snapshotFrom()})
 	c.podMap.Store(req.key, vm.vmID, vm.vmName, vm.image)
+	if plan.suspendedRef != "" {
+		c.snapshotManager().clearSuspendedSnapshot(ctx, req.pod.Namespace, vm.vmName)
+	}
 	go c.postBootInject(ctx, req.pod, vm)
 	go c.startProbes(ctx, req.pod, vm)
 	go c.notifyPodStatus(ctx, req.pod.Namespace, req.pod.Name)

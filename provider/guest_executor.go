@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -31,9 +32,10 @@ func (guestExecutor) command(ctx context.Context, vm *CocoonVM, password string,
 }
 
 func (guestExecutor) writeFile(ctx context.Context, vm *CocoonVM, password, path string, data []byte, mode int) error {
-	dir := path[:strings.LastIndex(path, "/")]
+	dir := filepath.Dir(path)
 	cmd := guestExecutor{}.command(ctx, vm, password, false,
-		fmt.Sprintf("mkdir -p %s && cat > %s && chmod %04o %s", dir, path, mode, path))
+		fmt.Sprintf("mkdir -p %s && cat > %s && chmod %04o %s",
+			shellQuoteJoin([]string{dir}), shellQuoteJoin([]string{path}), mode, shellQuoteJoin([]string{path})))
 	cmd.Stdin = strings.NewReader(string(data))
 	out, err := cmd.CombinedOutput()
 	if err != nil {

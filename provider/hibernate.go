@@ -119,7 +119,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 	cloneImage := spec.cloneImage()
 	snapshots := p.snapshotManager()
 
-	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, pod.Namespace, vm.vmName, true); ok {
+	if suspended, ok := snapshots.consumeSuspendedSnapshot(ctx, pod.Namespace, vm.vmName, false); ok {
 		logger.Infof(ctx, "%s: found suspended snapshot %s", key, suspended.ref)
 		cloneImage = suspended.snapshot
 		if suspended.registryURL != "" {
@@ -206,6 +206,7 @@ func (p *CocoonProvider) wakeVM(ctx context.Context, pod *corev1.Pod, vm *Cocoon
 
 	// Update in-memory pod annotations.
 	p.syncPodRuntimeMetadata(ctx, key, fresh)
+	snapshots.clearSuspendedSnapshot(ctx, pod.Namespace, vm.vmName)
 
 	// Post-boot inject + probes.
 	go p.postBootInject(ctx, pod, vm)
