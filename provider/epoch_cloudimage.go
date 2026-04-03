@@ -198,7 +198,7 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *mani
 		args = append(args, "--file", part)
 	}
 	if out, err := p.cocoonExec(ctx, args...); err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
+		return fmt.Errorf("cocoon image import: %w (%s)", err, strings.TrimSpace(out))
 	}
 
 	// Unregister any stale snapshot with the same name (may not exist).

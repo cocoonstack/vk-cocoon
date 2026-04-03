@@ -37,7 +37,7 @@ func (guestExecutor) writeFile(ctx context.Context, vm *CocoonVM, password, path
 	cmd.Stdin = strings.NewReader(string(data))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("sshWriteFile %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("ssh write file %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

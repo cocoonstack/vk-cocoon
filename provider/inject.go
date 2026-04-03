@@ -64,7 +64,7 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 	target := ann(pod, AnnEnvFile, "/opt/agent/pod.env")
 	pw := p.sshPass(vm)
 	if err := p.guestExecutor().writeFile(ctx, vm, pw, target, []byte(content), 0o600); err != nil {
-		return "", fmt.Errorf("injectEnvVars: %w", err)
+		return "", fmt.Errorf("inject env vars: %w", err)
 	}
 	log.WithFunc("provider.injectEnvVars").Infof(ctx, "%s/%s: wrote %d vars to %s", pod.Namespace, pod.Name, len(envs), target)
 	return hash, nil
