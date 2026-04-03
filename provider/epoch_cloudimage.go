@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,64 +53,9 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 	return nil
 }
 
-func (p *EpochPuller) ensureLocalSnapshotMetadata(name string) (bool, error) {
-	db, err := p.paths.ReadSnapshotDB()
-	if err != nil {
-		return false, err
-	}
-	sid, ok := db.Names[name]
-	if !ok {
-		return false, nil
-	}
-	rec := db.Snapshots[sid]
-	if rec == nil {
-		return false, nil
-	}
-	if err := hydrateSnapshotRecord(rec); err != nil {
-		return false, err
-	}
-	return true, p.paths.WriteSnapshotDB(db)
-}
-
-func (p *EpochPuller) updateSnapshotDB(m *manifest.Manifest, name, dataDir string) error {
-	db, err := p.paths.ReadSnapshotDB()
-	if err != nil {
-		return err
-	}
-
-	blobIDs := make(map[string]struct{})
-	for _, bi := range m.BaseImages {
-		blobIDs[trimBlobExt(bi.Filename)] = struct{}{}
-	}
-	for id, filename := range m.ImageBlobIDs {
-		if id != "" {
-			blobIDs[id] = struct{}{}
-			continue
-		}
-		if filename != "" {
-			blobIDs[trimBlobExt(filename)] = struct{}{}
-		}
-	}
-
-	rec := &cocoon.SnapshotRecord{
-		ID:           m.SnapshotID,
-		Name:         name,
-		Image:        m.Image,
-		ImageBlobIDs: blobIDs,
-		CPU:          m.CPU,
-		Memory:       m.Memory,
-		Storage:      m.Storage,
-		NICs:         m.NICs,
-		CreatedAt:    m.CreatedAt,
-		DataDir:      dataDir,
-	}
-	if err := hydrateSnapshotRecord(rec); err != nil {
-		return fmt.Errorf("hydrate snapshot metadata: %w", err)
-	}
-	db.Snapshots[m.SnapshotID] = rec
-	db.Names[name] = m.SnapshotID
-
-	return p.paths.WriteSnapshotDB(db)
+func (p *EpochPuller) localSnapshotExists(ctx context.Context, name string) bool {
+	_, err := p.cocoonExec(ctx, "snapshot", "inspect", name)
+	return err == nil
 }
 
 // isCloudImageManifest returns true if the manifest describes a direct cloud
@@ -230,45 +174,6 @@ type cloudImageEntry struct {
 	Ref string `json:"ref"`
 }
 
-type chSnapshotConfig struct {
-	CPUs struct {
-		BootVCPUs int `json:"boot_vcpus"`
-	} `json:"cpus"`
-	Memory struct {
-		Size int64 `json:"size"`
-	} `json:"memory"`
-	Nets []json.RawMessage `json:"net"`
-}
-
-func hydrateSnapshotRecord(rec *cocoon.SnapshotRecord) error {
-	if rec == nil || rec.DataDir == "" {
-		return nil
-	}
-	configPath := filepath.Join(rec.DataDir, "config.json")
-	data, err := os.ReadFile(configPath) //nolint:gosec // configPath is from local snapshot data directory
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	var cfg chSnapshotConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("parse %s: %w", configPath, err)
-	}
-	if rec.CPU == 0 {
-		rec.CPU = cfg.CPUs.BootVCPUs
-	}
-	if rec.Memory == 0 {
-		rec.Memory = cfg.Memory.Size
-	}
-	if rec.NICs == 0 {
-		rec.NICs = len(cfg.Nets)
-	}
-	return nil
-}
-
 func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *manifest.Manifest) error {
 	dataDir := p.paths.SnapshotDataDir(m.SnapshotID)
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
@@ -296,24 +201,10 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *mani
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
 	}
 
-	if err := p.removeSnapshotRecord(name, m.SnapshotID); err != nil {
-		return fmt.Errorf("cleanup stale snapshot db entry: %w", err)
-	}
+	// Unregister any stale snapshot with the same name (may not exist).
+	_, _ = p.cocoonExec(ctx, "snapshot", "rm", name)
 	if err := os.RemoveAll(dataDir); err != nil {
 		return fmt.Errorf("remove import cache %s: %w", dataDir, err)
-	}
-	return nil
-}
-
-func (p *EpochPuller) removeSnapshotRecord(name, snapshotID string) error {
-	db, err := p.paths.ReadSnapshotDB()
-	if err != nil {
-		return err
-	}
-	if existingID, ok := db.Names[name]; ok && (snapshotID == "" || existingID == snapshotID) {
-		delete(db.Names, name)
-		delete(db.Snapshots, existingID)
-		return p.paths.WriteSnapshotDB(db)
 	}
 	return nil
 }
@@ -333,15 +224,6 @@ func (p *EpochPuller) cloudImageExists(ctx context.Context, name string) bool {
 	}
 	_, err = p.cocoonExec(ctx, "image", "inspect", name)
 	return err == nil
-}
-
-func trimBlobExt(filename string) string {
-	for _, ext := range []string{".qcow2", ".raw"} {
-		if trimmed, ok := strings.CutSuffix(filename, ext); ok {
-			return trimmed
-		}
-	}
-	return filename
 }
 
 func shortHex(s string) string {

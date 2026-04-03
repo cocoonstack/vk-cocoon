@@ -35,9 +35,7 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 		return nil
 	}
 
-	if ok, err := p.ensureLocalSnapshotMetadata(name); err != nil {
-		return fmt.Errorf("repair local snapshot %s: %w", name, err)
-	} else if ok {
+	if p.localSnapshotExists(ctx, name) {
 		p.markPulled(ref)
 		return nil
 	}
@@ -92,7 +90,7 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 		}
 	}
 
-	return p.updateSnapshotDB(m, name, dataDir)
+	return p.importSnapshotViaCLI(ctx, name, dataDir, m)
 }
 
 func (p *EpochPuller) getManifest(ctx context.Context, name, tag string) (*manifest.Manifest, error) {

@@ -14,8 +14,8 @@ import (
 
 // vmWatchEvent matches the JSON output of `cocoon vm status --event --format json`.
 type vmWatchEvent struct {
-	Event string          `json:"event"` // ADDED, MODIFIED, DELETED
-	VM    vmWatchEventVM  `json:"vm"`
+	Event string         `json:"event"` // ADDED, MODIFIED, DELETED
+	VM    vmWatchEventVM `json:"vm"`
 }
 
 // vmWatchEventVM is the VM object emitted by cocoon's status event stream.

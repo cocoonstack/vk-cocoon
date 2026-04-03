@@ -21,31 +21,22 @@ import (
 )
 
 // PushSnapshot uploads a local snapshot to the epoch registry via HTTP.
-// It reads the snapshot files from the local data directory, uploads each
-// as a content-addressable blob, builds a manifest, and uploads it.
+// It exports the snapshot via `cocoon snapshot export`, extracts the archive,
+// uploads each file as a content-addressable blob, and builds a manifest.
 func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string) error {
 	tag = cmp.Or(tag, "latest")
 	log.WithFunc("provider.PushSnapshot").Infof(ctx, "[epoch] pushing %s:%s via HTTP...", snapshotName, tag)
 	start := time.Now()
 
-	db, err := p.paths.ReadSnapshotDB()
+	cfg, dataDir, err := p.exportSnapshotForPush(ctx, snapshotName)
 	if err != nil {
-		return fmt.Errorf("read snapshot DB: %w", err)
+		return err
 	}
+	defer os.RemoveAll(dataDir) //nolint:errcheck
 
-	sid, ok := db.Names[snapshotName]
-	if !ok {
-		return fmt.Errorf("snapshot %q not found in local DB", snapshotName)
-	}
-	rec := db.Snapshots[sid]
-	if rec == nil {
-		return fmt.Errorf("snapshot record %s not found", sid)
-	}
-
-	dataDir := cmp.Or(rec.DataDir, p.paths.SnapshotDataDir(sid))
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
-		return fmt.Errorf("read snapshot dir %s: %w", dataDir, err)
+		return fmt.Errorf("read exported dir %s: %w", dataDir, err)
 	}
 
 	var layers []manifest.Layer
@@ -55,9 +46,9 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 			continue
 		}
 		filePath := filepath.Join(dataDir, entry.Name())
-		digest, size, err := p.pushBlob(ctx, snapshotName, filePath)
-		if err != nil {
-			return fmt.Errorf("push blob %s: %w", entry.Name(), err)
+		digest, size, blobErr := p.pushBlob(ctx, snapshotName, filePath)
+		if blobErr != nil {
+			return fmt.Errorf("push blob %s: %w", entry.Name(), blobErr)
 		}
 		layers = append(layers, manifest.Layer{
 			Digest:   digest,
@@ -68,20 +59,21 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		log.WithFunc("provider.PushSnapshot").Infof(ctx, "[epoch]   %s -> sha256:%s (%s)", entry.Name(), digest[:12], cocoon.HumanSize(size))
 	}
 
+	// Base images from cloudimg blob dir (if referenced by snapshot).
 	var (
 		baseImages   []manifest.Layer
 		imageBlobIDs = make(map[string]string)
 	)
-	if rec.ImageBlobIDs != nil {
+	if cfg.ImageBlobIDs != nil {
 		blobDir := p.paths.CloudimgBlobDir()
-		for hexID := range rec.ImageBlobIDs {
+		for hexID := range cfg.ImageBlobIDs {
 			for _, ext := range []string{".qcow2", ".raw", ""} {
 				fp := filepath.Join(blobDir, hexID+ext)
-				if _, err := os.Stat(fp); err == nil {
+				if _, statErr := os.Stat(fp); statErr == nil {
 					imageBlobIDs[hexID] = filepath.Base(fp)
-					digest, size, err := p.pushBlob(ctx, snapshotName, fp)
-					if err != nil {
-						log.WithFunc("provider.PushSnapshot").Warnf(ctx, "[epoch]   skipping base image %s upload: %v", shortHex(hexID), err)
+					digest, size, blobErr := p.pushBlob(ctx, snapshotName, fp)
+					if blobErr != nil {
+						log.WithFunc("provider.PushSnapshot").Warnf(ctx, "[epoch]   skipping base image %s upload: %v", shortHex(hexID), blobErr)
 						break
 					}
 					baseImages = append(baseImages, manifest.Layer{
@@ -100,17 +92,16 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		SchemaVersion: 1,
 		Name:          snapshotName,
 		Tag:           tag,
-		SnapshotID:    sid,
-		Image:         rec.Image,
+		SnapshotID:    cfg.ID,
+		Image:         cfg.Image,
 		ImageBlobIDs:  imageBlobIDs,
-		CPU:           rec.CPU,
-		Memory:        rec.Memory,
-		Storage:       rec.Storage,
-		NICs:          rec.NICs,
+		CPU:           cfg.CPU,
+		Memory:        cfg.Memory,
+		Storage:       cfg.Storage,
+		NICs:          cfg.NICs,
 		Layers:        layers,
 		BaseImages:    baseImages,
 		TotalSize:     totalSize,
-		CreatedAt:     rec.CreatedAt,
 		PushedAt:      time.Now(),
 	}
 
