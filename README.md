@@ -5,8 +5,10 @@ Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.co
 ## Overview
 
 - **Snapshot-aware lifecycle** -- create from snapshots, hibernate running VMs to Epoch, and restore on wake
+- **Restart recovery** -- persistent pod state with event-driven VM cache; adopt-on-restart reconnects to surviving VMs
 - **Slot-based naming** -- Deployment replicas get stable VM names with deterministic slot allocation
 - **Live fork** -- sub-agents clone from the main agent (slot 0) via live snapshots
+- **Streaming snapshot I/O** -- snapshot import and export via `cocoon snapshot import/export` CLI for reliable archive handling
 - **Full kubectl support** -- `exec`, `logs`, `attach`, and `port-forward` bridged through SSH
 - **Liveness and readiness probes** -- exec, TCP, and HTTP probes run against the guest VM
 - **ConfigMap and Secret injection** -- volumes and env vars written into the VM via SSH after boot
