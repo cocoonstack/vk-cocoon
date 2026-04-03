@@ -57,7 +57,7 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
 	}
-	if isCloudImageManifest(m) {
+	if m.IsCloudImage() {
 		return fmt.Errorf("manifest %s:%s is a cloud image, not a snapshot", name, tag)
 	}
 

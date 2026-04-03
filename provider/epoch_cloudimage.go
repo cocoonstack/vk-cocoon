@@ -41,7 +41,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
 	}
-	if !isCloudImageManifest(m) {
+	if !m.IsCloudImage() {
 		return fmt.Errorf("manifest %s:%s is not a direct cloud image", name, tag)
 	}
 
@@ -56,30 +56,6 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 func (p *EpochPuller) localSnapshotExists(ctx context.Context, name string) bool {
 	_, err := p.cocoonExec(ctx, "snapshot", "inspect", name)
 	return err == nil
-}
-
-// isCloudImageManifest returns true if the manifest describes a direct cloud
-// image (disk layers only, no snapshot config or base images).
-func isCloudImageManifest(m *manifest.Manifest) bool {
-	if m == nil || len(m.Layers) == 0 {
-		return false
-	}
-	if len(m.BaseImages) > 0 || len(m.ImageBlobIDs) > 0 {
-		return false
-	}
-	hasConfig := false
-	hasDiskLayer := false
-	for _, layer := range m.Layers {
-		switch layer.Filename {
-		case "config.json", "state.json", "memory-ranges", "cidata.img":
-			hasConfig = true
-		}
-		if strings.HasSuffix(layer.Filename, ".qcow2") || strings.Contains(layer.Filename, ".qcow2.part.") ||
-			strings.HasSuffix(layer.Filename, ".raw") || strings.Contains(layer.Filename, ".raw.part.") {
-			hasDiskLayer = true
-		}
-	}
-	return !hasConfig && hasDiskLayer
 }
 
 func (p *EpochPuller) downloadBaseImages(ctx context.Context, name string, baseImages []manifest.Layer) error {
