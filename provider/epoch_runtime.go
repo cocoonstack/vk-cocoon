@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -69,6 +70,69 @@ func (p *EpochPuller) pipeToImport(ctx context.Context, args []string, writeFn f
 		return importErr
 	}
 	return writeErr
+}
+
+func (p *EpochPuller) copyBlob(ctx context.Context, name, digest string, w io.Writer) error {
+	url := p.blobURL(name, digest)
+	if p.authToken() != "" {
+		return p.curlCopy(ctx, url, w)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	p.setAuth(req)
+
+	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("get blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+	}
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *EpochPuller) curlCopy(ctx context.Context, url string, w io.Writer) error {
+	args := []string{"-fsSL", "--retry", "3"}
+	if token := p.authToken(); token != "" {
+		args = append(args, "-H", "Authorization: Bearer "+token)
+	}
+	args = append(args, url)
+
+	cmd := exec.CommandContext(ctx, "curl", args...) //nolint:gosec
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("curl GET %s: stdout pipe: %w", url, err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("curl GET %s: %w", url, err)
+	}
+
+	if _, err := io.Copy(w, stdout); err != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return fmt.Errorf("curl GET %s: %w", url, err)
+	}
+	if err := cmd.Wait(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("curl GET %s: %s: %w", url, msg, err)
+		}
+		return fmt.Errorf("curl GET %s: %w", url, err)
+	}
+	return nil
 }
 
 // putBlob uploads a blob to the registry via PUT /v2/{name}/blobs/sha256:{digest}.

@@ -30,7 +30,7 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 	logger.Infof(ctx, "[epoch] pushing %s:%s via HTTP...", snapshotName, tag)
 	start := time.Now()
 
-	cfg, layers, err := p.exportAndUploadBlobs(ctx, snapshotName)
+	cfg, layers, layerHeaders, err := p.exportAndUploadBlobs(ctx, snapshotName)
 	if err != nil {
 		return err
 	}
@@ -58,9 +58,10 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 						break
 					}
 					baseImages = append(baseImages, manifest.Layer{
-						Digest:   digest,
-						Size:     size,
-						Filename: filepath.Base(fp),
+						Digest:    digest,
+						Size:      size,
+						Filename:  filepath.Base(fp),
+						MediaType: manifest.MediaTypeForFile(filepath.Base(fp)),
 					})
 					totalSize += size
 					break
@@ -69,24 +70,27 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 		}
 	}
 
-	m := &manifest.Manifest{
-		SchemaVersion: 1,
-		Name:          snapshotName,
-		Tag:           tag,
-		SnapshotID:    cfg.ID,
-		Image:         cfg.Image,
-		ImageBlobIDs:  imageBlobIDs,
-		CPU:           cfg.CPU,
-		Memory:        cfg.Memory,
-		Storage:       cfg.Storage,
-		NICs:          cfg.NICs,
-		Layers:        layers,
-		BaseImages:    baseImages,
-		TotalSize:     totalSize,
-		PushedAt:      time.Now(),
+	doc := &epochManifestDocument{
+		Manifest: manifest.Manifest{
+			SchemaVersion: 1,
+			Name:          snapshotName,
+			Tag:           tag,
+			SnapshotID:    cfg.ID,
+			Image:         cfg.Image,
+			ImageBlobIDs:  imageBlobIDs,
+			CPU:           cfg.CPU,
+			Memory:        cfg.Memory,
+			Storage:       cfg.Storage,
+			NICs:          cfg.NICs,
+			Layers:        layers,
+			BaseImages:    baseImages,
+			TotalSize:     totalSize,
+			PushedAt:      time.Now(),
+		},
+		LayerHeaders: layerHeaders,
 	}
 
-	if err := p.pushManifest(ctx, snapshotName, tag, m); err != nil {
+	if err := p.pushManifest(ctx, snapshotName, tag, doc); err != nil {
 		return fmt.Errorf("push manifest: %w", err)
 	}
 
@@ -96,42 +100,48 @@ func (p *EpochPuller) PushSnapshot(ctx context.Context, snapshotName, tag string
 
 // exportAndUploadBlobs streams `cocoon snapshot export -o -` and uploads each
 // tar entry as a blob. Returns the parsed snapshot config and layer list.
-func (p *EpochPuller) exportAndUploadBlobs(ctx context.Context, name string) (*snapshotExportConfig, []manifest.Layer, error) {
+func (p *EpochPuller) exportAndUploadBlobs(ctx context.Context, name string) (*snapshotExportConfig, []manifest.Layer, map[string]snapshotLayerHeader, error) {
 	cmd := p.buildCocoonCmd(ctx, "snapshot", "export", name, "-o", "-")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start cocoon snapshot export: %w", err)
+		return nil, nil, nil, fmt.Errorf("start cocoon snapshot export: %w", err)
 	}
 
-	cfg, layers, readErr := p.readAndUploadTarEntries(ctx, name, stdout)
+	cfg, layers, layerHeaders, readErr := p.readAndUploadTarEntries(ctx, name, stdout)
 	// Ensure we always wait for the subprocess.
 	if waitErr := cmd.Wait(); waitErr != nil && readErr == nil {
-		return nil, nil, fmt.Errorf("cocoon snapshot export: %w", waitErr)
+		return nil, nil, nil, fmt.Errorf("cocoon snapshot export: %w", waitErr)
 	}
 	if readErr != nil {
-		return nil, nil, readErr
+		return nil, nil, nil, readErr
 	}
-	return cfg, layers, nil
+	return cfg, layers, layerHeaders, nil
 }
 
 // readAndUploadTarEntries reads a gzip tar stream, parses snapshot.json,
 // and uploads each data file as a blob via temp file + hash.
-func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, r io.Reader) (*snapshotExportConfig, []manifest.Layer, error) {
+func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, r io.Reader) (*snapshotExportConfig, []manifest.Layer, map[string]snapshotLayerHeader, error) {
 	logger := log.WithFunc("provider.readAndUploadTarEntries")
 	gr, err := gzip.NewReader(r)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decompress export stream: %w", err)
+		return nil, nil, nil, fmt.Errorf("decompress export stream: %w", err)
 	}
-	defer gr.Close() //nolint:errcheck
+	closed := false
+	defer func() {
+		if !closed {
+			_ = gr.Close()
+		}
+	}()
 
 	tr := tar.NewReader(gr)
 	var (
-		cfg    *snapshotExportConfig
-		layers []manifest.Layer
+		cfg          *snapshotExportConfig
+		layers       []manifest.Layer
+		layerHeaders = make(map[string]snapshotLayerHeader)
 	)
 
 	for {
@@ -140,13 +150,13 @@ func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, 
 			break
 		}
 		if nextErr != nil {
-			return nil, nil, fmt.Errorf("read tar entry: %w", nextErr)
+			return nil, nil, nil, fmt.Errorf("read tar entry: %w", nextErr)
 		}
 
 		if hdr.Name == snapshotJSONName {
 			var envelope snapshotExportEnvelope
 			if decErr := json.NewDecoder(tr).Decode(&envelope); decErr != nil {
-				return nil, nil, fmt.Errorf("parse snapshot.json: %w", decErr)
+				return nil, nil, nil, fmt.Errorf("parse snapshot.json: %w", decErr)
 			}
 			cfg = &envelope.Config
 			continue
@@ -155,20 +165,29 @@ func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, 
 		// Write entry to temp file while computing hash, then upload.
 		digest, size, uploadErr := p.uploadTarEntry(ctx, name, hdr.Name, tr, hdr.Size)
 		if uploadErr != nil {
-			return nil, nil, fmt.Errorf("upload %s: %w", hdr.Name, uploadErr)
+			return nil, nil, nil, fmt.Errorf("upload %s: %w", hdr.Name, uploadErr)
 		}
 		layers = append(layers, manifest.Layer{
-			Digest:   digest,
-			Size:     size,
-			Filename: hdr.Name,
+			Digest:    digest,
+			Size:      size,
+			Filename:  hdr.Name,
+			MediaType: manifest.MediaTypeForFile(hdr.Name),
 		})
+		layerHeaders[hdr.Name] = snapshotLayerHeaderFromTarHeader(hdr)
 		logger.Infof(ctx, "[epoch]   %s -> sha256:%s (%s)", hdr.Name, digest[:12], cocoon.HumanSize(size))
 	}
 
 	if cfg == nil {
-		return nil, nil, fmt.Errorf("snapshot.json not found in export stream")
+		return nil, nil, nil, fmt.Errorf("snapshot.json not found in export stream")
 	}
-	return cfg, layers, nil
+	if _, err := io.Copy(io.Discard, gr); err != nil { //nolint:gosec // export stream comes from trusted local cocoon snapshot export
+		return nil, nil, nil, fmt.Errorf("gzip integrity check: %w", err)
+	}
+	if err := gr.Close(); err != nil {
+		return nil, nil, nil, fmt.Errorf("gzip integrity check: %w", err)
+	}
+	closed = true
+	return cfg, layers, layerHeaders, nil
 }
 
 // uploadTarEntry writes a tar entry to a temp file while hashing, then uploads the blob.
@@ -246,8 +265,8 @@ func (p *EpochPuller) pushBlob(ctx context.Context, name, filePath string) (stri
 }
 
 // pushManifest uploads a manifest via PUT /v2/{name}/manifests/{tag}.
-func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, m *manifest.Manifest) error {
-	data, err := json.MarshalIndent(m, "", "  ")
+func (p *EpochPuller) pushManifest(ctx context.Context, name, tag string, doc *epochManifestDocument) error {
+	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}

@@ -48,7 +48,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 		return fmt.Errorf("manifest %s:%s is not a direct cloud image", name, tag)
 	}
 
-	if err := p.importCloudImage(ctx, name, m); err != nil {
+	if err := p.importCloudImage(ctx, name, &m.Manifest); err != nil {
 		return fmt.Errorf("import cloud image %s:%s: %w", name, tag, err)
 	}
 
@@ -165,20 +165,16 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *mani
 func (p *EpochPuller) writeCloudImageStream(ctx context.Context, name string, m *manifest.Manifest, w io.Writer) error {
 	logger := log.WithFunc("provider.writeCloudImageStream")
 	bw := bufio.NewWriterSize(w, 256<<10)
-	gw, _ := gzip.NewWriterLevel(bw, gzip.BestSpeed)
+	gw, err := gzip.NewWriterLevel(bw, gzip.BestSpeed)
+	if err != nil {
+		return fmt.Errorf("create gzip writer: %w", err)
+	}
 
 	for _, layer := range m.Layers {
 		logger.Infof(ctx, "[epoch]   streaming %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
-
-		body, err := p.streamBlob(ctx, name, layer.Digest)
-		if err != nil {
-			return fmt.Errorf("get blob %s: %w", layer.Filename, err)
+		if err := p.copyBlob(ctx, name, layer.Digest, gw); err != nil {
+			return fmt.Errorf("stream %s: %w", layer.Filename, err)
 		}
-		if _, copyErr := io.Copy(gw, body); copyErr != nil {
-			body.Close() //nolint:errcheck,gosec
-			return fmt.Errorf("stream %s: %w", layer.Filename, copyErr)
-		}
-		body.Close() //nolint:errcheck,gosec
 	}
 
 	if err := gw.Close(); err != nil {
@@ -189,20 +185,13 @@ func (p *EpochPuller) writeCloudImageStream(ctx context.Context, name string, m 
 
 // downloadBlobToFile downloads a blob from the registry to a local file (used for base images).
 func (p *EpochPuller) downloadBlobToFile(ctx context.Context, name, digest, destPath string) error {
-	body, err := p.streamBlob(ctx, name, digest)
-	if err != nil {
-		return err
-	}
-	defer body.Close() //nolint:errcheck
-
 	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
 
-	_, err = io.Copy(f, body)
-	return err
+	return p.copyBlob(ctx, name, digest, f)
 }
 
 type cloudImageIndex struct {
