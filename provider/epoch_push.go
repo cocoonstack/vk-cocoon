@@ -112,12 +112,15 @@ func (p *EpochPuller) exportAndUploadBlobs(ctx context.Context, name string) (*s
 	}
 
 	cfg, layers, layerHeaders, readErr := p.readAndUploadTarEntries(ctx, name, stdout)
-	// Ensure we always wait for the subprocess.
-	if waitErr := cmd.Wait(); waitErr != nil && readErr == nil {
-		return nil, nil, nil, fmt.Errorf("cocoon snapshot export: %w", waitErr)
-	}
+	waitErr := cmd.Wait()
 	if readErr != nil {
+		if waitErr != nil {
+			return nil, nil, nil, fmt.Errorf("read stream: %w, export: %w", readErr, waitErr)
+		}
 		return nil, nil, nil, readErr
+	}
+	if waitErr != nil {
+		return nil, nil, nil, fmt.Errorf("cocoon snapshot export: %w", waitErr)
 	}
 	return cfg, layers, layerHeaders, nil
 }
@@ -174,7 +177,7 @@ func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, 
 			MediaType: manifest.MediaTypeForFile(hdr.Name),
 		})
 		layerHeaders[hdr.Name] = snapshotLayerHeaderFromTarHeader(hdr)
-		logger.Infof(ctx, "[epoch]   %s -> sha256:%s (%s)", hdr.Name, digest[:12], cocoon.HumanSize(size))
+		logger.Infof(ctx, "[epoch]   %s -> sha256:%s (%s)", hdr.Name, shortHex(digest), cocoon.HumanSize(size))
 	}
 
 	if cfg == nil {

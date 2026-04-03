@@ -184,14 +184,23 @@ func (p *EpochPuller) writeCloudImageStream(ctx context.Context, name string, m 
 }
 
 // downloadBlobToFile downloads a blob from the registry to a local file (used for base images).
+// Uses a temp file + rename to avoid leaving partial files on error.
 func (p *EpochPuller) downloadBlobToFile(ctx context.Context, name, digest, destPath string) error {
-	f, err := os.Create(destPath) //nolint:gosec // destPath is constructed from trusted config
+	tmpPath := destPath + ".tmp"
+	f, err := os.Create(tmpPath) //nolint:gosec // destPath is constructed from trusted config
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-
-	return p.copyBlob(ctx, name, digest, f)
+	if err := p.copyBlob(ctx, name, digest, f); err != nil {
+		f.Close()          //nolint:errcheck,gosec
+		os.Remove(tmpPath) //nolint:errcheck,gosec
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath) //nolint:errcheck,gosec
+		return err
+	}
+	return os.Rename(tmpPath, destPath)
 }
 
 type cloudImageIndex struct {

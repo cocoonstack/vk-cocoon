@@ -91,7 +91,7 @@ func (p *EpochPuller) copyBlob(ctx context.Context, name, digest string, w io.Wr
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("get blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+		return fmt.Errorf("get blob %s: %d %s", shortHex(digest), resp.StatusCode, readLimitedBody(resp.Body))
 	}
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		return err
@@ -152,7 +152,7 @@ func (p *EpochPuller) putBlob(ctx context.Context, name, digest string, body io.
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("put blob %s: %d %s", digest[:12], resp.StatusCode, readLimitedBody(resp.Body))
+		return fmt.Errorf("put blob %s: %d %s", shortHex(digest), resp.StatusCode, readLimitedBody(resp.Body))
 	}
 	return nil
 }
