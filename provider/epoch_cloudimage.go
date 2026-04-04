@@ -3,7 +3,6 @@ package provider
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -147,7 +146,7 @@ func (p *EpochPuller) downloadSourceImage(ctx context.Context, imageURL, expecte
 }
 
 // importCloudImage streams cloud image blobs directly into cocoon image import via pipe.
-// Flow: gzip(concat(blobs)) → cocoon image import <name> stdin.
+// Flow: concat(raw blobs) → cocoon image import <name> stdin (auto-detects format).
 func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *manifest.Manifest) error {
 	if err := p.pipeToImport(ctx, []string{"image", "import", name}, func(w io.Writer) error {
 		return p.writeCloudImageStream(ctx, name, m, w)
@@ -165,21 +164,14 @@ func (p *EpochPuller) importCloudImage(ctx context.Context, name string, m *mani
 func (p *EpochPuller) writeCloudImageStream(ctx context.Context, name string, m *manifest.Manifest, w io.Writer) error {
 	logger := log.WithFunc("provider.writeCloudImageStream")
 	bw := bufio.NewWriterSize(w, 256<<10)
-	gw, err := gzip.NewWriterLevel(bw, gzip.BestSpeed)
-	if err != nil {
-		return fmt.Errorf("create gzip writer: %w", err)
-	}
 
 	for _, layer := range m.Layers {
 		logger.Infof(ctx, "[epoch]   streaming %s (%s)...", layer.Filename, cocoon.HumanSize(layer.Size))
-		if err := p.copyBlob(ctx, name, layer.Digest, gw); err != nil {
+		if err := p.copyBlob(ctx, name, layer.Digest, bw); err != nil {
 			return fmt.Errorf("stream %s: %w", layer.Filename, err)
 		}
 	}
 
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("close gzip: %w", err)
-	}
 	return bw.Flush()
 }
 

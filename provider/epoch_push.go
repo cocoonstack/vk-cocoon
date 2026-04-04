@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"cmp"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -125,22 +124,11 @@ func (p *EpochPuller) exportAndUploadBlobs(ctx context.Context, name string) (*s
 	return cfg, layers, layerHeaders, nil
 }
 
-// readAndUploadTarEntries reads a gzip tar stream, parses snapshot.json,
+// readAndUploadTarEntries reads a tar stream, parses snapshot.json,
 // and uploads each data file as a blob via temp file + hash.
 func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, r io.Reader) (*snapshotExportConfig, []manifest.Layer, map[string]snapshotLayerHeader, error) {
 	logger := log.WithFunc("provider.readAndUploadTarEntries")
-	gr, err := gzip.NewReader(r)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("decompress export stream: %w", err)
-	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = gr.Close()
-		}
-	}()
-
-	tr := tar.NewReader(gr)
+	tr := tar.NewReader(r)
 	var (
 		cfg          *snapshotExportConfig
 		layers       []manifest.Layer
@@ -183,13 +171,6 @@ func (p *EpochPuller) readAndUploadTarEntries(ctx context.Context, name string, 
 	if cfg == nil {
 		return nil, nil, nil, fmt.Errorf("snapshot.json not found in export stream")
 	}
-	if _, err := io.Copy(io.Discard, gr); err != nil { //nolint:gosec // export stream comes from trusted local cocoon snapshot export
-		return nil, nil, nil, fmt.Errorf("gzip integrity check: %w", err)
-	}
-	if err := gr.Close(); err != nil {
-		return nil, nil, nil, fmt.Errorf("gzip integrity check: %w", err)
-	}
-	closed = true
 	return cfg, layers, layerHeaders, nil
 }
 

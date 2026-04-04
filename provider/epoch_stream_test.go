@@ -3,7 +3,6 @@ package provider
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -108,11 +107,7 @@ func TestSnapshotStreamRoundTripPreservesSparseMetadata(t *testing.T) {
 		t.Fatalf("writeSnapshotStream: %v", err)
 	}
 
-	gr, err := gzip.NewReader(bytes.NewReader(rebuilt.Bytes()))
-	if err != nil {
-		t.Fatalf("gzip.NewReader: %v", err)
-	}
-	tr := tar.NewReader(gr)
+	tr := tar.NewReader(bytes.NewReader(rebuilt.Bytes()))
 
 	if hdr, err := tr.Next(); err != nil {
 		t.Fatalf("read snapshot header: %v", err)
@@ -143,22 +138,13 @@ func TestSnapshotStreamRoundTripPreservesSparseMetadata(t *testing.T) {
 	if got := string(payload); got != "DATA" {
 		t.Fatalf("overlay payload = %q, want DATA", got)
 	}
-	if err := gr.Close(); err != nil {
-		t.Fatalf("gzip.Close: %v", err)
-	}
 }
 
-func TestReadAndUploadTarEntriesRejectsCorruptGzip(t *testing.T) {
-	stream := makeSnapshotExportStream(t, false)
-	stream = stream[:len(stream)-1]
-
+func TestReadAndUploadTarEntriesRejectsCorruptTar(t *testing.T) {
 	p := &EpochPuller{}
-	_, _, _, err := p.readAndUploadTarEntries(context.Background(), "demo", bytes.NewReader(stream))
+	_, _, _, err := p.readAndUploadTarEntries(context.Background(), "demo", bytes.NewReader([]byte("not a tar archive")))
 	if err == nil {
-		t.Fatal("expected gzip integrity error")
-	}
-	if !strings.Contains(err.Error(), "gzip integrity check") {
-		t.Fatalf("error = %v, want gzip integrity check", err)
+		t.Fatal("expected tar read error")
 	}
 }
 
@@ -221,8 +207,7 @@ func makeSnapshotExportStream(t *testing.T, includeSparseLayer bool) []byte {
 	jsonData = append(jsonData, '\n')
 
 	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
+	tw := tar.NewWriter(&buf)
 
 	if err := tw.WriteHeader(&tar.Header{
 		Name: snapshotJSONName,
@@ -255,9 +240,6 @@ func makeSnapshotExportStream(t *testing.T, includeSparseLayer bool) []byte {
 
 	if err := tw.Close(); err != nil {
 		t.Fatalf("close tar writer: %v", err)
-	}
-	if err := gw.Close(); err != nil {
-		t.Fatalf("close gzip writer: %v", err)
 	}
 	return buf.Bytes()
 }

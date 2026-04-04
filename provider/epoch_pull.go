@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,7 +53,7 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 }
 
 // pull streams a snapshot from the registry directly into cocoon via pipe.
-// Flow: GetManifest → stream gzip tar (snapshot.json + blobs) → cocoon snapshot import stdin.
+// Flow: GetManifest → stream tar (snapshot.json + blobs) → cocoon snapshot import stdin.
 func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	logger := log.WithFunc("provider.pull")
 
@@ -78,7 +77,7 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 		}
 	}
 
-	// Stream snapshot tar.gz into cocoon snapshot import via pipe.
+	// Stream snapshot tar into cocoon snapshot import via pipe.
 	if err := p.pipeToImport(ctx, []string{"snapshot", "import", "--name", name}, func(w io.Writer) error {
 		return p.writeSnapshotStream(ctx, name, doc, w)
 	}); err != nil {
@@ -89,8 +88,9 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	return nil
 }
 
-// writeSnapshotStream writes a gzip-compressed tar archive to w,
+// writeSnapshotStream writes a tar archive to w,
 // streaming each blob directly from the registry HTTP response.
+// cocoon snapshot import auto-detects gzip; raw tar avoids the compression overhead.
 func (p *EpochPuller) writeSnapshotStream(ctx context.Context, name string, doc *epochManifestDocument, w io.Writer) error {
 	logger := log.WithFunc("provider.writeSnapshotStream")
 
@@ -120,11 +120,7 @@ func (p *EpochPuller) writeSnapshotStream(ctx context.Context, name string, doc 
 
 	now := time.Now()
 	bw := bufio.NewWriterSize(w, 256<<10)
-	gw, err := gzip.NewWriterLevel(bw, gzip.BestSpeed)
-	if err != nil {
-		return fmt.Errorf("create gzip writer: %w", err)
-	}
-	tw := tar.NewWriter(gw)
+	tw := tar.NewWriter(bw)
 
 	if err := tw.WriteHeader(&tar.Header{
 		Name: snapshotJSONName, Size: int64(len(jsonData)),
@@ -146,9 +142,6 @@ func (p *EpochPuller) writeSnapshotStream(ctx context.Context, name string, doc 
 
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("close tar: %w", err)
-	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("close gzip: %w", err)
 	}
 	return bw.Flush()
 }
