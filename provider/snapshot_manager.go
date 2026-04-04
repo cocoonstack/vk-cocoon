@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -95,7 +96,9 @@ func (s *snapshotManager) clearSuspendedSnapshot(ctx context.Context, ns, vmName
 	if s == nil || s.provider == nil || s.provider.kubeClient == nil {
 		return
 	}
-	patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, vmName)
+	escaped := strings.ReplaceAll(vmName, "~", "~0")
+	escaped = strings.ReplaceAll(escaped, "/", "~1")
+	patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, escaped)
 	_, _ = s.provider.kubeClient.CoreV1().ConfigMaps(ns).Patch(ctx, suspendedSnapshotConfigMap, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
 }
 

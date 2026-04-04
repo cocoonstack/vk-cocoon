@@ -51,7 +51,14 @@ func (pm *podMap) save() {
 		return
 	}
 	_ = os.MkdirAll(filepath.Dir(pm.path), 0o750)
-	_ = os.WriteFile(pm.path, data, 0o640) //nolint:gosec
+	tmp := pm.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o640); err != nil { //nolint:gosec
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, pm.path); err != nil {
+		_ = os.Remove(tmp)
+	}
 }
 
 func (pm *podMap) Store(key string, vmID, vmName, image string) {
