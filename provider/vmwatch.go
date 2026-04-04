@@ -112,6 +112,15 @@ func (c *vmCache) findByName(name string) *cachedVM {
 	return nil
 }
 
+func (c *vmCache) evictByID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old := c.vms[id]; old != nil && old.name != "" {
+		delete(c.names, old.name)
+	}
+	delete(c.vms, id)
+}
+
 func (c *vmCache) waitFor(key string) chan struct{} {
 	ch := make(chan struct{}, 1)
 	c.waiterMu.Lock()

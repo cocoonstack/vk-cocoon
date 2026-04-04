@@ -19,7 +19,7 @@ func buildLegacyDeleteArgs(ref string) []string {
 }
 
 func buildInspectArgs(ref string) []string {
-	return []string{"inspect", ref}
+	return []string{"vm", "inspect", ref}
 }
 
 func cocoonRootDir() string {

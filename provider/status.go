@@ -160,7 +160,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 				Message: "VM suspended to epoch, waiting for wake",
 			},
 		}
-	case stateStopped:
+	case stateStopped, stateStoppedStale:
 		phase = corev1.PodSucceeded
 		containerState = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{
@@ -168,7 +168,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 				StartedAt: metav1.NewTime(vm.startedAt), FinishedAt: metav1.Now(),
 			},
 		}
-	case stateError:
+	case stateError, stateFailed:
 		phase = corev1.PodFailed
 		containerState = corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{

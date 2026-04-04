@@ -93,11 +93,27 @@ type CocoonVM struct {
 	startedAt    time.Time
 }
 
-// cocoonInspectJSON matches newer `cocoon inspect` and `cocoon list --format json`.
+// cocoonInspectJSON matches `cocoon vm inspect` and `cocoon vm list --format json`.
 type cocoonInspectJSON struct {
-	VMID  string `json:"vm_id"`
-	Name  string `json:"name"`
-	State string `json:"state"`
+	// Current format fields (cocoon v0.2.x)
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Config struct {
+		Name    string `json:"name"`
+		CPU     int    `json:"cpu"`
+		Memory  int64  `json:"memory"`
+		Image   string `json:"image"`
+		Windows bool   `json:"windows"`
+	} `json:"config"`
+	NetworkConfigs []struct {
+		MAC string `json:"mac"`
+	} `json:"network_configs"`
+	CreatedAt string `json:"created_at"`
+	StartedAt string `json:"started_at"`
+
+	// Legacy format fields (older cocoon versions)
+	VMID string `json:"vm_id"`
+	Name string `json:"name"`
 	Image struct {
 		Ref string `json:"ref"`
 	} `json:"image"`

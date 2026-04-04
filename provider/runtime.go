@@ -119,22 +119,66 @@ func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *Cocoo
 }
 
 func inspectToVM(v cocoonInspectJSON) *CocoonVM {
+	// Resolve fields: prefer current format, fall back to legacy.
+	vmID := v.ID
+	if vmID == "" {
+		vmID = v.VMID
+	}
+	vmName := v.Config.Name
+	if vmName == "" {
+		vmName = v.Name
+	}
+	cpu := v.Config.CPU
+	if cpu == 0 {
+		cpu = v.BootConfig.CPUs
+	}
+	var memoryMB int
+	if v.Config.Memory > 0 {
+		memoryMB = int(v.Config.Memory / (1024 * 1024))
+	} else {
+		memoryMB = int(v.BootConfig.MemoryMB)
+	}
+	image := v.Config.Image
+	if image == "" {
+		image = v.Image.Ref
+	}
+	var mac string
+	if len(v.NetworkConfigs) > 0 {
+		mac = v.NetworkConfigs[0].MAC
+	}
+
+	createdAtStr := v.CreatedAt
+	if createdAtStr == "" {
+		createdAtStr = v.Timestamps.CreatedAt
+	}
+	startedAtStr := v.StartedAt
+	if startedAtStr == "" {
+		startedAtStr = v.Timestamps.StartedAt
+	}
+
 	var createdAt time.Time
-	if ts := strings.TrimSpace(v.Timestamps.CreatedAt); ts != "" {
-		createdAt, _ = time.Parse(time.RFC3339, ts)
+	if ts := strings.TrimSpace(createdAtStr); ts != "" {
+		createdAt, _ = time.Parse(time.RFC3339Nano, ts)
+		if createdAt.IsZero() {
+			createdAt, _ = time.Parse(time.RFC3339, ts)
+		}
 	}
 	var startedAt time.Time
-	if ts := strings.TrimSpace(v.Timestamps.StartedAt); ts != "" {
-		startedAt, _ = time.Parse(time.RFC3339, ts)
+	if ts := strings.TrimSpace(startedAtStr); ts != "" {
+		startedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		if startedAt.IsZero() {
+			startedAt, _ = time.Parse(time.RFC3339, ts)
+		}
 	}
 	return &CocoonVM{
-		vmID:      v.VMID,
-		vmName:    v.Name,
+		vmID:      vmID,
+		vmName:    vmName,
 		state:     normalizedState(v.State),
-		ip:        resolveLeaseByIdentity(v.Name, time.Time{}),
-		cpu:       v.BootConfig.CPUs,
-		memoryMB:  int(v.BootConfig.MemoryMB),
-		image:     v.Image.Ref,
+		ip:        resolveLeaseByIdentity(vmName, time.Time{}),
+		mac:       mac,
+		cpu:       cpu,
+		memoryMB:  memoryMB,
+		image:     image,
 		createdAt: createdAt,
 		startedAt: startedAt,
 	}

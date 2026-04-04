@@ -307,6 +307,9 @@ func (c *CocoonProvider) removeStaleVM(ctx context.Context, key, vmName string) 
 	if existing := c.discoverVM(ctx, vmName); existing != nil && existing.vmID != "" {
 		log.WithFunc("provider.CreatePod").Infof(ctx, "%s: stale VM %s exists (%s), removing", key, vmName, existing.state)
 		c.removeVM(ctx, existing.vmID)
+		if c.vmState != nil {
+			c.vmState.evictByID(existing.vmID)
+		}
 	}
 }
 

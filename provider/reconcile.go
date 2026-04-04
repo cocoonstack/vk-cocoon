@@ -127,7 +127,7 @@ func (p *CocoonProvider) reconcileOrphanedPods(ctx context.Context) {
 func (p *CocoonProvider) reconciledVMState(ctx context.Context, snap managedVMSnapshot) (*CocoonVM, bool) {
 	p.mu.RLock()
 	vmRec, ok := p.vms[snap.key]
-	if ok && vmRec.state == stateHibernated {
+	if ok && (vmRec.state == stateHibernated || vmRec.state == stateCreating) {
 		p.mu.RUnlock()
 		return nil, false
 	}

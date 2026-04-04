@@ -110,6 +110,9 @@ func (p *CocoonProvider) deleteFallbackVM(ctx context.Context, req deleteRequest
 func (p *CocoonProvider) destroyVM(ctx context.Context, key, vmName, vmID string) {
 	log.WithFunc("provider.DeletePod").Infof(ctx, "%s: destroying VM %s (%s)", key, vmName, vmID)
 	p.removeVM(ctx, vmID)
+	if p.vmState != nil && vmID != "" {
+		p.vmState.evictByID(vmID)
+	}
 }
 
 func (p *CocoonProvider) cleanupDeletedPod(key, podName string) {

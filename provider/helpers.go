@@ -89,6 +89,17 @@ func parseVMID(out string) string {
 		if strings.HasPrefix(line, "vm-") {
 			return line
 		}
+		// Handle "VM created: <hex_id> ..." output from newer cocoon versions.
+		if idx := strings.Index(line, "VM created: "); idx >= 0 {
+			rest := line[idx+len("VM created: "):]
+			if sp := strings.IndexAny(rest, " \t("); sp > 0 {
+				rest = rest[:sp]
+			}
+			rest = strings.TrimSpace(rest)
+			if rest != "" {
+				return rest
+			}
+		}
 	}
 	return ""
 }
