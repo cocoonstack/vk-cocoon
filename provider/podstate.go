@@ -12,7 +12,6 @@ const (
 	modeStatic = "static"
 	modeAdopt  = "adopt"
 
-	stateUnknown      = "unknown"
 	stateCreating     = "creating"
 	stateSuspending   = "suspending"
 	stateStoppedStale = "stopped (stale)"

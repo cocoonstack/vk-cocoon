@@ -12,10 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-const (
-	AnnEnvFile     = "cocoon.cis/env-file"
-	AnnServiceName = "cocoon.cis/service-name"
-)
+const AnnEnvFile = "cocoon.cis/env-file"
 
 var (
 	sshReadyTimeout      = 45 * time.Second

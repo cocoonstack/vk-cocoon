@@ -64,7 +64,8 @@ func (n *CocoonNodeProvider) updateConditions() {
 	now := metav1.Now()
 
 	// Memory pressure: MemAvailable < 100Mi
-	memAvail := readHostMemAvailable()
+	memInfo := readMeminfo("MemAvailable")
+	memAvail := memInfo["MemAvailable"]
 	memPressure := corev1.ConditionFalse
 	if memAvail > 0 && memAvail < 100*1024*1024 {
 		memPressure = corev1.ConditionTrue

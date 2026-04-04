@@ -156,7 +156,7 @@ func (p *CocoonProvider) injectSSHKey(ctx context.Context, pod *corev1.Pod, vm *
 		return
 	}
 	logger := log.WithFunc("provider.injectSSHKey")
-	pubkey := ann(pod, "cocoon.cis/ssh-pubkey", "")
+	pubkey := ann(pod, AnnSSHPubkey, "")
 	if pubkey == "" {
 		return
 	}

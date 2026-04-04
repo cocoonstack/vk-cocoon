@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -101,7 +102,7 @@ func TestStorePodVMStoresDeepCopyAndAnnotations(t *testing.T) {
 		managed: true,
 	}
 
-	p.storePodVM(nil, podKey(pod.Namespace, pod.Name), pod, vm, podAnnotation{key: AnnSnapshotFrom, value: "snapshot-a"})
+	p.storePodVM(context.Background(), podKey(pod.Namespace, pod.Name), pod, vm, podAnnotation{key: AnnSnapshotFrom, value: "snapshot-a"})
 
 	key := podKey(pod.Namespace, pod.Name)
 	storedPod := p.pods[key]

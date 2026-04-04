@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -185,7 +186,7 @@ func inspectToVM(v cocoonInspectJSON) *CocoonVM {
 }
 
 func resolveIPFromLeaseByMAC(mac string) string {
-	return resolveLeaseByMAC(mac, time.Time{})
+	return resolveLeaseByIdentity(mac, time.Time{})
 }
 
 // leases file cache
@@ -222,7 +223,7 @@ func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeou
 
 	for time.Now().Before(deadline) {
 		if vm.mac != "" {
-			if ip := resolveLeaseByMAC(vm.mac, notBefore); ip != "" {
+			if ip := resolveLeaseByIdentity(vm.mac, notBefore); ip != "" {
 				logger.Infof(ctx, "VM %s got DHCP IP %s (by MAC)", vm.vmName, ip)
 				return ip
 			}
@@ -252,7 +253,7 @@ func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeou
 func resolveLeaseByIdentity(identity string, notBefore time.Time) string {
 	data := readLeasesFileCached()
 	minTS := notBefore.Unix()
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
+	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) >= 4 && (fields[1] == identity || fields[3] == identity) {
@@ -266,10 +267,6 @@ func resolveLeaseByIdentity(identity string, notBefore time.Time) string {
 		}
 	}
 	return ""
-}
-
-func resolveLeaseByMAC(mac string, notBefore time.Time) string {
-	return resolveLeaseByIdentity(mac, notBefore)
 }
 
 func (p *CocoonProvider) resolveIPFromLease(hostnameOrMAC string) string {

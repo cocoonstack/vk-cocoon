@@ -61,6 +61,7 @@ const (
 	AnnMAC          = "cocoon.cis/mac"
 	AnnSnapshotFrom = "cocoon.cis/snapshot-from"
 	AnnNetwork      = "cocoon.cis/network"     // CNI conflist name (empty = cocoon default)
+	AnnSSHPubkey    = "cocoon.cis/ssh-pubkey"  // SSH public key for authorized_keys injection
 	AnnHibernate    = meta.AnnotationHibernate // "true" → hibernate VM (pod stays)
 
 	// CocoonSet controller annotations
@@ -112,8 +113,8 @@ type cocoonInspectJSON struct {
 	StartedAt string `json:"started_at"`
 
 	// Legacy format fields (older cocoon versions)
-	VMID string `json:"vm_id"`
-	Name string `json:"name"`
+	VMID  string `json:"vm_id"`
+	Name  string `json:"name"`
 	Image struct {
 		Ref string `json:"ref"`
 	} `json:"image"`

@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"os"
 	"strings"
 	"time"
 
@@ -46,14 +45,6 @@ func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 		updated, ok := p.reconciledVMState(ctx, snap)
 		if !ok {
 			continue
-		}
-
-		// If VM is running but has no IP, try to resolve from DHCP lease.
-		if updated.state == stateRunning && updated.ip == "" && updated.mac != "" {
-			if ip := resolveLeaseByMAC(updated.mac, time.Time{}); ip != "" {
-				log.WithFunc("provider.reconcileOnce").Infof(ctx, "VM %s resolved DHCP IP %s (by MAC) during reconcile", snap.name, ip)
-				updated.ip = ip
-			}
 		}
 
 		p.syncPodRuntimeMetadata(ctx, snap.key, updated)
@@ -180,10 +171,7 @@ func (p *CocoonProvider) getPuller(ctx context.Context, registryURL string) *Epo
 		return ep
 	}
 
-	rootDir := os.Getenv("COCOON_ROOT")
-	if rootDir == "" {
-		rootDir = "/var/lib/cocoon"
-	}
+	rootDir := cocoonRootDir()
 	ep := NewEpochPuller(registryURL, rootDir, p.cocoonBin)
 	p.pullers[registryURL] = ep
 	log.WithFunc("provider.getPuller").Infof(ctx, "epoch puller created for %s (root=%s)", registryURL, rootDir)

@@ -90,8 +90,7 @@ func parseVMID(out string) string {
 			return line
 		}
 		// Handle "VM created: <hex_id> ..." output from newer cocoon versions.
-		if idx := strings.Index(line, "VM created: "); idx >= 0 {
-			rest := line[idx+len("VM created: "):]
+		if _, rest, ok := strings.Cut(line, "VM created: "); ok {
 			if sp := strings.IndexAny(rest, " \t("); sp > 0 {
 				rest = rest[:sp]
 			}
@@ -128,8 +127,9 @@ func formatResourceCPU(q *resource.Quantity) string {
 // podResourceLimits extracts CPU and memory limits from a pod spec,
 // returning cocoon CLI-friendly strings with sensible defaults.
 func podResourceLimits(pod *corev1.Pod) (cpu, mem string) {
-	cpu = defaultCPUForOS(ann(pod, AnnOS, defaultOSType))
-	mem = defaultMemoryForOS(ann(pod, AnnOS, defaultOSType))
+	osType := ann(pod, AnnOS, defaultOSType)
+	cpu = defaultCPUForOS(osType)
+	mem = defaultMemoryForOS(osType)
 	if c := pod.Spec.Containers; len(c) > 0 {
 		if s := formatResourceCPU(c[0].Resources.Limits.Cpu()); s != "" {
 			cpu = s

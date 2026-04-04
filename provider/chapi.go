@@ -159,30 +159,29 @@ func readHostCPUCount() int {
 	return hostCPUCount
 }
 
-func readMeminfoField(field string) uint64 {
+func readMeminfo(fields ...string) map[string]uint64 {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return 0
+		return nil
 	}
-	prefix := field + ":"
+	result := make(map[string]uint64, len(fields))
 	for line := range strings.SplitSeq(string(data), "\n") {
-		if strings.HasPrefix(line, prefix) {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				kb, _ := strconv.ParseUint(fields[1], 10, 64)
-				return kb * 1024
+		for _, field := range fields {
+			prefix := field + ":"
+			if strings.HasPrefix(line, prefix) {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					kb, _ := strconv.ParseUint(parts[1], 10, 64)
+					result[field] = kb * 1024
+				}
 			}
 		}
 	}
-	return 0
+	return result
 }
 
 func readHostMemoryBytes() uint64 {
-	return readMeminfoField("MemTotal")
-}
-
-func readHostMemAvailable() uint64 {
-	return readMeminfoField("MemAvailable")
+	return readMeminfo("MemTotal")["MemTotal"]
 }
 
 func readHostDiskBytes(path string) (total, avail uint64) {

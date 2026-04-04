@@ -24,9 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-const (
-	AnnLivenessRestart = "cocoon.cis/liveness-restart" // "true" to restart VM on liveness failure
-)
+const AnnLivenessRestart = "cocoon.cis/liveness-restart" // "true" to restart VM on liveness failure
 
 // probeResult tracks the current probe state for a pod.
 type probeResult struct {

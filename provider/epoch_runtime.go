@@ -24,23 +24,34 @@ func (p *EpochPuller) cocoonExecWithStdin(ctx context.Context, stdin io.Reader, 
 }
 
 func (p *EpochPuller) buildCocoonCmd(ctx context.Context, args ...string) *exec.Cmd {
-	var sudoArgs []string
-	root := strings.TrimSpace(os.Getenv("COCOON_ROOT_DIR"))
-	if root == "" {
-		root = strings.TrimSpace(p.rootDir)
-	}
-	if root != "" {
-		sudoArgs = append(sudoArgs, "env", "COCOON_ROOT_DIR="+root)
-	}
-	if windowsCH := strings.TrimSpace(os.Getenv("COCOON_WINDOWS_CH_BINARY")); windowsCH != "" {
-		if len(sudoArgs) == 0 {
-			sudoArgs = append(sudoArgs, "env")
+	sudoArgs := make([]string, 0, len(args)+len(cocoonPassThroughEnv)+4)
+	var envArgs []string
+	for _, key := range cocoonPassThroughEnv {
+		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+			envArgs = append(envArgs, key+"="+val)
 		}
-		sudoArgs = append(sudoArgs, "COCOON_WINDOWS_CH_BINARY="+windowsCH)
+	}
+	// Ensure COCOON_ROOT_DIR is always forwarded, falling back to the puller's rootDir.
+	if !hasEnvKey(envArgs, "COCOON_ROOT_DIR") && p.rootDir != "" {
+		envArgs = append(envArgs, "COCOON_ROOT_DIR="+p.rootDir)
+	}
+	if len(envArgs) > 0 {
+		sudoArgs = append(sudoArgs, "env")
+		sudoArgs = append(sudoArgs, envArgs...)
 	}
 	sudoArgs = append(sudoArgs, p.cocoonBin)
 	sudoArgs = append(sudoArgs, args...)
 	return exec.CommandContext(ctx, "sudo", sudoArgs...) //nolint:gosec
+}
+
+func hasEnvKey(envArgs []string, key string) bool {
+	prefix := key + "="
+	for _, arg := range envArgs {
+		if strings.HasPrefix(arg, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *EpochPuller) pipeToImport(ctx context.Context, args []string, writeFn func(w io.Writer) error) error {

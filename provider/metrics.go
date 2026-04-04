@@ -20,13 +20,13 @@ func (p *CocoonProvider) GetStatsSummary(ctx context.Context) (*statsv1alpha1.Su
 	p.mu.RUnlock()
 
 	for key, vm := range vmsCopy {
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 || vm.vmID == "" {
+		ns, name, ok := strings.Cut(key, "/")
+		if !ok || vm.vmID == "" {
 			continue
 		}
 
 		podStat := statsv1alpha1.PodStats{
-			PodRef:    statsv1alpha1.PodReference{Name: parts[1], Namespace: parts[0]},
+			PodRef:    statsv1alpha1.PodReference{Name: name, Namespace: ns},
 			StartTime: metav1.NewTime(vm.createdAt),
 		}
 
@@ -104,11 +104,10 @@ func (p *CocoonProvider) GetMetricsResource(ctx context.Context) ([]*dto.MetricF
 	netTxMetrics := make([]*dto.Metric, 0)
 
 	for key, vm := range vmsCopy {
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 || vm.vmID == "" {
+		ns, name, ok := strings.Cut(key, "/")
+		if !ok || vm.vmID == "" {
 			continue
 		}
-		ns, name := parts[0], parts[1]
 		nsLabel := "namespace"
 		podLabel := "pod"
 		labels := []*dto.LabelPair{
