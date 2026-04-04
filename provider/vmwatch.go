@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -129,6 +130,22 @@ func (p *CocoonProvider) startVMWatcher(ctx context.Context) {
 	go p.vmWatchLoop(ctx)
 }
 
+// killOrphanEventStreams kills any leftover `cocoon vm status --event` processes
+// from previous vk-cocoon instances. These orphans survive vk-cocoon restart
+// (KillMode=process) and can interfere with the new event stream's inotify watch.
+func killOrphanEventStreams(cocoonBin string) {
+	out, err := exec.Command("pgrep", "-f", cocoonBin+" vm status --event").Output() //nolint:gosec
+	if err != nil {
+		return
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		_ = exec.Command("kill", line).Run() //nolint:gosec
+	}
+}
+
 func (p *CocoonProvider) vmWatchLoop(ctx context.Context) {
 	logger := log.WithFunc("provider.vmWatchLoop")
 	for {
@@ -145,8 +162,11 @@ func (p *CocoonProvider) vmWatchLoop(ctx context.Context) {
 
 func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 	logger := log.WithFunc("provider.vmWatchStream")
+	killOrphanEventStreams(p.cocoonBin)
+
 	args := []string{p.cocoonBin, "vm", "status", "--event", "--format", "json", "--interval", "5"}
-	cmd := exec.CommandContext(ctx, "sudo", args...) //nolint:gosec
+	cmd := exec.Command("sudo", args...) //nolint:gosec
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -155,6 +175,26 @@ func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 		return err
 	}
 	logger.Info(ctx, "event stream started")
+
+	// Kill the process group when context is canceled or this function returns.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+			return
+		}
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck // best-effort cleanup
+		}
+	}()
+	defer func() {
+		close(done)
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck
+		}
+		_ = cmd.Wait() //nolint:errcheck
+	}()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024)
@@ -173,7 +213,7 @@ func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 		// Notify pod status for any pod that owns this VM.
 		p.notifyPodForVM(ctx, ev.VM.ID, ev.VM.Config.Name)
 	}
-	return cmd.Wait()
+	return nil
 }
 
 // notifyPodForVM finds the pod that owns a VM and triggers a status update.
