@@ -114,12 +114,15 @@ type cocoonInspectJSON struct {
 // CocoonProvider implements nodeutil.Provider and node.PodNotifier.
 type CocoonProvider struct {
 	cocoonBin   string
+	nodeName    string
 	nodeIP      string
 	kubeClient  kubernetes.Interface
 	sshPassword string
 	mu          sync.RWMutex
 	pods        map[string]*corev1.Pod
 	vms         map[string]*CocoonVM
+	vmIDToPod   map[string]string // vmID → podKey
+	vmNameToPod map[string]string // vmName → podKey
 
 	// PodNotifier callback — set by NotifyPods, called on status changes.
 	notifyPodCb func(*corev1.Pod)
@@ -156,14 +159,17 @@ type CocoonProvider struct {
 var _ nodeutil.Provider = (*CocoonProvider)(nil)
 
 // NewCocoonProvider creates a CocoonProvider that maps Kubernetes pods to Cocoon MicroVMs.
-func NewCocoonProvider(ctx context.Context, cocoonBin, nodeIP string, kubeClient kubernetes.Interface, cfg nodeutil.ProviderConfig) *CocoonProvider {
+func NewCocoonProvider(ctx context.Context, cocoonBin, nodeName, nodeIP string, kubeClient kubernetes.Interface, cfg nodeutil.ProviderConfig) *CocoonProvider {
 	p := &CocoonProvider{
 		cocoonBin:       cocoonBin,
+		nodeName:        nodeName,
 		nodeIP:          nodeIP,
 		kubeClient:      kubeClient,
 		sshPassword:     os.Getenv("COCOON_SSH_PASSWORD"),
 		pods:            make(map[string]*corev1.Pod),
 		vms:             make(map[string]*CocoonVM),
+		vmIDToPod:       make(map[string]string),
+		vmNameToPod:     make(map[string]string),
 		configMapLister: cfg.ConfigMaps,
 		secretLister:    cfg.Secrets,
 		injectHashes:    make(map[string]string),
@@ -171,7 +177,7 @@ func NewCocoonProvider(ctx context.Context, cocoonBin, nodeIP string, kubeClient
 		pullers:         make(map[string]*EpochPuller),
 	}
 
-	log.WithFunc("provider.NewCocoonProvider").Infof(ctx, "initialized (bin=%s, nodeIP=%s)", cocoonBin, nodeIP)
+	log.WithFunc("provider.NewCocoonProvider").Infof(ctx, "initialized (bin=%s, node=%s, nodeIP=%s)", cocoonBin, nodeName, nodeIP)
 
 	p.podMap = newPodMap()
 

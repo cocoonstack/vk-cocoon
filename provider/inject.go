@@ -1,9 +1,3 @@
-// Package provider — file injection helpers for VM volumes and env vars.
-//
-// In containers, kubelet mounts ConfigMaps/Secrets as tmpfs volumes.
-// For VMs, we SSH-write the files after boot. The VK framework resolves
-// all configMapKeyRef/secretKeyRef/fieldRef in pod.Spec.Containers[0].Env
-// before calling CreatePod, so we get plain Name/Value pairs.
 package provider
 
 import (
@@ -18,10 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// Annotation keys for injection config.
 const (
-	AnnEnvFile     = "cocoon.cis/env-file"     // target path for env file (default: /opt/agent/pod.env)
-	AnnServiceName = "cocoon.cis/service-name" // systemd service to restart on env change
+	AnnEnvFile     = "cocoon.cis/env-file"
+	AnnServiceName = "cocoon.cis/service-name"
 )
 
 var (
@@ -29,15 +22,10 @@ var (
 	sshReadyPollInterval = 2 * time.Second
 	sshReadyProbe        = func(ctx context.Context, vm *CocoonVM, password string) error {
 		_, err := guestExecutor{}.execSimple(ctx, vm, password, "true")
-		return err
+		return err //nolint:wrapcheck // probe returns the SSH error directly
 	}
 )
 
-// ---------- Environment variable injection ----------
-
-// injectEnvVars writes pod.Spec.Containers[0].Env as a systemd-compatible env file.
-// The VK framework has already resolved configMapKeyRef/secretKeyRef/fieldRef.
-// Returns a content hash for change detection.
 func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) (string, error) {
 	if vm.skipSSH() {
 		return "", nil
@@ -50,7 +38,6 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 			}
 		}
 	}
-	// #22: Add DownwardAPI env vars (pod metadata)
 	for k, v := range p.injectDownwardAPIEnv(pod, vm) {
 		envs = append(envs, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -70,10 +57,6 @@ func (p *CocoonProvider) injectEnvVars(ctx context.Context, pod *corev1.Pod, vm 
 	return hash, nil
 }
 
-// ---------- ConfigMap/Secret volume injection ----------
-
-// injectVolumes writes ConfigMap/Secret volume data as files in the VM.
-// Returns a content hash for change detection.
 func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) (string, error) {
 	if vm.skipSSH() {
 		return "", nil
@@ -82,8 +65,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 		return "", nil
 	}
 
-	// Build mountPath lookup from container volumeMounts
-	mounts := map[string]string{} // volumeName -> mountPath
+	mounts := map[string]string{}
 	if len(pod.Spec.Containers) > 0 {
 		for _, m := range pod.Spec.Containers[0].VolumeMounts {
 			mounts[m.Name] = m.MountPath
@@ -92,7 +74,7 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 
 	pw := p.sshPass(vm)
 	var allContent strings.Builder
-	fileCount := 0
+	var batch []batchFile
 
 	for _, vol := range pod.Spec.Volumes {
 		mountPath, ok := mounts[vol.Name]
@@ -126,45 +108,40 @@ func (p *CocoonProvider) injectVolumes(ctx context.Context, pod *corev1.Pod, vm 
 				}
 				return "", fmt.Errorf("get secret %s: %w", vol.Secret.SecretName, err)
 			}
-			// Secret.Data is map[string][]byte
 			binData = sec.Data
 			if vol.Secret.DefaultMode != nil {
 				mode = int(*vol.Secret.DefaultMode)
 			}
 		default:
-			continue // skip unsupported volume types (emptyDir, hostPath, etc.)
+			continue
 		}
 
-		// Write string data
 		for key, val := range data {
 			path := mountPath + "/" + key
-			if err := p.guestExecutor().writeFile(ctx, vm, pw, path, []byte(val), mode); err != nil {
-				return "", err
-			}
+			batch = append(batch, batchFile{path: path, data: []byte(val), mode: mode})
 			allContent.WriteString(key + "=" + val + "\n")
-			fileCount++
 		}
-		// Write binary data
 		for key, val := range binData {
 			path := mountPath + "/" + key
-			if err := p.guestExecutor().writeFile(ctx, vm, pw, path, val, mode); err != nil {
-				return "", err
-			}
+			batch = append(batch, batchFile{path: path, data: val, mode: mode})
 			allContent.Write(val)
-			fileCount++
+		}
+	}
+
+	if len(batch) > 0 {
+		if err := p.guestExecutor().writeFilesBatch(ctx, vm, pw, batch); err != nil {
+			return "", fmt.Errorf("inject volumes: %w", err)
 		}
 	}
 
 	hash := ""
-	if fileCount > 0 {
+	if len(batch) > 0 {
 		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(allContent.String())))
-		log.WithFunc("provider.injectVolumes").Infof(ctx, "%s/%s: wrote %d files", pod.Namespace, pod.Name, fileCount)
+		log.WithFunc("provider.injectVolumes").Infof(ctx, "%s/%s: wrote %d files", pod.Namespace, pod.Name, len(batch))
 	}
 	return hash, nil
 }
 
-// postBootInject runs all injections and lifecycle setup after VM boot.
-// Order: security -> init containers -> volumes -> env -> sidecars -> DNS -> SSH key.
 func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm *CocoonVM) {
 	if vm.os == osWindows {
 		return
@@ -178,22 +155,16 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 		return
 	}
 
-	// #14: Security context (create user if runAsUser specified)
 	p.applySecurityContext(ctx, pod, vm)
-
-	// #16: SSH key injection
 	p.injectSSHKey(ctx, pod, vm)
 
-	// #13: Init containers (must complete before main service starts)
 	if err := p.runInitContainers(ctx, pod, vm); err != nil {
 		logger.Errorf(ctx, err, "%s: init containers failed", key)
-		return // don't proceed if init fails
+		return
 	}
 
-	// #11/#21: Volumes (emptyDir, hostPath, projected/downwardAPI)
 	p.setupVolumes(ctx, pod, vm)
 
-	// #5: ConfigMap/Secret volumes
 	if volHash, err := p.injectVolumes(ctx, pod, vm); err != nil {
 		logger.Warnf(ctx, "%s: volume injection failed: %v", key, err)
 	} else if volHash != "" {
@@ -202,7 +173,6 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 		p.mu.Unlock()
 	}
 
-	// #6/#22: Env vars + DownwardAPI metadata
 	if envHash, err := p.injectEnvVars(ctx, pod, vm); err != nil {
 		logger.Warnf(ctx, "%s: env injection failed: %v", key, err)
 	} else if envHash != "" {
@@ -211,12 +181,7 @@ func (p *CocoonProvider) postBootInject(ctx context.Context, pod *corev1.Pod, vm
 		p.mu.Unlock()
 	}
 
-	// #12: Multi-container -> sidecar systemd services
 	p.installContainerServices(ctx, pod, vm)
-
-	// #17: Pod DNS entry
 	addPodDNS(pod.Name, pod.Namespace, vm.ip)
-
-	// #24: Resource enforcement via CH API
 	p.enforceResources(ctx, pod, vm)
 }

@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -17,7 +16,6 @@ func (p *EpochPuller) cocoonExec(ctx context.Context, args ...string) (string, e
 	return string(out), err
 }
 
-// cocoonExecWithStdin runs a cocoon subprocess with data piped to stdin.
 func (p *EpochPuller) cocoonExecWithStdin(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
 	cmd := p.buildCocoonCmd(ctx, args...)
 	cmd.Stdin = stdin
@@ -45,8 +43,6 @@ func (p *EpochPuller) buildCocoonCmd(ctx context.Context, args ...string) *exec.
 	return exec.CommandContext(ctx, "sudo", sudoArgs...) //nolint:gosec
 }
 
-// pipeToImport streams data into a cocoon import subprocess via pipe.
-// writeFn writes the data to w; the cocoon command reads from the pipe.
 func (p *EpochPuller) pipeToImport(ctx context.Context, args []string, writeFn func(w io.Writer) error) error {
 	pr, pw := io.Pipe()
 
@@ -74,19 +70,16 @@ func (p *EpochPuller) pipeToImport(ctx context.Context, args []string, writeFn f
 
 func (p *EpochPuller) copyBlob(ctx context.Context, name, digest string, w io.Writer) error {
 	url := p.blobURL(name, digest)
-	if p.authToken() != "" {
-		return p.curlCopy(ctx, url, w)
-	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("create blob request: %w", err)
 	}
 	p.setAuth(req)
 
 	resp, err := p.client.Do(req) //nolint:gosec // epoch serverURL is configured by the trusted provider setup
 	if err != nil {
-		return err
+		return fmt.Errorf("get blob %s: %w", shortHex(digest), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -94,48 +87,11 @@ func (p *EpochPuller) copyBlob(ctx context.Context, name, digest string, w io.Wr
 		return fmt.Errorf("get blob %s: %d %s", shortHex(digest), resp.StatusCode, readLimitedBody(resp.Body))
 	}
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		return err
+		return fmt.Errorf("read blob %s: %w", shortHex(digest), err)
 	}
 	return nil
 }
 
-func (p *EpochPuller) curlCopy(ctx context.Context, url string, w io.Writer) error {
-	args := []string{"-fsSL", "--retry", "3"}
-	if token := p.authToken(); token != "" {
-		args = append(args, "-H", "Authorization: Bearer "+token)
-	}
-	args = append(args, url)
-
-	cmd := exec.CommandContext(ctx, "curl", args...) //nolint:gosec
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("curl GET %s: stdout pipe: %w", url, err)
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("curl GET %s: %w", url, err)
-	}
-
-	if _, err := io.Copy(w, stdout); err != nil {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
-		return fmt.Errorf("curl GET %s: %w", url, err)
-	}
-	if err := cmd.Wait(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return fmt.Errorf("curl GET %s: %s: %w", url, msg, err)
-		}
-		return fmt.Errorf("curl GET %s: %w", url, err)
-	}
-	return nil
-}
-
-// putBlob uploads a blob to the registry via PUT /v2/{name}/blobs/sha256:{digest}.
 func (p *EpochPuller) putBlob(ctx context.Context, name, digest string, body io.Reader, size int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, p.blobURL(name, digest), body)
 	if err != nil {

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,8 +10,6 @@ import (
 
 const podMapDir = "/var/lib/cocoon/vk-cocoon"
 
-// podMap persists podKey → VM metadata to disk so vk-cocoon can recover
-// pod-to-VM mappings after a restart without relying on name heuristics.
 type podMap struct {
 	mu      sync.RWMutex
 	path    string
@@ -42,37 +41,39 @@ func (pm *podMap) load() {
 }
 
 func (pm *podMap) save() {
-	_ = os.MkdirAll(filepath.Dir(pm.path), 0o750)
-	data, err := json.MarshalIndent(pm.entries, "", "  ")
+	pm.mu.RLock()
+	snapshot := make(map[string]podMapEntry, len(pm.entries))
+	maps.Copy(snapshot, pm.entries)
+	pm.mu.RUnlock()
+
+	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return
 	}
+	_ = os.MkdirAll(filepath.Dir(pm.path), 0o750)
 	_ = os.WriteFile(pm.path, data, 0o640) //nolint:gosec
 }
 
-// Store records a pod → VM mapping and persists to disk.
 func (pm *podMap) Store(key string, vmID, vmName, image string) {
 	if pm == nil {
 		return
 	}
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 	pm.entries[key] = podMapEntry{VMID: vmID, VMName: vmName, Image: image}
+	pm.mu.Unlock()
 	pm.save()
 }
 
-// Delete removes a pod mapping and persists to disk.
 func (pm *podMap) Delete(key string) {
 	if pm == nil {
 		return
 	}
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
 	delete(pm.entries, key)
+	pm.mu.Unlock()
 	pm.save()
 }
 
-// Lookup returns the persisted VM metadata for a pod key.
 func (pm *podMap) Lookup(key string) (podMapEntry, bool) {
 	if pm == nil {
 		return podMapEntry{}, false

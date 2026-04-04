@@ -75,7 +75,7 @@ func main() {
 			}
 		}
 		np := provider.NewCocoonNodeProvider(cfg.Node)
-		return provider.NewCocoonProvider(ctx, cocoonBin, nodeIP, clientset, cfg), np, nil
+		return provider.NewCocoonProvider(ctx, cocoonBin, nodeName, nodeIP, clientset, cfg), np, nil
 	}
 
 	// Load TLS cert (signed by k3s server-ca, or self-signed)

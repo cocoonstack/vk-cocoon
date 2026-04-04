@@ -44,6 +44,44 @@ func (guestExecutor) writeFile(ctx context.Context, vm *CocoonVM, password, path
 	return nil
 }
 
+type batchFile struct {
+	path string
+	data []byte
+	mode int
+}
+
+func (guestExecutor) writeFilesBatch(ctx context.Context, vm *CocoonVM, password string, files []batchFile) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if len(files) == 1 {
+		return guestExecutor{}.writeFile(ctx, vm, password, files[0].path, files[0].data, files[0].mode)
+	}
+
+	var script strings.Builder
+	script.WriteString("set -e\n")
+	for i, f := range files {
+		dir := filepath.Dir(f.path)
+		marker := fmt.Sprintf("__EOF_BATCH_%d__", i)
+		fmt.Fprintf(&script, "mkdir -p '%s'\n", dir)
+		fmt.Fprintf(&script, "cat > '%s' <<%s\n", f.path, marker)
+		script.Write(f.data)
+		if len(f.data) > 0 && f.data[len(f.data)-1] != '\n' {
+			script.WriteByte('\n')
+		}
+		fmt.Fprintf(&script, "%s\n", marker)
+		fmt.Fprintf(&script, "chmod %04o '%s'\n", f.mode, f.path)
+	}
+
+	cmd := guestExecutor{}.command(ctx, vm, password, false, "bash -s")
+	cmd.Stdin = strings.NewReader(script.String())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh batch write %d files: %w (%s)", len(files), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func (guestExecutor) execSimple(ctx context.Context, vm *CocoonVM, password, command string) (string, error) {
 	cmd := guestExecutor{}.command(ctx, vm, password, false, command)
 	out, err := cmd.CombinedOutput()

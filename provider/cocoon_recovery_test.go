@@ -14,6 +14,8 @@ func newTestProvider() *CocoonProvider {
 		sshPassword:               "test-password",
 		pods:                      make(map[string]*corev1.Pod),
 		vms:                       make(map[string]*CocoonVM),
+		vmIDToPod:                 make(map[string]string),
+		vmNameToPod:               make(map[string]string),
 		injectHashes:              make(map[string]string),
 		probeStates:               make(map[string]*probeResult),
 		pullers:                   make(map[string]*EpochPuller),

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -13,13 +14,11 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-// vmWatchEvent matches the JSON output of `cocoon vm status --event --format json`.
 type vmWatchEvent struct {
-	Event string         `json:"event"` // ADDED, MODIFIED, DELETED
+	Event string         `json:"event"`
 	VM    vmWatchEventVM `json:"vm"`
 }
 
-// vmWatchEventVM is the VM object emitted by cocoon's status event stream.
 type vmWatchEventVM struct {
 	ID     string `json:"id"`
 	Config struct {
@@ -40,10 +39,13 @@ type vmWatchEventVM struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// vmCache is a thread-safe in-memory cache of VM states populated by the event stream.
 type vmCache struct {
-	mu  sync.RWMutex
-	vms map[string]*cachedVM // keyed by VM ID
+	mu    sync.RWMutex
+	vms   map[string]*cachedVM
+	names map[string]string // name → id index
+
+	waiterMu sync.Mutex
+	waiters  map[string][]chan struct{} // vmID → channels
 }
 
 type cachedVM struct {
@@ -59,18 +61,39 @@ type cachedVM struct {
 }
 
 func newVMCache() *vmCache {
-	return &vmCache{vms: make(map[string]*cachedVM)}
+	return &vmCache{
+		vms:     make(map[string]*cachedVM),
+		names:   make(map[string]string),
+		waiters: make(map[string][]chan struct{}),
+	}
 }
 
 func (c *vmCache) apply(ev vmWatchEvent) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	switch ev.Event {
 	case "ADDED", "MODIFIED":
-		c.vms[ev.VM.ID] = eventToCache(ev.VM)
+		old := c.vms[ev.VM.ID]
+		if old != nil && old.name != "" && old.name != ev.VM.Config.Name {
+			delete(c.names, old.name)
+		}
+		cv := eventToCache(ev.VM)
+		c.vms[ev.VM.ID] = cv
+		if cv.name != "" {
+			c.names[cv.name] = cv.id
+		}
 	case "DELETED":
+		if old := c.vms[ev.VM.ID]; old != nil && old.name != "" {
+			delete(c.names, old.name)
+		}
 		delete(c.vms, ev.VM.ID)
+	}
+	c.mu.Unlock()
+
+	if ev.Event == "ADDED" || ev.Event == "MODIFIED" {
+		c.notifyWaiters(ev.VM.ID)
+		if ev.VM.Config.Name != "" {
+			c.notifyWaiters(ev.VM.Config.Name)
+		}
 	}
 }
 
@@ -83,12 +106,31 @@ func (c *vmCache) findByID(id string) *cachedVM {
 func (c *vmCache) findByName(name string) *cachedVM {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, vm := range c.vms {
-		if vm.name == name {
-			return vm
-		}
+	if id, ok := c.names[name]; ok {
+		return c.vms[id]
 	}
 	return nil
+}
+
+func (c *vmCache) waitFor(key string) chan struct{} {
+	ch := make(chan struct{}, 1)
+	c.waiterMu.Lock()
+	c.waiters[key] = append(c.waiters[key], ch)
+	c.waiterMu.Unlock()
+	return ch
+}
+
+func (c *vmCache) notifyWaiters(key string) {
+	c.waiterMu.Lock()
+	chs := c.waiters[key]
+	delete(c.waiters, key)
+	c.waiterMu.Unlock()
+	for _, ch := range chs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func eventToCache(v vmWatchEventVM) *cachedVM {
@@ -123,16 +165,11 @@ func (cv *cachedVM) toCocoonVM() *CocoonVM {
 	}
 }
 
-// startVMWatcher launches `cocoon vm status --event --format json` and feeds events
-// into the cache. It reconnects automatically on process exit.
 func (p *CocoonProvider) startVMWatcher(ctx context.Context) {
 	p.vmState = newVMCache()
 	go p.vmWatchLoop(ctx)
 }
 
-// killOrphanEventStreams kills any leftover `cocoon vm status --event` processes
-// from previous vk-cocoon instances. These orphans survive vk-cocoon restart
-// (KillMode=process) and can interfere with the new event stream's inotify watch.
 func killOrphanEventStreams(cocoonBin string) {
 	out, err := exec.Command("pgrep", "-f", cocoonBin+" vm status --event").Output() //nolint:gosec
 	if err != nil {
@@ -169,14 +206,13 @@ func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("start event stream: %w", err)
 	}
 	logger.Info(ctx, "event stream started")
 
-	// Kill the process group when context is canceled or this function returns.
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -185,7 +221,7 @@ func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 			return
 		}
 		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck // best-effort cleanup
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) //nolint:errcheck
 		}
 	}()
 	defer func() {
@@ -209,23 +245,62 @@ func (p *CocoonProvider) runVMStatusStream(ctx context.Context) error {
 			continue
 		}
 		p.vmState.apply(ev)
-
-		// Notify pod status for any pod that owns this VM.
 		p.notifyPodForVM(ctx, ev.VM.ID, ev.VM.Config.Name)
 	}
 	return nil
 }
 
-// notifyPodForVM finds the pod that owns a VM and triggers a status update.
 func (p *CocoonProvider) notifyPodForVM(ctx context.Context, vmID, vmName string) {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-	for key, vm := range p.vms {
-		if vm.vmID == vmID || vm.vmName == vmName {
-			if ns, name, ok := strings.Cut(key, "/"); ok {
-				go p.notifyPodStatus(ctx, ns, name)
-			}
-			return
+	key := p.vmIDToPod[vmID]
+	if key == "" {
+		key = p.vmNameToPod[vmName]
+	}
+	p.mu.RUnlock()
+	if key == "" {
+		return
+	}
+	if ns, name, ok := strings.Cut(key, "/"); ok {
+		go p.notifyPodStatus(ctx, ns, name)
+	}
+}
+
+func (p *CocoonProvider) awaitVMInCache(ctx context.Context, vmID, vmName string, timeout time.Duration) *CocoonVM {
+	if p.vmState == nil {
+		return nil
+	}
+	if cv := p.vmState.findByID(vmID); cv != nil {
+		return cv.toCocoonVM()
+	}
+	if vmName != "" {
+		if cv := p.vmState.findByName(vmName); cv != nil {
+			return cv.toCocoonVM()
 		}
 	}
+
+	key := vmID
+	if key == "" {
+		key = vmName
+	}
+	ch := p.vmState.waitFor(key)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil
+	}
+
+	if vmID != "" {
+		if cv := p.vmState.findByID(vmID); cv != nil {
+			return cv.toCocoonVM()
+		}
+	}
+	if vmName != "" {
+		if cv := p.vmState.findByName(vmName); cv != nil {
+			return cv.toCocoonVM()
+		}
+	}
+	return nil
 }

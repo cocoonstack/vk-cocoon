@@ -5,11 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,12 +19,6 @@ const (
 	testPAXSparseMap  = "COCOON.sparse.map"
 	testPAXSparseSize = "COCOON.sparse.size"
 )
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
-}
 
 func TestSnapshotStreamRoundTripPreservesSparseMetadata(t *testing.T) {
 	ctx := context.Background()
@@ -148,11 +140,7 @@ func TestReadAndUploadTarEntriesRejectsCorruptTar(t *testing.T) {
 	}
 }
 
-func TestCopyBlobUsesCurlForTokenAuth(t *testing.T) {
-	if _, err := exec.LookPath("curl"); err != nil {
-		t.Skip("curl not available")
-	}
-
+func TestCopyBlobUsesGoHTTPClientWithTokenAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			http.Error(w, "missing auth", http.StatusUnauthorized)
@@ -171,9 +159,7 @@ func TestCopyBlobUsesCurlForTokenAuth(t *testing.T) {
 	p := &EpochPuller{
 		serverURL: server.URL,
 		token:     "test-token",
-		client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return nil, errors.New("http client should not be used for token blob copy")
-		})},
+		client:    server.Client(),
 	}
 
 	var buf bytes.Buffer

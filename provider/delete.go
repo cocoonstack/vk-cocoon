@@ -117,6 +117,10 @@ func (p *CocoonProvider) cleanupDeletedPod(key, podName string) {
 	removePodDNS(podName)
 	p.podMap.Delete(key)
 	p.mu.Lock()
+	if vm, ok := p.vms[key]; ok && vm != nil {
+		delete(p.vmIDToPod, vm.vmID)
+		delete(p.vmNameToPod, vm.vmName)
+	}
 	delete(p.pods, key)
 	delete(p.vms, key)
 	delete(p.injectHashes, key+"/env")

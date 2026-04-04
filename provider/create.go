@@ -403,14 +403,16 @@ func (c *CocoonProvider) releaseReservedVM(key string) {
 }
 
 func (c *CocoonProvider) discoverCreatedVM(ctx context.Context, vmName, vmID string) *CocoonVM {
-	for range 5 {
+	if vm := c.awaitVMInCache(ctx, vmID, vmName, 10*time.Second); vm != nil {
+		return vm
+	}
+	for range 3 {
 		if vmID != "" {
 			if vm := c.discoverVMByID(ctx, vmID); vm != nil {
 				return vm
 			}
 		}
-		vm := c.discoverVM(ctx, vmName)
-		if vm != nil && vm.vmID != "" {
+		if vm := c.discoverVM(ctx, vmName); vm != nil && vm.vmID != "" {
 			return vm
 		}
 		time.Sleep(2 * time.Second)

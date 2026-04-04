@@ -41,7 +41,11 @@ func (p *CocoonProvider) findOtherActivePodForVMID(ctx context.Context, pod *cor
 		return ""
 	}
 
-	list, err := p.kubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	opts := metav1.ListOptions{}
+	if p.nodeName != "" {
+		opts.FieldSelector = "spec.nodeName=" + p.nodeName
+	}
+	list, err := p.kubeClient.CoreV1().Pods("").List(ctx, opts)
 	if err != nil {
 		log.WithFunc("provider.findOtherActivePodForVMID").Warnf(ctx, "%s: list pods: %v", vmID, err)
 		return ""
@@ -61,7 +65,7 @@ func (p *CocoonProvider) findOtherActivePodForVMID(ctx context.Context, pod *cor
 	return ""
 }
 
-func (p *CocoonProvider) GetPod(ctx context.Context, ns, name string) (*corev1.Pod, error) {
+func (p *CocoonProvider) GetPod(_ context.Context, ns, name string) (*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	pod, ok := p.pods[podKey(ns, name)]
@@ -71,7 +75,7 @@ func (p *CocoonProvider) GetPod(ctx context.Context, ns, name string) (*corev1.P
 	return pod, nil
 }
 
-func (p *CocoonProvider) GetPods(ctx context.Context) ([]*corev1.Pod, error) {
+func (p *CocoonProvider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	out := make([]*corev1.Pod, 0, len(p.pods))
@@ -131,7 +135,6 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 	switch vm.state {
 	case stateRunning:
 		if vm.ip == "" {
-			// VM is running but has no IP — stay Pending until DHCP resolves.
 			containerState = corev1.ContainerState{
 				Waiting: &corev1.ContainerStateWaiting{
 					Reason:  "WaitingForIP",
@@ -221,13 +224,12 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 	}, nil
 }
 
-// NotifyPods implements node.PodNotifier — registers async status callback.
+// NotifyPods implements node.PodNotifier.
 func (p *CocoonProvider) NotifyPods(ctx context.Context, cb func(*corev1.Pod)) {
 	p.notifyPodCb = cb
-	log.WithFunc("provider.NotifyPods").Info(ctx, "PodNotifier registered — async pod status updates enabled")
+	log.WithFunc("provider.NotifyPods").Info(ctx, "PodNotifier registered")
 }
 
-// notifyPodStatus pushes a pod status update to the VK pod controller.
 func (p *CocoonProvider) notifyPodStatus(ctx context.Context, ns, name string) {
 	logger := log.WithFunc("provider.notifyPodStatus")
 	if p.notifyPodCb == nil {

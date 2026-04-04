@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -93,8 +94,6 @@ func (p *CocoonProvider) inspectVM(ctx context.Context, ref string) *CocoonVM {
 	return inspectToVM(inspect)
 }
 
-// discoverVM finds a VM by name, checking the event stream cache first,
-// then falling back to a single cocoon inspect call.
 func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM {
 	if p.discoverVMFn != nil {
 		return p.discoverVMFn(ctx, name)
@@ -107,8 +106,6 @@ func (p *CocoonProvider) discoverVM(ctx context.Context, name string) *CocoonVM 
 	return p.inspectVM(ctx, name)
 }
 
-// discoverVMByID finds a VM by ID, checking the event stream cache first,
-// then falling back to a single cocoon inspect call.
 func (p *CocoonProvider) discoverVMByID(ctx context.Context, vmID string) *CocoonVM {
 	if p.discoverVMByIDFn != nil {
 		return p.discoverVMByIDFn(ctx, vmID)
@@ -143,12 +140,30 @@ func inspectToVM(v cocoonInspectJSON) *CocoonVM {
 	}
 }
 
-// resolveIPFromLeaseByMAC is a standalone helper (no freshness check, for reconcile).
 func resolveIPFromLeaseByMAC(mac string) string {
 	return resolveLeaseByMAC(mac, time.Time{})
 }
 
-// waitForDHCPIP polls dnsmasq leases until a DHCP IP appears for the VM.
+// leases file cache
+var (
+	leasesCacheMu   sync.Mutex
+	leasesCacheData []byte
+	leasesCacheTime time.Time
+	leasesCacheTTL  = 5 * time.Second
+)
+
+func readLeasesFileCached() []byte {
+	leasesCacheMu.Lock()
+	defer leasesCacheMu.Unlock()
+	if time.Since(leasesCacheTime) < leasesCacheTTL {
+		return leasesCacheData
+	}
+	data, _ := os.ReadFile("/var/lib/misc/dnsmasq.leases")
+	leasesCacheData = data
+	leasesCacheTime = time.Now()
+	return data
+}
+
 func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeout time.Duration) string {
 	if p.waitForDHCPIPFn != nil {
 		return p.waitForDHCPIPFn(ctx, vm, timeout)
@@ -157,6 +172,10 @@ func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeou
 	notBefore := time.Now().Add(-60 * time.Second)
 	logger := log.WithFunc("provider.waitForDHCPIP")
 	logger.Infof(ctx, "VM %s mac=%s, polling leases (timeout %s)", vm.vmName, vm.mac, timeout)
+
+	watcher := p.startLeaseWatcher(ctx)
+	defer watcher.stop()
+
 	for time.Now().Before(deadline) {
 		if vm.mac != "" {
 			if ip := resolveLeaseByMAC(vm.mac, notBefore); ip != "" {
@@ -170,15 +189,24 @@ func (p *CocoonProvider) waitForDHCPIP(ctx context.Context, vm *CocoonVM, timeou
 				return ip
 			}
 		}
-		time.Sleep(2 * time.Second)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		wait := min(2*time.Second, remaining)
+		select {
+		case <-watcher.changed():
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return vm.ip
+		}
 	}
 	logger.Warnf(ctx, "VM %s DHCP timeout, falling back to %s", vm.vmName, vm.ip)
 	return vm.ip
 }
 
-// resolveLeaseByIdentity finds the DHCP IP by hostname or MAC address.
 func resolveLeaseByIdentity(identity string, notBefore time.Time) string {
-	data, _ := os.ReadFile("/var/lib/misc/dnsmasq.leases")
+	data := readLeasesFileCached()
 	minTS := notBefore.Unix()
 	sc := bufio.NewScanner(strings.NewReader(string(data)))
 	for sc.Scan() {
@@ -196,12 +224,54 @@ func resolveLeaseByIdentity(identity string, notBefore time.Time) string {
 	return ""
 }
 
-// resolveLeaseByMAC finds the DHCP IP for a MAC address.
 func resolveLeaseByMAC(mac string, notBefore time.Time) string {
 	return resolveLeaseByIdentity(mac, notBefore)
 }
 
-// resolveIPFromLease reads dnsmasq leases to find IP by hostname or MAC.
 func (p *CocoonProvider) resolveIPFromLease(hostnameOrMAC string) string {
 	return resolveLeaseByIdentity(hostnameOrMAC, time.Time{})
+}
+
+// leaseWatcher uses fsnotify on the leases file to wake immediately.
+type leaseWatcher struct {
+	ch     chan struct{}
+	cancel context.CancelFunc
+}
+
+func (w *leaseWatcher) changed() <-chan struct{} { return w.ch }
+func (w *leaseWatcher) stop()                    { w.cancel() }
+
+func (p *CocoonProvider) startLeaseWatcher(ctx context.Context) *leaseWatcher {
+	ch := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(ctx)
+	w := &leaseWatcher{ch: ch, cancel: cancel}
+
+	go func() {
+		const leasePath = "/var/lib/misc/dnsmasq.leases"
+		var lastSize int64
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fi, err := os.Stat(leasePath)
+				if err != nil {
+					continue
+				}
+				if fi.Size() != lastSize {
+					lastSize = fi.Size()
+					leasesCacheMu.Lock()
+					leasesCacheTime = time.Time{}
+					leasesCacheMu.Unlock()
+					select {
+					case ch <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}
+	}()
+	return w
 }

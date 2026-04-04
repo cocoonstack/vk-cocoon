@@ -66,8 +66,22 @@ func (p *CocoonProvider) storePodVMState(key string, pod *corev1.Pod, vm *Cocoon
 }
 
 func (p *CocoonProvider) storePodVMStateLocked(key string, pod *corev1.Pod, vm *CocoonVM) {
+	if old, ok := p.vms[key]; ok && old != nil {
+		if old.vmID != "" && old.vmID != vm.vmID {
+			delete(p.vmIDToPod, old.vmID)
+		}
+		if old.vmName != "" && old.vmName != vm.vmName {
+			delete(p.vmNameToPod, old.vmName)
+		}
+	}
 	p.pods[key] = pod.DeepCopy()
 	p.vms[key] = vm
+	if vm.vmID != "" {
+		p.vmIDToPod[vm.vmID] = key
+	}
+	if vm.vmName != "" {
+		p.vmNameToPod[vm.vmName] = key
+	}
 }
 
 // storePodVM updates annotations, persists the in-memory state, and patches the
