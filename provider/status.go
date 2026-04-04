@@ -130,6 +130,16 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, ns, name string) (*co
 
 	switch vm.state {
 	case stateRunning:
+		if vm.ip == "" {
+			// VM is running but has no IP — stay Pending until DHCP resolves.
+			containerState = corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "WaitingForIP",
+					Message: "VM running, waiting for DHCP IP",
+				},
+			}
+			break
+		}
 		phase = corev1.PodRunning
 		ready = corev1.ConditionTrue
 		_, readinessOK := p.getProbeReadiness(key)

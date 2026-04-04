@@ -433,6 +433,9 @@ func (c *CocoonProvider) finishCreate(ctx context.Context, req createRequest, pl
 	vm.createdAt = time.Now()
 	vm.startedAt = time.Now()
 	vm.ip = c.waitForDHCPIP(ctx, vm, 120*time.Second)
+	if vm.ip == "" {
+		logger.Warnf(ctx, "%s: no DHCP IP yet, pod stays pending until lease resolves", req.key)
+	}
 
 	c.storePodVM(ctx, req.key, req.pod, vm, podAnnotation{key: AnnSnapshotFrom, value: plan.snapshotFrom()})
 	c.podMap.Store(req.key, vm.vmID, vm.vmName, vm.image)

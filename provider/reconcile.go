@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type managedVMSnapshot struct {
@@ -47,6 +48,14 @@ func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 			continue
 		}
 
+		// If VM is running but has no IP, try to resolve from DHCP lease.
+		if updated.state == stateRunning && updated.ip == "" && updated.mac != "" {
+			if ip := resolveLeaseByMAC(updated.mac, time.Time{}); ip != "" {
+				log.WithFunc("provider.reconcileOnce").Infof(ctx, "VM %s resolved DHCP IP %s (by MAC) during reconcile", snap.name, ip)
+				updated.ip = ip
+			}
+		}
+
 		p.syncPodRuntimeMetadata(ctx, snap.key, updated)
 		if updated.state != stateRunning {
 			log.WithFunc("provider.reconcileOnce").Warnf(ctx, "VM %s (%s) state=%s (not auto-restarting — VMs are ephemeral now)",
@@ -59,6 +68,59 @@ func (p *CocoonProvider) reconcileOnce(ctx context.Context) {
 		if ns, name, ok := strings.Cut(snap.key, "/"); ok {
 			go p.notifyPodStatus(ctx, ns, name)
 		}
+	}
+
+	p.reconcileOrphanedPods(ctx)
+}
+
+// reconcileOrphanedPods detects pods whose VM no longer exists and notifies
+// the VK framework with a terminal phase (Succeeded/Failed).  This handles
+// the case where a pod is stuck in Terminating because the VK framework only
+// calls DeletePod for Running pods — if the VM disappeared (or was never
+// created) while the pod was Pending, the framework never finalizes it.
+func (p *CocoonProvider) reconcileOrphanedPods(ctx context.Context) {
+	logger := log.WithFunc("provider.reconcileOrphanedPods")
+
+	p.mu.RLock()
+	type orphanCandidate struct {
+		key  string
+		ns   string
+		name string
+	}
+	var candidates []orphanCandidate
+	for key, vm := range p.vms {
+		if vm == nil || !vm.managed {
+			continue
+		}
+		if vm.state == stateStopped || vm.state == stateError || vm.state == stateFailed || vm.state == stateStoppedStale {
+			if ns, name, ok := strings.Cut(key, "/"); ok {
+				candidates = append(candidates, orphanCandidate{key: key, ns: ns, name: name})
+			}
+		}
+	}
+	p.mu.RUnlock()
+
+	for _, c := range candidates {
+		// Check if the pod is being deleted (DeletionTimestamp set) in the API server.
+		if p.kubeClient == nil {
+			continue
+		}
+		apiPod, err := p.kubeClient.CoreV1().Pods(c.ns).Get(ctx, c.name, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		if apiPod.DeletionTimestamp == nil {
+			continue
+		}
+
+		// Pod is being deleted but VK framework can't finalize because the provider
+		// never reported a terminal status.  Force-delete via API.
+		logger.Infof(ctx, "%s: VM gone and pod has DeletionTimestamp, force-deleting orphaned pod", c.key)
+		gracePeriod := int64(0)
+		_ = p.kubeClient.CoreV1().Pods(c.ns).Delete(ctx, c.name, metav1.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+		})
+		p.cleanupDeletedPod(c.key, c.name)
 	}
 }
 

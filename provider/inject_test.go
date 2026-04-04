@@ -3,11 +3,19 @@ package provider
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// sshTestMu serialises tests that mutate the global sshReadyProbe variable.
+var sshTestMu sync.Mutex
+
 func TestWaitForSSHEventuallySucceeds(t *testing.T) {
+	sshTestMu.Lock()
+	defer sshTestMu.Unlock()
+
 	oldProbe := sshReadyProbe
 	oldInterval := sshReadyPollInterval
 	defer func() {
@@ -16,16 +24,16 @@ func TestWaitForSSHEventuallySucceeds(t *testing.T) {
 	}()
 
 	sshReadyPollInterval = 0
-	attempts := 0
+	var attempts atomic.Int32
 	sshReadyProbe = func(_ context.Context, vm *CocoonVM, password string) error {
-		attempts++
+		attempts.Add(1)
 		if vm.ip != "10.88.100.10" {
 			t.Fatalf("vm.ip = %q, want 10.88.100.10", vm.ip)
 		}
 		if password != "secret" {
 			t.Fatalf("password = %q, want secret", password)
 		}
-		if attempts < 3 {
+		if attempts.Load() < 3 {
 			return errors.New("connection refused")
 		}
 		return nil
@@ -35,12 +43,15 @@ func TestWaitForSSHEventuallySucceeds(t *testing.T) {
 	if err := (guestExecutor{}).waitForSSH(context.Background(), vm, "secret", time.Second); err != nil {
 		t.Fatalf("waitForSSH: %v", err)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts = %d, want 3", attempts)
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts.Load())
 	}
 }
 
 func TestWaitForSSHTimesOut(t *testing.T) {
+	sshTestMu.Lock()
+	defer sshTestMu.Unlock()
+
 	oldProbe := sshReadyProbe
 	oldInterval := sshReadyPollInterval
 	defer func() {
