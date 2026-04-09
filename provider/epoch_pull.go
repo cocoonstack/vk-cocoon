@@ -31,6 +31,10 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	}
 
 	ref := name + ":" + tag
+	lock := p.ensureLock("snapshot:" + ref)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if p.cachedPull(ref) {
 		return nil
 	}

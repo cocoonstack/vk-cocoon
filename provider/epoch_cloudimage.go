@@ -31,6 +31,10 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 	}
 
 	ref := name + ":" + tag + "#cloudimg"
+	lock := p.ensureLock("cloudimg:" + ref)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if p.cachedPull(ref) {
 		return nil
 	}

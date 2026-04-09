@@ -27,8 +27,9 @@ type EpochPuller struct {
 	client    *http.Client
 	paths     *cocoon.Paths
 
-	mu     sync.Mutex
-	pulled map[string]bool
+	mu          sync.Mutex
+	pulled      map[string]bool
+	ensureLocks map[string]*sync.Mutex // per-ref mutex, serializes concurrent Ensure* calls
 
 	ensureSnapshotTagFn   func(context.Context, string, string) error
 	ensureCloudImageTagFn func(context.Context, string, string) error
@@ -83,6 +84,26 @@ func (p *EpochPuller) cachedPull(ref string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.pulled[ref]
+}
+
+// ensureLock returns a per-ref mutex that serializes concurrent Ensure*
+// calls for the same image reference. Two concurrent EnsureSnapshotTag calls
+// for the same ref would otherwise race on the local cocoon snapshot import
+// (and, in the cloudimg path, on the local image store). The mutex map grows
+// unbounded until EpochPuller is released — acceptable because refs are
+// scoped per-server and bounded by the number of images a provider touches.
+func (p *EpochPuller) ensureLock(ref string) *sync.Mutex {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ensureLocks == nil {
+		p.ensureLocks = make(map[string]*sync.Mutex)
+	}
+	lock := p.ensureLocks[ref]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		p.ensureLocks[ref] = lock
+	}
+	return lock
 }
 
 // RootDir returns the cocoon data root directory.
