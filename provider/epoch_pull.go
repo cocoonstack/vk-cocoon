@@ -56,9 +56,16 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 func (p *EpochPuller) ensureSnapshotTagInner(ctx context.Context, name, tag, ref string) error {
 	logger := log.WithFunc("provider.EnsureSnapshotTag")
 
+	// Verify the cache against on-disk reality. An operator may have removed
+	// the cocoon snapshot externally; trusting cachedState alone makes the
+	// puller silently no-op forever instead of re-pulling. refStateOCI does
+	// not have a corresponding local artifact to validate against, so it
+	// keeps its short-circuit.
 	switch p.cachedState(ref) {
 	case refStateImported:
-		return nil
+		if p.localSnapshotExists(ctx, name) {
+			return nil
+		}
 	case refStateOCI:
 		return errOCIManifest
 	}

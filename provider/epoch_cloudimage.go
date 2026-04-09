@@ -41,7 +41,12 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 }
 
 func (p *EpochPuller) ensureCloudImageTagInner(ctx context.Context, name, tag, ref string) error {
-	if p.cachedState(ref) == refStateImported {
+	// Cache hit alone is not enough — an operator (or another tool) may have
+	// removed the cocoon image out from under us. Always confirm the image is
+	// actually present locally before short-circuiting; if the cache says
+	// imported but cloud lookup says no, fall through to re-pull and let
+	// markRef below refresh the cache.
+	if p.cachedState(ref) == refStateImported && p.cloudImageExists(ctx, name) {
 		return nil
 	}
 	if p.cloudImageExists(ctx, name) {
