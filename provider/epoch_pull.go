@@ -19,6 +19,15 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
+// errOCIManifest signals that the referenced manifest is an OCI Distribution
+// format image rather than a cocoon-native snapshot. cocoon's built-in
+// go-containerregistry client pulls it directly; vk-cocoon should keep the
+// image as a run-mode reference and skip its own snapshot pull path.
+var errOCIManifest = errors.New("manifest is an OCI image")
+
+// IsErrOCIManifest reports whether err indicates an OCI manifest was seen.
+func IsErrOCIManifest(err error) bool { return errors.Is(err, errOCIManifest) }
+
 // EnsureSnapshot ensures a snapshot is available locally, pulling via HTTP if needed.
 func (p *EpochPuller) EnsureSnapshot(ctx context.Context, name string) error {
 	return p.EnsureSnapshotTag(ctx, name, "latest")
@@ -38,6 +47,9 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	if p.cachedPull(ref) {
 		return nil
 	}
+	if p.cachedOCI(ref) {
+		return errOCIManifest
+	}
 
 	if p.localSnapshotExists(ctx, name) {
 		p.markPulled(ref)
@@ -48,6 +60,11 @@ func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) e
 	start := time.Now()
 
 	if err := p.pull(ctx, name, tag); err != nil {
+		if errors.Is(err, errOCIManifest) {
+			log.WithFunc("provider.EnsureSnapshotTag").Infof(ctx, "[epoch] %s is an OCI image; cocoon will pull directly", ref)
+			p.markOCI(ref)
+			return errOCIManifest
+		}
 		return fmt.Errorf("epoch HTTP pull %s: %w", ref, err)
 	}
 
@@ -64,6 +81,9 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	doc, err := p.getManifest(ctx, name, tag)
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
+	}
+	if doc.IsOCIImage() {
+		return errOCIManifest
 	}
 	if doc.IsCloudImage() {
 		return fmt.Errorf("manifest %s:%s is a cloud image, not a snapshot", name, tag)

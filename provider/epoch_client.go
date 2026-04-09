@@ -29,6 +29,7 @@ type EpochPuller struct {
 
 	mu          sync.Mutex
 	pulled      map[string]bool
+	oci         map[string]bool        // refs whose manifest is an OCI image
 	ensureLocks map[string]*sync.Mutex // per-ref mutex, serializes concurrent Ensure* calls
 
 	ensureSnapshotTagFn   func(context.Context, string, string) error
@@ -84,6 +85,23 @@ func (p *EpochPuller) cachedPull(ref string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.pulled[ref]
+}
+
+// markOCI records that a ref resolved to an OCI manifest so subsequent
+// Ensure* calls can short-circuit without re-fetching the manifest.
+func (p *EpochPuller) markOCI(ref string) {
+	p.mu.Lock()
+	if p.oci == nil {
+		p.oci = make(map[string]bool)
+	}
+	p.oci[ref] = true
+	p.mu.Unlock()
+}
+
+func (p *EpochPuller) cachedOCI(ref string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.oci[ref]
 }
 
 // ensureLock returns a per-ref mutex that serializes concurrent Ensure*

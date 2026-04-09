@@ -3,6 +3,7 @@ package provider
 import (
 	"archive/tar"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/cocoonstack/epoch/manifest"
@@ -13,7 +14,21 @@ import (
 // to reconstruct Cocoon's sparse snapshot archives losslessly.
 type epochManifestDocument struct {
 	manifest.Manifest
+	// MediaType is the top-level manifest media type. Empty for cocoon-native
+	// manifests; set to application/vnd.oci.* or application/vnd.docker.* for
+	// OCI Distribution / Docker format manifests.
+	MediaType    string                         `json:"mediaType,omitempty"`
 	LayerHeaders map[string]snapshotLayerHeader `json:"layerHeaders,omitempty"`
+}
+
+// IsOCIImage reports whether the manifest is an OCI Distribution or Docker
+// format manifest. Such manifests are pulled by cocoon's built-in
+// go-containerregistry client — vk-cocoon skips its own snapshot pull path
+// for them and lets cocoon resolve the image directly.
+func (d *epochManifestDocument) IsOCIImage() bool {
+	mt := strings.TrimSpace(d.MediaType)
+	return strings.HasPrefix(mt, "application/vnd.oci") ||
+		strings.HasPrefix(mt, "application/vnd.docker")
 }
 
 type snapshotLayerHeader struct {
