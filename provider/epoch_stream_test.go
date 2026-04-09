@@ -60,7 +60,6 @@ func TestSnapshotStreamRoundTripPreservesSparseMetadata(t *testing.T) {
 	p := &EpochPuller{
 		serverURL: server.URL,
 		client:    server.Client(),
-		pulled:    make(map[string]bool),
 	}
 
 	cfg, layers, layerHeaders, err := p.readAndUploadTarEntries(ctx, "demo", bytes.NewReader(exportStream))

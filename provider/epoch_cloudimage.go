@@ -25,17 +25,27 @@ func (p *EpochPuller) EnsureCloudImage(ctx context.Context, name string) error {
 }
 
 // EnsureCloudImageTag ensures a specific cloud image tag is available locally.
+//
+// Concurrent calls for the same ref are deduplicated via singleflight, the
+// same way EnsureSnapshotTag does. The singleflight key is namespaced
+// (`cloudimg:`) so a snapshot pull and a cloudimg pull on the same name
+// never alias each other.
 func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string) error {
 	if p.ensureCloudImageTagFn != nil {
 		return p.ensureCloudImageTagFn(ctx, name, tag)
 	}
-
 	ref := name + ":" + tag + "#cloudimg"
-	if p.cachedPull(ref) {
+	return p.doDeduped("cloudimg:"+ref, func() error {
+		return p.ensureCloudImageTagInner(ctx, name, tag, ref)
+	})
+}
+
+func (p *EpochPuller) ensureCloudImageTagInner(ctx context.Context, name, tag, ref string) error {
+	if p.cachedState(ref) == refStateImported {
 		return nil
 	}
 	if p.cloudImageExists(ctx, name) {
-		p.markPulled(ref)
+		p.markRef(ref, refStateImported)
 		return nil
 	}
 
@@ -51,7 +61,7 @@ func (p *EpochPuller) EnsureCloudImageTag(ctx context.Context, name, tag string)
 		return fmt.Errorf("import cloud image %s:%s: %w", name, tag, err)
 	}
 
-	p.markPulled(ref)
+	p.markRef(ref, refStateImported)
 	return nil
 }
 

@@ -19,36 +19,69 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
+// errOCIManifest signals that the referenced manifest is in an OCI / Docker
+// format rather than a cocoon-native snapshot. Cocoon's CH backend pulls
+// these directly via its built-in go-containerregistry client; vk-cocoon
+// keeps the image as a run-mode reference and skips its own snapshot import.
+var errOCIManifest = errors.New("manifest is an OCI image")
+
+// IsErrOCIManifest reports whether err indicates an OCI / Docker manifest
+// was seen. The sentinel itself is unexported so the package owns the
+// vocabulary; callers compare via this helper.
+func IsErrOCIManifest(err error) bool { return errors.Is(err, errOCIManifest) }
+
 // EnsureSnapshot ensures a snapshot is available locally, pulling via HTTP if needed.
 func (p *EpochPuller) EnsureSnapshot(ctx context.Context, name string) error {
 	return p.EnsureSnapshotTag(ctx, name, "latest")
 }
 
 // EnsureSnapshotTag ensures a specific tag is available locally.
+//
+// Concurrent calls for the same ref are deduplicated via singleflight: the
+// first call does the work, subsequent in-flight callers wait and observe
+// the same outcome. After the call returns, future calls hit the per-ref
+// state cache.
 func (p *EpochPuller) EnsureSnapshotTag(ctx context.Context, name, tag string) error {
 	if p.ensureSnapshotTagFn != nil {
 		return p.ensureSnapshotTagFn(ctx, name, tag)
 	}
-
 	ref := name + ":" + tag
-	if p.cachedPull(ref) {
+	return p.doDeduped("snapshot:"+ref, func() error {
+		return p.ensureSnapshotTagInner(ctx, name, tag, ref)
+	})
+}
+
+// ensureSnapshotTagInner is the body of EnsureSnapshotTag run under
+// singleflight. It is split out so the singleflight wrapper stays trivial.
+func (p *EpochPuller) ensureSnapshotTagInner(ctx context.Context, name, tag, ref string) error {
+	logger := log.WithFunc("provider.EnsureSnapshotTag")
+
+	switch p.cachedState(ref) {
+	case refStateImported:
 		return nil
+	case refStateOCI:
+		return errOCIManifest
 	}
 
 	if p.localSnapshotExists(ctx, name) {
-		p.markPulled(ref)
+		p.markRef(ref, refStateImported)
 		return nil
 	}
 
-	log.WithFunc("provider.EnsureSnapshotTag").Infof(ctx, "[epoch] pulling %s via HTTP...", ref)
+	logger.Infof(ctx, "[epoch] pulling %s via HTTP...", ref)
 	start := time.Now()
 
 	if err := p.pull(ctx, name, tag); err != nil {
+		if errors.Is(err, errOCIManifest) {
+			logger.Infof(ctx, "[epoch] %s is an OCI image; cocoon will pull directly", ref)
+			p.markRef(ref, refStateOCI)
+			return errOCIManifest
+		}
 		return fmt.Errorf("epoch HTTP pull %s: %w", ref, err)
 	}
 
-	log.WithFunc("provider.EnsureSnapshotTag").Infof(ctx, "[epoch] %s pulled in %s", ref, time.Since(start).Round(time.Second))
-	p.markPulled(ref)
+	logger.Infof(ctx, "[epoch] %s pulled in %s", ref, time.Since(start).Round(time.Second))
+	p.markRef(ref, refStateImported)
 	return nil
 }
 
@@ -60,6 +93,9 @@ func (p *EpochPuller) pull(ctx context.Context, name, tag string) error {
 	doc, err := p.getManifest(ctx, name, tag)
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
+	}
+	if doc.IsOCIImage() {
+		return errOCIManifest
 	}
 	if doc.IsCloudImage() {
 		return fmt.Errorf("manifest %s:%s is a cloud image, not a snapshot", name, tag)

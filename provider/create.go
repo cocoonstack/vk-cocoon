@@ -323,6 +323,15 @@ func (c *CocoonProvider) applyEpochCreateSource(ctx context.Context, req createR
 	switch req.mode {
 	case modeClone:
 		if err := puller.EnsureSnapshot(ctx, plan.cloneImage); err != nil {
+			if IsErrOCIManifest(err) {
+				// Clone target is an OCI image — cocoon's CH backend pulls
+				// it directly. Degrade to a cold run with the image ref so
+				// the runtime resolves it via go-containerregistry.
+				logger.Infof(ctx, "%s: %s is an OCI image; switching to run mode", req.key, plan.cloneImage)
+				plan.effectiveMode = modeRun
+				plan.runImage = plan.cloneImage
+				return
+			}
 			logger.Warnf(ctx, "%s: epoch pull %s failed (will try local): %v", req.key, plan.cloneImage, err)
 		}
 	case modeRun:
@@ -335,6 +344,12 @@ func (c *CocoonProvider) applyEpochCreateSource(ctx context.Context, req createR
 			return
 		}
 		if err := puller.EnsureSnapshot(ctx, req.image); err != nil {
+			if IsErrOCIManifest(err) {
+				// Source image is OCI — keep run mode with the original
+				// image ref. Cocoon will pull and start it directly.
+				logger.Infof(ctx, "%s: %s is an OCI image; cocoon will pull", req.key, req.image)
+				return
+			}
 			logger.Warnf(ctx, "%s: epoch pull %s failed (will try direct run): %v", req.key, req.image, err)
 			return
 		}

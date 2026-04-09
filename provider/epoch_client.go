@@ -15,7 +15,24 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/cocoonstack/epoch/cocoon"
+)
+
+// refStateCacheCap caps the number of entries kept in the per-ref state map
+// before it is cleared wholesale. The cap exists to bound memory on a
+// long-lived provider that touches many distinct image names; the cleared
+// state is the safe default (re-resolution on next request).
+const refStateCacheCap = 1000
+
+// refState records what we know about an image reference between calls.
+type refState int
+
+const (
+	refStateUnknown  refState = iota
+	refStateImported          // pulled and imported as a cocoon-native snapshot or cloud image
+	refStateOCI               // resolved to an OCI / Docker manifest; cocoon pulls directly
 )
 
 // EpochPuller pulls snapshots from the Epoch HTTP registry.
@@ -27,8 +44,15 @@ type EpochPuller struct {
 	client    *http.Client
 	paths     *cocoon.Paths
 
-	mu     sync.Mutex
-	pulled map[string]bool
+	// sf serializes concurrent Ensure* calls for the same ref so two
+	// callers do not race on the local cocoon import. The key namespace
+	// (`snapshot:` / `cloudimg:`) is set by the caller. singleflight evicts
+	// keys automatically when the in-flight call returns, so unlike a
+	// per-ref mutex map there is no leak.
+	sf singleflight.Group
+
+	mu     sync.Mutex // mu guards states.
+	states map[string]refState
 
 	ensureSnapshotTagFn   func(context.Context, string, string) error
 	ensureCloudImageTagFn func(context.Context, string, string) error
@@ -50,8 +74,7 @@ func NewEpochPuller(serverURL, rootDir, cocoonBin string) *EpochPuller {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		paths:  cocoon.NewPaths(rootDir),
-		pulled: make(map[string]bool),
+		paths: cocoon.NewPaths(rootDir),
 	}
 }
 
@@ -69,20 +92,40 @@ func (p *EpochPuller) authToken() string {
 	return strings.TrimSpace(p.token)
 }
 
-// markPulled records a ref as pulled, clearing the cache when it grows too large.
-func (p *EpochPuller) markPulled(ref string) {
-	p.mu.Lock()
-	if len(p.pulled) > 1000 {
-		clear(p.pulled)
-	}
-	p.pulled[ref] = true
-	p.mu.Unlock()
-}
-
-func (p *EpochPuller) cachedPull(ref string) bool {
+// cachedState returns the cached state for a ref. refStateUnknown means
+// "no information" — the caller should resolve normally. Note that
+// refStateOCI entries are dropped along with everything else when the
+// cache hits its cap, which costs an extra manifest fetch on the next
+// resolution but never produces an incorrect result.
+func (p *EpochPuller) cachedState(ref string) refState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.pulled[ref]
+	return p.states[ref]
+}
+
+// markRef sets the cached state for a ref, capping total cache size by
+// clearing wholesale when it reaches refStateCacheCap. The clear() runs
+// before the new entry is inserted, so the new entry always survives.
+func (p *EpochPuller) markRef(ref string, state refState) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.states == nil {
+		p.states = make(map[string]refState)
+	}
+	if len(p.states) >= refStateCacheCap {
+		clear(p.states)
+	}
+	p.states[ref] = state
+}
+
+// doDeduped runs fn under singleflight, deduplicating concurrent callers
+// that share the same key. Used by EnsureSnapshotTag and EnsureCloudImageTag
+// so two callers cannot race on the local cocoon import.
+func (p *EpochPuller) doDeduped(key string, fn func() error) error {
+	_, err, _ := p.sf.Do(key, func() (any, error) {
+		return nil, fn()
+	})
+	return err
 }
 
 // RootDir returns the cocoon data root directory.

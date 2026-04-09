@@ -8,6 +8,7 @@ require (
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	github.com/prometheus/client_model v0.6.2
 	github.com/virtual-kubelet/virtual-kubelet v1.12.0
+	golang.org/x/sync v0.19.0
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.3
@@ -99,7 +100,6 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
