@@ -7,11 +7,11 @@ metadata:
     app: windows-vm
     os: windows
   annotations:
-    cocoon.cis/mode: "run"
-    cocoon.cis/image: "https://registry.example.com/win11-base"
-    cocoon.cis/os: "windows"
-    cocoon.cis/storage: "15G"
-    cocoon.cis/managed: "true"
+    cocoonset.cocoonstack.io/mode: "run"
+    cocoonset.cocoonstack.io/image: "https://registry.example.com/win11-base"
+    cocoonset.cocoonstack.io/os: "windows"
+    cocoonset.cocoonstack.io/storage: "15G"
+    cocoonset.cocoonstack.io/managed: "true"
 spec:
   nodeName: cocoon-pool
   tolerations:

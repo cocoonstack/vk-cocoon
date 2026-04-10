@@ -7,9 +7,9 @@ metadata:
     app: test
     runtime: cocoon
   annotations:
-    cocoon.cis/mode: "run"
-    cocoon.cis/storage: "10G"
-    cocoon.cis/managed: "true"
+    cocoonset.cocoonstack.io/mode: "run"
+    cocoonset.cocoonstack.io/storage: "10G"
+    cocoonset.cocoonstack.io/managed: "true"
 spec:
   nodeName: cocoon-pool
   tolerations:
