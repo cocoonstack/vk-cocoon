@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,7 +51,3 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 	}
 	return status, nil
 }
-
-// errNotImplemented is returned by stub kubelet operations vk-cocoon
-// does not support yet.
-var errNotImplemented = errors.New("not implemented by vk-cocoon")
