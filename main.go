@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
@@ -99,7 +100,13 @@ func main() {
 	defer cancel()
 
 	if err := provider.StartupReconcile(signalCtx); err != nil {
-		logger.Errorf(signalCtx, err, "startup reconcile failed; continuing with empty in-memory tables")
+		// Refusing to register the v-k node is the safe default:
+		// continuing with empty pod / VM tables would make every
+		// live cocoon VM look like an orphan on the next reconcile
+		// and would have GetPodStatus 404 every pod the scheduler
+		// already placed. systemd will restart us so transient
+		// API-server hiccups still recover.
+		logger.Fatalf(signalCtx, err, "startup reconcile failed; refusing to register node")
 	}
 
 	// Plain-HTTP metrics listener (kubelet TLS lives elsewhere).
@@ -112,7 +119,7 @@ func main() {
 	}
 	go func() {
 		logger.Infof(signalCtx, "vk-cocoon metrics listening on %s", metricsAddr)
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Errorf(signalCtx, err, "metrics listen and serve")
 		}
 	}()

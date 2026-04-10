@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,8 +11,8 @@ import (
 // GetPodStatus returns the latest status for a pod tracked by the
 // provider. The status is derived from the in-memory VM record plus
 // the probe manager's most recent reading.
-func (p *CocoonProvider) GetPodStatus(_ context.Context, namespace, name string) (*corev1.PodStatus, error) {
-	pod, err := p.GetPod(context.Background(), namespace, name)
+func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
+	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {
 		return nil, err
 	}
@@ -55,4 +55,4 @@ func (p *CocoonProvider) GetPodStatus(_ context.Context, namespace, name string)
 
 // errNotImplemented is returned by stub kubelet operations vk-cocoon
 // does not support yet.
-var errNotImplemented = fmt.Errorf("not implemented by vk-cocoon")
+var errNotImplemented = errors.New("not implemented by vk-cocoon")

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -154,14 +153,4 @@ func (p *CocoonProvider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByPod[podKey(namespace, name)]
-}
-
-// logger is a small convenience so per-feature files do not have
-// to repeat the WithFunc boilerplate.
-func providerLogger(fn string) interface {
-	Infof(ctx context.Context, format string, args ...any)
-	Warnf(ctx context.Context, format string, args ...any)
-	Errorf(ctx context.Context, err error, format string, args ...any)
-} {
-	return log.WithFunc("CocoonProvider." + fn)
 }

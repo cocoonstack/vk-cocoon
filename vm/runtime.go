@@ -19,6 +19,15 @@ type VM struct {
 	Mem   int64
 }
 
+// VM state literals shared by the cocoon CLI and downstream callers.
+// Static-mode toolboxes also use StateRunning to fake a healthy
+// adopted VM in the in-memory table.
+const (
+	StateRunning   = "running"
+	StateStopped   = "stopped"
+	StateImporting = "importing"
+)
+
 // CloneOptions is the input to Runtime.Clone.
 type CloneOptions struct {
 	From     string // source VM name or snapshot ref

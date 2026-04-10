@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+
+	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // GetContainerLogs returns the most recent log output from a pod's
@@ -81,9 +86,11 @@ type AttachIO interface {
 	TTY() bool
 }
 
-// isWindowsPod inspects the pod's annotations to decide whether the
-// guest is Windows. The operator writes meta.AnnotationOS via
-// meta.VMSpec.Apply.
-func isWindowsPod(pod interface{ GetAnnotations() map[string]string }) bool {
-	return strings.EqualFold(pod.GetAnnotations()["cocoonset.cocoonstack.io/os"], "windows")
+// isWindowsPod reports whether the pod's VMSpec asks for a Windows
+// guest. The operator writes meta.AnnotationOS via meta.VMSpec.Apply.
+func isWindowsPod(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	return strings.EqualFold(pod.Annotations[meta.AnnotationOS], string(cocoonv1alpha1.OSWindows))
 }

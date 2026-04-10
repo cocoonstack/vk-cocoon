@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -16,38 +17,35 @@ const (
 )
 
 // CocoonCLI is the production Runtime that shells out to the local
-// `cocoon` binary. The binary path is configurable via the Binary
-// field; tests use a fake.
+// `cocoon` binary. The binary path is resolved once in
+// NewCocoonCLI; tests use a fake.
 type CocoonCLI struct {
-	// Binary is the path to the cocoon executable. Empty means
-	// /usr/local/bin/cocoon.
-	Binary string
-	// Sudo runs the command via sudo when true. Required on most
+	// binary is the resolved path to the cocoon executable.
+	binary string
+	// sudo runs the command via sudo when true. Required on most
 	// production hosts because cocoon needs root.
-	Sudo bool
+	sudo bool
 }
 
-// NewCocoonCLI returns a CocoonCLI with the supplied binary path.
-// Empty path resolves to defaultCocoonBinary.
+// NewCocoonCLI returns a CocoonCLI that runs the cocoon binary at
+// the supplied path; an empty path resolves to defaultCocoonBinary.
+// The binary path is captured here so the hot path does not pay a
+// branch on every Clone / Run / Inspect call.
 func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
-	return &CocoonCLI{Binary: binary, Sudo: sudo}
-}
-
-func (c *CocoonCLI) bin() string {
-	if c.Binary == "" {
-		return defaultCocoonBinary
+	if binary == "" {
+		binary = defaultCocoonBinary
 	}
-	return c.Binary
+	return &CocoonCLI{binary: binary, sudo: sudo}
 }
 
 // command builds an *exec.Cmd that invokes cocoon with the supplied
 // args, optionally wrapped in sudo.
 func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
-	if c.Sudo {
-		full := append([]string{c.bin()}, args...)
+	if c.sudo {
+		full := append([]string{c.binary}, args...)
 		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input
 	}
-	return exec.CommandContext(ctx, c.bin(), args...) //nolint:gosec // see above
+	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
 }
 
 // Clone runs `cocoon vm clone --from <source> --to <name>`.
@@ -190,7 +188,7 @@ func appendCommonArgs(args []string, network, storage string, nics int, dns []st
 		args = append(args, "--storage", storage)
 	}
 	if nics > 0 {
-		args = append(args, "--nics", fmt.Sprintf("%d", nics))
+		args = append(args, "--nics", strconv.Itoa(nics))
 	}
 	if len(dns) > 0 {
 		args = append(args, "--dns", strings.Join(dns, ","))

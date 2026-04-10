@@ -2,13 +2,22 @@ package main
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+// hibernateImportSuffix is appended to the VM name when wake-time
+// PullSnapshot imports the hibernation tar back from epoch. The
+// import target needs a different name from the live VM that the
+// subsequent Clone produces, otherwise cocoon snapshot import and
+// cocoon vm clone collide on the same name.
+const hibernateImportSuffix = "-hibernate-import"
 
 // UpdatePod is the virtual-kubelet entry point for in-place pod
 // updates. The only update vk-cocoon honors is a HibernateState
@@ -17,7 +26,7 @@ import (
 // restore (false). Other spec changes are ignored — the operator is
 // expected to delete and recreate the pod for anything else.
 func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := providerLogger("UpdatePod")
+	logger := log.WithFunc("CocoonProvider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
 	// Refresh the in-memory copy so subsequent GetPod returns the
@@ -55,24 +64,28 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // recreate it; the operator detects the snapshot via
 // epoch.GetManifest and marks the CocoonHibernation as Hibernated.
 func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
-	logger := providerLogger("hibernate")
+	logger := log.WithFunc("CocoonProvider.hibernate")
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
-		return err
+		return fmt.Errorf("snapshot save %s: %w", v.Name, err)
 	}
 	if p.Pusher != nil {
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
 			logger.Warnf(ctx, "push hibernation snapshot %s: %v", v.Name, err)
-			return err
+			return fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 		}
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
-		return err
+		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 	// Clear the runtime annotations: the VM no longer exists, but
 	// the pod and the VMSpec stay so the wake path knows what to
-	// restore.
-	pod.Annotations[meta.AnnotationVMID] = ""
-	pod.Annotations[meta.AnnotationIP] = ""
+	// restore. Use delete so absence-as-default reads cleanly,
+	// rather than writing empty strings that ParseVMRuntime would
+	// dutifully decode as a present-but-empty record.
+	if pod.Annotations != nil {
+		delete(pod.Annotations, meta.AnnotationVMID)
+		delete(pod.Annotations, meta.AnnotationIP)
+	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	return nil
 }
@@ -84,20 +97,21 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if spec.VMName == "" {
 		return nil
 	}
+	importName := spec.VMName + hibernateImportSuffix
 	if p.Puller != nil {
-		if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, spec.VMName); err != nil {
-			return err
+		if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
+			return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
 		}
 	}
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-		From:     spec.VMName,
+		From:     importName,
 		To:       spec.VMName,
 		Network:  spec.Network,
 		Storage:  spec.Storage,
 		NodeName: p.NodeName,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 	}
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
