@@ -34,6 +34,7 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -75,6 +76,8 @@ func main() {
 	sshPassword := os.Getenv("VK_SSH_PASSWORD")
 	orphanPolicy := envOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
 	nodeIP := envOrDefault("VK_NODE_IP", "")
+	nodePool := envOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
+	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
 		nodeIP = detectNodeIP()
 	}
@@ -135,6 +138,11 @@ func main() {
 	var nodeProvider *CocoonNodeProvider
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
+			if cfg.Node.Labels == nil {
+				cfg.Node.Labels = map[string]string{}
+			}
+			cfg.Node.Labels[meta.LabelNodePool] = nodePool
+			cfg.Node.Status.Conditions = defaultNodeConditions()
 			cfg.Node.Status.Addresses = []corev1.NodeAddress{
 				{Type: corev1.NodeInternalIP, Address: nodeIP},
 				{Type: corev1.NodeHostName, Address: nodeName},
@@ -143,6 +151,16 @@ func main() {
 			cfg.Node.Status.Allocatable = cfg.Node.Status.Capacity
 			cfg.Node.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
 				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
+			}
+			if providerID != "" {
+				cfg.Node.Spec.ProviderID = providerID
+			}
+			if !hasTaint(cfg.Node.Spec.Taints, meta.TolerationKey) {
+				cfg.Node.Spec.Taints = append(cfg.Node.Spec.Taints, corev1.Taint{
+					Key:    meta.TolerationKey,
+					Value:  "cocoon",
+					Effect: corev1.TaintEffectNoSchedule,
+				})
 			}
 		}
 		nodeProvider = NewCocoonNodeProvider(cfg.Node)
@@ -282,6 +300,50 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 		}
 		logger.Infof(ctx, "node %s kubelet endpoint set to :%d", nodeName, kubeletAPIPort)
 		return
+	}
+}
+
+func hasTaint(taints []corev1.Taint, key string) bool {
+	for _, taint := range taints {
+		if taint.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultNodeConditions() []corev1.NodeCondition {
+	return []corev1.NodeCondition{
+		{
+			Type:    corev1.NodeReady,
+			Status:  corev1.ConditionTrue,
+			Reason:  "KubeletReady",
+			Message: "vk-cocoon is ready",
+		},
+		{
+			Type:    corev1.NodeDiskPressure,
+			Status:  corev1.ConditionFalse,
+			Reason:  "KubeletHasNoDiskPressure",
+			Message: "vk-cocoon has no disk pressure",
+		},
+		{
+			Type:    corev1.NodeMemoryPressure,
+			Status:  corev1.ConditionFalse,
+			Reason:  "KubeletHasSufficientMemory",
+			Message: "vk-cocoon has sufficient memory",
+		},
+		{
+			Type:    corev1.NodePIDPressure,
+			Status:  corev1.ConditionFalse,
+			Reason:  "KubeletHasSufficientPID",
+			Message: "vk-cocoon has sufficient PID available",
+		},
+		{
+			Type:    corev1.NodeNetworkUnavailable,
+			Status:  corev1.ConditionFalse,
+			Reason:  "RouteCreated",
+			Message: "NodeController create implicit route",
+		},
 	}
 }
 

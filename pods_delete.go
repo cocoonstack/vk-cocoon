@@ -7,7 +7,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
@@ -77,11 +77,11 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 //
 // Empty defaults to always via SnapshotPolicy.Default().
 func shouldSnapshotOnDelete(spec meta.VMSpec) bool {
-	policy := cocoonv1alpha1.SnapshotPolicy(spec.SnapshotPolicy).Default()
+	policy := cocoonv1.SnapshotPolicy(spec.SnapshotPolicy).Default()
 	switch policy {
-	case cocoonv1alpha1.SnapshotPolicyNever:
+	case cocoonv1.SnapshotPolicyNever:
 		return false
-	case cocoonv1alpha1.SnapshotPolicyMainOnly:
+	case cocoonv1.SnapshotPolicyMainOnly:
 		return meta.ExtractSlotFromVMName(spec.VMName) == 0
 	default:
 		return true

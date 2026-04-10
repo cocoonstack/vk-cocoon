@@ -13,7 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -116,5 +116,5 @@ func isWindowsPod(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	return strings.EqualFold(pod.Annotations[meta.AnnotationOS], string(cocoonv1alpha1.OSWindows))
+	return strings.EqualFold(pod.Annotations[meta.AnnotationOS], string(cocoonv1.OSWindows))
 }

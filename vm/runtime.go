@@ -19,6 +19,16 @@ type VM struct {
 	Mem   int64
 }
 
+// Snapshot is the subset of `cocoon snapshot inspect` vk-cocoon
+// needs when restoring a VM from an epoch snapshot on another
+// node. The base image is required so cloudimg-backed snapshots can
+// restore their qcow2 backing chain locally before clone.
+type Snapshot struct {
+	ID    string
+	Name  string
+	Image string
+}
+
 // VM state literals shared by the cocoon CLI and downstream callers.
 // Static-mode toolboxes also use StateRunning to fake a healthy
 // adopted VM in the in-memory table.
@@ -32,6 +42,8 @@ const (
 type CloneOptions struct {
 	From     string // source VM name or snapshot ref
 	To       string // new VM name
+	CPU      int
+	Memory   string
 	Network  string
 	Storage  string
 	NICs     int
@@ -43,6 +55,8 @@ type CloneOptions struct {
 type RunOptions struct {
 	Image    string // cloud image URL or local path
 	Name     string
+	CPU      int
+	Memory   string
 	Network  string
 	Storage  string
 	NICs     int
@@ -76,6 +90,8 @@ type Runtime interface {
 	Remove(ctx context.Context, vmID string) error
 	// SnapshotSave snapshots a running VM in place.
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
+	// Snapshot returns the local snapshot metadata vk-cocoon needs.
+	Snapshot(ctx context.Context, name string) (*Snapshot, error)
 	// SnapshotImport opens a stdin pipe to `cocoon snapshot import`
 	// and returns the writer (caller closes when done) plus a
 	// wait function that blocks until the subprocess exits.
@@ -84,4 +100,7 @@ type Runtime interface {
 	// export` and returns the reader plus a wait function. Used
 	// by epoch's snapshot.Pusher to stream a snapshot up.
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
+	// EnsureImage makes sure the local cocoon image store can
+	// resolve a cloudimg/OCI image before the runtime needs it.
+	EnsureImage(ctx context.Context, image string) error
 }

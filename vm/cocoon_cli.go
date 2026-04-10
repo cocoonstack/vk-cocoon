@@ -3,12 +3,13 @@ package vm
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -50,57 +51,75 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 
 // Clone runs `cocoon vm clone --from <source> --to <name>`.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
-	args := []string{"vm", "clone", "--from", opts.From, "--to", opts.To, "--json"}
-	args = appendCommonArgs(args, opts.Network, opts.Storage, opts.NICs, opts.DNS)
-	out, err := c.runJSON(ctx, args...)
-	if err != nil {
+	args := []string{"vm", "clone"}
+	if opts.To != "" {
+		args = append(args, "--name", opts.To)
+	}
+	args = appendCloneArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	args = append(args, opts.From)
+	if _, err := c.runJSON(ctx, args...); err != nil {
 		return nil, fmt.Errorf("cocoon vm clone: %w", err)
 	}
-	return parseInspectJSON(out)
+	return c.Inspect(ctx, opts.To)
 }
 
-// Run runs `cocoon run --image <url>`.
+// Run runs `cocoon vm run <image>`.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
-	args := []string{"run", "--image", opts.Image, "--name", opts.Name, "--json"}
-	args = appendCommonArgs(args, opts.Network, opts.Storage, opts.NICs, opts.DNS)
-	if opts.OS != "" {
-		args = append(args, "--os", opts.OS)
+	if err := c.EnsureImage(ctx, opts.Image); err != nil {
+		return nil, fmt.Errorf("ensure image %s: %w", opts.Image, err)
 	}
-	out, err := c.runJSON(ctx, args...)
-	if err != nil {
-		return nil, fmt.Errorf("cocoon run: %w", err)
+
+	args := []string{"vm", "run"}
+	if opts.Name != "" {
+		args = append(args, "--name", opts.Name)
 	}
-	return parseInspectJSON(out)
+	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	if strings.EqualFold(opts.OS, "windows") {
+		args = append(args, "--windows")
+	}
+	args = append(args, opts.Image)
+	if _, err := c.runJSON(ctx, args...); err != nil {
+		return nil, fmt.Errorf("cocoon vm run: %w", err)
+	}
+	return c.Inspect(ctx, opts.Name)
 }
 
-// Inspect runs `cocoon vm inspect <id> --json`.
+// EnsureImage makes sure the cocoon image store can resolve image before vm
+// run. Local image names succeed via `cocoon image inspect`; remote OCI refs
+// and cloud-image URLs fall back to `cocoon image pull`.
+func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
+	if image == "" {
+		return nil
+	}
+	inspect := c.command(ctx, "image", "inspect", image)
+	if out, err := inspect.CombinedOutput(); err == nil {
+		_ = out
+		return nil
+	}
+
+	pull := c.command(ctx, "image", "pull", image)
+	if out, err := pull.CombinedOutput(); err != nil {
+		return fmt.Errorf("cocoon image pull %s: %w (output: %s)", image, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Inspect runs `cocoon vm inspect <ref>`.
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
-	out, err := c.runJSON(ctx, "vm", "inspect", vmID, "--json")
+	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
 	if err != nil {
 		return nil, fmt.Errorf("cocoon vm inspect %s: %w", vmID, err)
 	}
 	return parseInspectJSON(out)
 }
 
-// List runs `cocoon vm list --json` and returns every known VM.
+// List runs `cocoon vm list -o json` and returns every known VM.
 func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
-	out, err := c.runJSON(ctx, "vm", "list", "--json")
+	out, err := c.runJSON(ctx, "vm", "list", "-o", "json")
 	if err != nil {
 		return nil, fmt.Errorf("cocoon vm list: %w", err)
 	}
-	var raw []map[string]any
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("decode vm list: %w", err)
-	}
-	out2 := make([]VM, 0, len(raw))
-	for _, m := range raw {
-		vm, perr := vmFromMap(m)
-		if perr != nil {
-			continue
-		}
-		out2 = append(out2, *vm)
-	}
-	return out2, nil
+	return parseVMListJSON(out)
 }
 
 // Remove runs `cocoon vm rm --force <id>`.
@@ -119,6 +138,15 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 		return fmt.Errorf("cocoon snapshot save %s: %w (output: %s)", vmName, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// Snapshot runs `cocoon snapshot inspect <name>`.
+func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error) {
+	out, err := c.runJSON(ctx, "snapshot", "inspect", name)
+	if err != nil {
+		return nil, fmt.Errorf("cocoon snapshot inspect %s: %w", name, err)
+	}
+	return parseSnapshotJSON(out)
 }
 
 // SnapshotImport spawns `cocoon snapshot import --name <name>` and
@@ -178,14 +206,12 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// appendCommonArgs adds the network / storage / nics / dns flags
-// every clone or run command shares.
-func appendCommonArgs(args []string, network, storage string, nics int, dns []string) []string {
+// appendCreateArgs adds the network / storage / nics / dns flags
+// the cocoon vm run path accepts.
+func appendCreateArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
+	args = appendResourceArgs(args, cpu, memory, storage)
 	if network != "" {
 		args = append(args, "--network", network)
-	}
-	if storage != "" {
-		args = append(args, "--storage", storage)
 	}
 	if nics > 0 {
 		args = append(args, "--nics", strconv.Itoa(nics))
@@ -194,4 +220,49 @@ func appendCommonArgs(args []string, network, storage string, nics int, dns []st
 		args = append(args, "--dns", strings.Join(dns, ","))
 	}
 	return args
+}
+
+// appendCloneArgs adds the resource flags supported by cocoon vm clone.
+func appendCloneArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
+	args = appendResourceArgs(args, cpu, memory, storage)
+	if network != "" {
+		args = append(args, "--network", network)
+	}
+	if nics > 0 {
+		args = append(args, "--nics", strconv.Itoa(nics))
+	}
+	if len(dns) > 0 {
+		args = append(args, "--dns", strings.Join(dns, ","))
+	}
+	return args
+}
+
+func appendResourceArgs(args []string, cpu int, memory, storage string) []string {
+	if cpu > 0 {
+		args = append(args, "--cpu", strconv.Itoa(cpu))
+	}
+	if normalized := normalizeSizeArg(memory); normalized != "" {
+		args = append(args, "--memory", normalized)
+	}
+	if normalized := normalizeSizeArg(storage); normalized != "" {
+		args = append(args, "--storage", normalized)
+	}
+	return args
+}
+
+// normalizeSizeArg converts Kubernetes-style quantities (for example "20Gi")
+// into plain byte counts, which cocoon's CLI parser accepts reliably.
+func normalizeSizeArg(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	q, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return raw
+	}
+	if bytes := q.Value(); bytes > 0 {
+		return strconv.FormatInt(bytes, 10)
+	}
+	return raw
 }

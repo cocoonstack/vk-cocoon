@@ -54,6 +54,7 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	default:
 		metrics.PodLifecycleTotal.WithLabelValues("update", "noop").Inc()
 	}
+	p.refreshStatus(ctx, pod)
 	p.notify(pod)
 	return nil
 }
@@ -97,6 +98,7 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if spec.VMName == "" {
 		return nil
 	}
+	cpu, memory := vmResourceOverrides(pod)
 	importName := spec.VMName + hibernateImportSuffix
 	if p.Puller != nil {
 		if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
@@ -106,6 +108,8 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 		From:     importName,
 		To:       spec.VMName,
+		CPU:      cpu,
+		Memory:   memory,
 		Network:  spec.Network,
 		Storage:  spec.Storage,
 		NodeName: p.NodeName,

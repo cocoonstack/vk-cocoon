@@ -1,14 +1,20 @@
-apiVersion: cocoonset.cocoonstack.io/v1alpha1
+apiVersion: cocoonset.cocoonstack.io/v1
 kind: CocoonSet
 metadata:
   name: demo-cocoonset
   namespace: default
 spec:
+  nodePool: default
   agent:
     image: ubuntu-dev-base
     replicas: 1
+    mode: clone
     resources:
-      cpu: "2"
-      memory: "4Gi"
-    storage: "20G"
+      requests:
+        cpu: "2"
+        memory: "4Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+    storage: "20Gi"
   snapshotPolicy: always

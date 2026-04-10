@@ -3,14 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -65,6 +67,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	pod.Status.Phase = corev1.PodRunning
 	pod.Status.StartTime = nowPtr()
+	p.refreshStatus(ctx, pod)
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
 	metrics.VMTableSize.Inc()
@@ -82,19 +85,41 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 //     pre-assigned IP / VMID the operator already wrote into the
 //     VMRuntime annotations on the pod.
 func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
+	cpu, memory := vmResourceOverrides(pod)
 	mode := strings.ToLower(spec.Mode)
-	switch mode {
-	case string(cocoonv1alpha1.ToolboxModeStatic):
+	switch {
+	case mode == string(cocoonv1.ToolboxModeStatic):
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" || runtime.IP == "" {
 			return nil, fmt.Errorf("static toolbox %s missing static IP/VMID", spec.VMName)
 		}
 		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, nil
 
-	case string(cocoonv1alpha1.AgentModeRun):
+	case spec.ForkFrom != "":
+		cloneFrom, err := p.ensureForkSnapshot(ctx, spec.ForkFrom)
+		if err != nil {
+			return nil, err
+		}
+		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
+			From:     cloneFrom,
+			To:       spec.VMName,
+			CPU:      cpu,
+			Memory:   memory,
+			Network:  spec.Network,
+			Storage:  spec.Storage,
+			NodeName: p.NodeName,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
+		}
+		return v, nil
+
+	case mode == string(cocoonv1.AgentModeRun):
 		opts := vm.RunOptions{
 			Image:    spec.Image,
 			Name:     spec.VMName,
+			CPU:      cpu,
+			Memory:   memory,
 			Network:  spec.Network,
 			Storage:  spec.Storage,
 			OS:       spec.OS,
@@ -108,48 +133,91 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 
 	default: // clone is the default
 		// The clone source is whichever of ForkFrom / Image is set:
-		// sub-agents fork from the main VM by name, top-level pods
-		// fork from the snapshot referenced by Image. ensureSnapshot
-		// must consult the same value or it'd pull the wrong ref.
+		// top-level pods fork from the snapshot referenced by Image.
 		from := spec.Image
-		if spec.ForkFrom != "" {
-			from = spec.ForkFrom
-		}
-		if err := p.ensureSnapshot(ctx, from); err != nil {
+		cloneFrom, _ := splitRef(from)
+		snapshot, err := p.ensureSnapshot(ctx, from)
+		if err != nil {
 			metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
 			return nil, fmt.Errorf("ensure snapshot %s: %w", from, err)
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
+		if snapshot != nil && snapshot.Image != "" {
+			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image); ensureErr != nil {
+				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", cloneFrom, ensureErr)
+			}
+		}
 
 		opts := vm.CloneOptions{
-			From:     from,
+			From:     cloneFrom,
 			To:       spec.VMName,
+			CPU:      cpu,
+			Memory:   memory,
 			Network:  spec.Network,
 			Storage:  spec.Storage,
 			NodeName: p.NodeName,
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, from, err)
+			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
 		}
 		return v, nil
 	}
 }
 
-// ensureSnapshot pulls the snapshot from epoch when it is not
+// ensureSnapshot returns the local snapshot metadata and pulls the
+// snapshot from epoch when it is not
 // already cached locally. The local cache check looks up the bare
 // snapshot repo name (after stripping the tag) since cocoon stores
 // imported snapshots under that name; the previous version passed
 // the full ref including tag and never matched.
-func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) error {
-	if p.Puller == nil || ref == "" {
-		return nil
+func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
+	if ref == "" {
+		return nil, nil
 	}
 	repo, tag := splitRef(ref)
-	if local, err := p.Runtime.Inspect(ctx, repo); err == nil && local != nil {
-		return nil
+	snapshot, err := p.Runtime.Snapshot(ctx, repo)
+	if err == nil {
+		return snapshot, nil
 	}
-	return p.Puller.PullSnapshot(ctx, repo, tag, "")
+	if p.Puller == nil {
+		return nil, nil
+	}
+	if pullErr := p.Puller.PullSnapshot(ctx, repo, tag, ""); pullErr != nil {
+		return nil, pullErr
+	}
+	snapshot, err = p.Runtime.Snapshot(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("inspect imported snapshot %s: %w", repo, err)
+	}
+	return snapshot, nil
+}
+
+// ensureForkSnapshot makes a cloneable local snapshot for sub-agents.
+// cocoon's `vm clone` CLI restores from snapshot refs, not live VM
+// names, so a local fork must materialize a snapshot first.
+func (p *CocoonProvider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
+	snapshotName := forkSnapshotName(sourceVMName)
+	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
+		return snapshotName, nil
+	}
+
+	sourceVM := p.vmByName(sourceVMName)
+	if sourceVM == nil {
+		inspected, err := p.Runtime.Inspect(ctx, sourceVMName)
+		if err != nil {
+			return "", fmt.Errorf("inspect fork source vm %s: %w", sourceVMName, err)
+		}
+		sourceVM = inspected
+	}
+	if err := p.Runtime.SnapshotSave(ctx, snapshotName, sourceVM.ID); err != nil {
+		return "", fmt.Errorf("snapshot fork source vm %s as %s: %w", sourceVMName, snapshotName, err)
+	}
+	return snapshotName, nil
+}
+
+func forkSnapshotName(sourceVMName string) string {
+	return "fork-" + sourceVMName
 }
 
 // vmByName looks up a VM in the in-memory table by name.
@@ -174,6 +242,60 @@ func splitRef(ref string) (string, string) {
 		return ref, "latest"
 	}
 	return ref[:idx], ref[idx+1:]
+}
+
+// vmResourceOverrides translates pod resource requirements into the cocoon CLI
+// resource model. cocoon only accepts whole CPUs, so milliCPU values round up.
+func vmResourceOverrides(pod *corev1.Pod) (int, string) {
+	if pod == nil || len(pod.Spec.Containers) == 0 {
+		return 0, ""
+	}
+	resources := pod.Spec.Containers[0].Resources
+	cpu := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceCPU)
+	memory := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
+	return quantityCPURoundUp(cpu), quantityBytes(memory)
+}
+
+func selectQuantity(requests, limits corev1.ResourceList, name corev1.ResourceName) resource.Quantity {
+	if q, ok := requests[name]; ok && !q.IsZero() {
+		return q
+	}
+	if q, ok := limits[name]; ok && !q.IsZero() {
+		return q
+	}
+	return resource.Quantity{}
+}
+
+func quantityCPURoundUp(q resource.Quantity) int {
+	if q.IsZero() {
+		return 0
+	}
+	milli := q.MilliValue()
+	if milli <= 0 {
+		return 0
+	}
+	return int((milli + 999) / 1000)
+}
+
+func quantityBytes(q resource.Quantity) string {
+	if q.IsZero() {
+		return ""
+	}
+	if bytes := q.Value(); bytes > 0 {
+		return strconv.FormatInt(bytes, 10)
+	}
+	return ""
+}
+
+func (p *CocoonProvider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
+	if pod == nil {
+		return
+	}
+	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+	if err != nil || status == nil {
+		return
+	}
+	pod.Status = *status
 }
 
 func nowPtr() *metav1.Time {

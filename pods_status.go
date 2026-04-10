@@ -24,6 +24,12 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 			StartTime: pod.Status.StartTime,
 		}, nil
 	}
+	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
+		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
+			v.IP = lease.IP
+			p.applyRuntime(pod, v)
+		}
+	}
 
 	ready := corev1.ConditionFalse
 	if p.Probes != nil && p.Probes.Get(podKey(namespace, name)).Ready {
