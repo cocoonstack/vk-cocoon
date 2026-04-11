@@ -7,16 +7,8 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
-	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
-)
-
-const (
-	// defaultSnapshotTag is the OCI tag DeletePod uses when pushing
-	// a routine snapshot up to epoch. Hibernation snapshots use
-	// meta.HibernateSnapshotTag instead.
-	defaultSnapshotTag = "latest"
 )
 
 // DeletePod is the virtual-kubelet entry point for pod removal. It
@@ -38,10 +30,11 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	spec := meta.ParseVMSpec(pod)
 
-	if shouldSnapshotOnDelete(spec) && p.Pusher != nil && v.Name != "" {
+	if meta.ShouldSnapshotVM(spec) && p.Pusher != nil && v.Name != "" {
 		if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 			logger.Warnf(ctx, "snapshot save %s: %v", v.Name, err)
-		} else if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, defaultSnapshotTag, spec.Image); err != nil {
+			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
+		} else if _, err := p.Pusher.PushSnapshot(ctx, v.Name, "", meta.DefaultSnapshotTag, spec.Image); err != nil {
 			logger.Warnf(ctx, "push snapshot %s: %v", v.Name, err)
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 		} else {
@@ -56,34 +49,11 @@ func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	p.forgetPod(pod.Namespace, pod.Name)
 	if p.Probes != nil {
-		p.Probes.Forget(podKey(pod.Namespace, pod.Name))
+		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
 	}
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok").Inc()
 	metrics.VMTableSize.Dec()
 	return nil
-}
-
-// shouldSnapshotOnDelete decodes the SnapshotPolicy annotation and
-// the VM-name slot index to decide whether DeletePod should
-// snapshot the VM before destroying it.
-//
-// Policies:
-//
-//   - always:    snapshot every VM
-//   - main-only: snapshot only the main agent (slot 0)
-//   - never:     skip snapshots entirely
-//
-// Empty defaults to always via SnapshotPolicy.Default().
-func shouldSnapshotOnDelete(spec meta.VMSpec) bool {
-	policy := cocoonv1.SnapshotPolicy(spec.SnapshotPolicy).Default()
-	switch policy {
-	case cocoonv1.SnapshotPolicyNever:
-		return false
-	case cocoonv1.SnapshotPolicyMainOnly:
-		return meta.ExtractSlotFromVMName(spec.VMName) == 0
-	default:
-		return true
-	}
 }

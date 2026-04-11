@@ -5,7 +5,6 @@ import (
 	"io"
 
 	"github.com/cocoonstack/epoch/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

@@ -23,18 +23,18 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 
 1. Parse `meta.VMSpec` from the pod annotations.
 2. If a VM with `spec.VMName` already exists locally, adopt it (idempotent on restart).
-3. Otherwise:
-   - **Mode `clone`** (default): pull the snapshot from epoch via `Puller.PullSnapshot` if not cached locally, then `Runtime.Clone(from=spec.Image | spec.ForkFrom, to=spec.VMName)`.
-   - **Mode `run`**: `Runtime.Run(image=spec.Image, name=spec.VMName)`.
-   - **Mode `static`**: skip the runtime and adopt the pre-assigned `staticIP` / `staticVMID`.
+3. Otherwise branch on `spec.Managed` first, then `spec.Mode`:
+   - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
+   - **Mode `clone`** (default, `Managed=true`): pull the snapshot from epoch via `Puller.PullSnapshot` if not cached locally, then `Runtime.Clone(from=spec.Image | spec.ForkFrom, to=spec.VMName)`.
+   - **Mode `run`** (`Managed=true`): `Runtime.Run(image=spec.Image, name=spec.VMName)`.
 4. Resolve the IP from the dnsmasq lease file by MAC.
-5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up.
+5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up. `VNCPort` is intentionally left unset here — cloud-hypervisor has no VNC server, so only the pre-seeded static-toolbox path ever carries a non-zero value.
 
 ### DeletePod
 
 1. Decode `meta.VMSpec`.
-2. Apply the snapshot policy:
-   - `always`: `Runtime.SnapshotSave` then `Pusher.PushSnapshot` to epoch.
+2. `meta.ShouldSnapshotVM(spec)` — the shared cocoon-common decoder — decides whether to snapshot before destroy:
+   - `always`: `Runtime.SnapshotSave` then `Pusher.PushSnapshot(tag=meta.DefaultSnapshotTag)` to epoch.
    - `main-only`: same, but only when the VM name ends in `-0` (slot 0 = main agent).
    - `never`: skip snapshots entirely.
 3. `Runtime.Remove(vmID)` to destroy the VM.
@@ -46,7 +46,7 @@ The only update vk-cocoon honors is a `HibernateState` transition. Anything else
 
 | Transition | Behavior |
 |---|---|
-| `false → true` | `Runtime.SnapshotSave` → `Pusher.PushSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Remove`. Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. |
+| `false → true` | `Runtime.SnapshotSave` → `Pusher.PushSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Remove`. Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag so the operator does not observe `Hibernated` while the local VM is still running. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from epoch. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by polling `epoch.GetManifest(vmName, "hibernate")`.

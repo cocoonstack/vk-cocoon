@@ -10,10 +10,8 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
-	corev1 "k8s.io/api/core/v1"
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
-	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -42,7 +40,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, namespace, podNam
 		return io.NopCloser(strings.NewReader("vk-cocoon: pod has no live VM\n")), nil
 	}
 
-	if isWindowsPod(pod) {
+	if meta.IsWindowsPod(pod) {
 		msg := fmt.Sprintf("vk-cocoon: kubectl logs is not supported on Windows guests; connect via RDP to %s\n", v.IP)
 		return io.NopCloser(strings.NewReader(msg)), nil
 	}
@@ -73,7 +71,7 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, namespace, podName,
 	if err != nil {
 		return err
 	}
-	if isWindowsPod(pod) {
+	if meta.IsWindowsPod(pod) {
 		return p.GuestRDP.Run(ctx, v.IP, cmd, attach.Stdin(), attach.Stdout(), attach.Stderr())
 	}
 	if p.GuestSSH == nil {
@@ -108,13 +106,4 @@ func (p *CocoonProvider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summ
 // separate metrics listener managed in main.go.
 func (p *CocoonProvider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	return nil, nil
-}
-
-// isWindowsPod reports whether the pod's VMSpec asks for a Windows
-// guest. The operator writes meta.AnnotationOS via meta.VMSpec.Apply.
-func isWindowsPod(pod *corev1.Pod) bool {
-	if pod == nil {
-		return false
-	}
-	return strings.EqualFold(pod.Annotations[meta.AnnotationOS], string(cocoonv1.OSWindows))
 }

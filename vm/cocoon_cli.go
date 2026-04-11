@@ -17,6 +17,10 @@ const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
 )
 
+// Compile-time guarantee that CocoonCLI satisfies the Runtime
+// interface vk-cocoon consumes.
+var _ Runtime = (*CocoonCLI)(nil)
+
 // CocoonCLI is the production Runtime that shells out to the local
 // `cocoon` binary. The binary path is resolved once in
 // NewCocoonCLI; tests use a fake.
@@ -49,7 +53,7 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
 }
 
-// Clone runs `cocoon vm clone --from <source> --to <name>`.
+// Clone runs `cocoon vm clone --name <To> <From>`.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	args := []string{"vm", "clone"}
 	if opts.To != "" {
@@ -160,6 +164,7 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return nil, nil, fmt.Errorf("start cocoon snapshot import: %w", err)
 	}
 	wait := func() error {
@@ -180,6 +185,7 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
 		return nil, nil, fmt.Errorf("start cocoon snapshot export: %w", err)
 	}
 	wait := func() error {

@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -37,7 +38,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 	}
 
 	ready := corev1.ConditionFalse
-	if p.Probes != nil && p.Probes.Get(podKey(namespace, name)).Ready {
+	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready {
 		ready = corev1.ConditionTrue
 	}
 

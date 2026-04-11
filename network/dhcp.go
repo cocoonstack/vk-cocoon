@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,25 +75,23 @@ func (p *LeaseParser) All() ([]Lease, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make([]Lease, len(p.cached))
-	copy(out, p.cached)
-	return out, nil
+	return slices.Clone(p.cached), nil
 }
 
 // refresh re-reads the lease file when mtime or size has changed.
-// When the file is unchanged the cached slice is reused verbatim.
+// The entire cache-check / parse / publish path runs under the
+// mutex so two concurrent callers that both miss the cache do not
+// reparse the file twice.
 func (p *LeaseParser) refresh() error {
 	info, err := os.Stat(p.Path)
 	if err != nil {
 		return fmt.Errorf("stat lease file %s: %w", p.Path, err)
 	}
 	p.mu.Lock()
-	fresh := p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size
-	p.mu.Unlock()
-	if fresh {
+	defer p.mu.Unlock()
+	if p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size {
 		return nil
 	}
-
 	leases, err := p.parse()
 	if err != nil {
 		return err
@@ -101,12 +100,10 @@ func (p *LeaseParser) refresh() error {
 	for i := range leases {
 		byMAC[strings.ToLower(leases[i].MAC)] = &leases[i]
 	}
-	p.mu.Lock()
 	p.cached = leases
 	p.byMAC = byMAC
 	p.mtime = info.ModTime()
 	p.size = info.Size()
-	p.mu.Unlock()
 	return nil
 }
 
@@ -132,7 +129,13 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 		if len(fields) < 4 {
 			continue
 		}
-		expiry, _ := parseUnixSecond(fields[0])
+		expiry, err := parseUnixSecond(fields[0])
+		if err != nil {
+			// Skip lines with a malformed timestamp rather than
+			// inserting a zero-time entry that would look
+			// permanently expired to callers.
+			continue
+		}
 		out = append(out, Lease{
 			Expires:  expiry,
 			MAC:      fields[1],

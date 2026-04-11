@@ -3,16 +3,33 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/vm"
+)
+
+// OrphanPolicy controls what vk-cocoon does when startup reconcile
+// finds a VM with no matching pod.
+type OrphanPolicy string
+
+const (
+	// OrphanAlert logs and increments a metric counter but leaves
+	// the VM alone. The default; safest.
+	OrphanAlert OrphanPolicy = "alert"
+	// OrphanDestroy removes the VM. Aggressive; opt-in.
+	OrphanDestroy OrphanPolicy = "destroy"
+	// OrphanKeep is a no-op (no log, no metric).
+	OrphanKeep OrphanPolicy = "keep"
 )
 
 // CocoonProvider is the virtual-kubelet provider that maps
@@ -40,20 +57,6 @@ type CocoonProvider struct {
 	notifyHook func(*corev1.Pod)
 }
 
-// OrphanPolicy controls what vk-cocoon does when startup reconcile
-// finds a VM with no matching pod.
-type OrphanPolicy string
-
-const (
-	// OrphanAlert logs and increments a metric counter but leaves
-	// the VM alone. The default; safest.
-	OrphanAlert OrphanPolicy = "alert"
-	// OrphanDestroy removes the VM. Aggressive; opt-in.
-	OrphanDestroy OrphanPolicy = "destroy"
-	// OrphanKeep is a no-op (no log, no metric).
-	OrphanKeep OrphanPolicy = "keep"
-)
-
 // NewCocoonProvider constructs a CocoonProvider with empty in-memory
 // tables. Callers fill in the dependencies, then call StartupReconcile
 // once to populate the tables from the live cluster + cocoon state.
@@ -66,17 +69,11 @@ func NewCocoonProvider() *CocoonProvider {
 	}
 }
 
-// podKey is the canonical "<namespace>/<name>" key vk-cocoon uses
-// to index its in-memory tables.
-func podKey(namespace, name string) string {
-	return namespace + "/" + name
-}
-
 // GetPod returns the pod previously stored for the given key.
 func (p *CocoonProvider) GetPod(_ context.Context, namespace, name string) (*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	pod, ok := p.pods[podKey(namespace, name)]
+	pod, ok := p.pods[meta.PodKey(namespace, name)]
 	if !ok {
 		return nil, fmt.Errorf("pod %s/%s not found", namespace, name)
 	}
@@ -87,11 +84,7 @@ func (p *CocoonProvider) GetPod(_ context.Context, namespace, name string) (*cor
 func (p *CocoonProvider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := make([]*corev1.Pod, 0, len(p.pods))
-	for _, pod := range p.pods {
-		out = append(out, pod)
-	}
-	return out, nil
+	return slices.Collect(maps.Values(p.pods)), nil
 }
 
 // NotifyPods stores the callback the kubelet uses to receive pod
@@ -118,7 +111,7 @@ func (p *CocoonProvider) notify(pod *corev1.Pod) {
 func (p *CocoonProvider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := podKey(pod.Namespace, pod.Name)
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.pods[key] = pod
 	if v != nil {
 		p.vmsByPod[key] = v
@@ -135,7 +128,9 @@ func (p *CocoonProvider) dropVMLocked(key string) {
 	if !ok {
 		return
 	}
-	delete(p.vmsByName, v.Name)
+	if v.Name != "" {
+		delete(p.vmsByName, v.Name)
+	}
 	delete(p.vmsByPod, key)
 }
 
@@ -144,7 +139,7 @@ func (p *CocoonProvider) dropVMLocked(key string) {
 func (p *CocoonProvider) forgetPod(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := podKey(namespace, name)
+	key := meta.PodKey(namespace, name)
 	p.dropVMLocked(key)
 	delete(p.pods, key)
 }
@@ -154,16 +149,26 @@ func (p *CocoonProvider) forgetPod(namespace, name string) {
 func (p *CocoonProvider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.vmsByPod[podKey(namespace, name)]
+	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
 // setVMIP updates the tracked VM's IP under the write lock. Used by
 // GetPodStatus when a dnsmasq lease lookup resolves an IP that was
-// unknown at create time.
+// unknown at create time. The update is copy-on-write: a fresh
+// *vm.VM replaces the map entry so concurrent readers that captured
+// the old pointer via vmForPod never observe a field mutation.
 func (p *CocoonProvider) setVMIP(namespace, name, ip string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if v, ok := p.vmsByPod[podKey(namespace, name)]; ok {
-		v.IP = ip
+	key := meta.PodKey(namespace, name)
+	v, ok := p.vmsByPod[key]
+	if !ok {
+		return
+	}
+	updated := *v
+	updated.IP = ip
+	p.vmsByPod[key] = &updated
+	if updated.Name != "" {
+		p.vmsByName[updated.Name] = &updated
 	}
 }

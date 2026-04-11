@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -120,6 +121,11 @@ func (nopWriteCloser) Close() error                { return nil }
 
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	// Default every test pod to Managed=true because that is what the
+	// operator writes for real clone/run/fork workloads. The
+	// unmanaged-adoption path has its own builder that overrides this
+	// after calling Apply.
+	spec.Managed = true
 	spec.Apply(pod)
 	return pod
 }
@@ -271,55 +277,144 @@ func TestCreatePodRunMode(t *testing.T) {
 	}
 }
 
-func TestCreatePodStaticMode(t *testing.T) {
+func TestCreatePodCloneErrorPropagates(t *testing.T) {
+	rt := &fakeRuntime{
+		cloneErr: errors.New("cocoon vm clone boom"),
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo": {Name: "snapshot-repo", Image: "https://example.invalid/img.img"},
+		},
+	}
+	p := NewCocoonProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "snapshot-repo:latest",
+		Mode:   "clone",
+	})
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Fatalf("expected clone error to surface, got nil")
+	}
+	// Failed CreatePod must NOT leave a VM in the tracked tables.
+	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
+	}
+}
+
+func TestCreatePodRunErrorPropagates(t *testing.T) {
+	rt := &fakeRuntime{runErr: errors.New("cocoon vm run boom")}
+	p := NewCocoonProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-run",
+		Image:  "ubuntu-22.04",
+		Mode:   "run",
+	})
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Fatalf("expected run error to surface, got nil")
+	}
+	if got := p.vmByName("vk-ns-run"); got != nil {
+		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
+	}
+}
+
+func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := NewCocoonProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager()
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-static", Mode: "static"})
-	// Static mode requires the VMRuntime hints to already be set.
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:         "vk-ns-demo-0",
+		SnapshotPolicy: "never", // skip push path — not under test here
+	})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0"})
+	p.Probes.MarkReady(meta.PodKey("ns", "demo-0"))
+
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+	if rt.removedID != "vmid-del" {
+		t.Errorf("Runtime.Remove got id=%q, want vmid-del", rt.removedID)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		t.Errorf("DeletePod should forget the VM, still tracked as %#v", got)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
+		t.Errorf("DeletePod should drop the pod from the in-memory table")
+	}
+}
+
+func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewCocoonProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager()
+
+	// Managed=false is the canonical gate for "this VM lives outside
+	// vk-cocoon; adopt the pre-assigned runtime hints instead of
+	// calling Clone/Run". Built inline rather than via newPodWithSpec
+	// because the helper force-sets Managed=true for the common path.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.99"}.Apply(pod)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if rt.cloned != nil || rt.ran != nil {
-		t.Errorf("static mode should not call Clone or Run")
+		t.Errorf("unmanaged mode should not call Clone or Run")
 	}
 }
 
-func TestSplitRefHasTag(t *testing.T) {
-	repo, tag := splitRef("foo:v1")
-	if repo != "foo" || tag != "v1" {
-		t.Errorf("got (%q, %q), want (foo, v1)", repo, tag)
+func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
+	// Pod is scheduled to our node and carries the VMID annotation
+	// for a VM that the fake cocoon runtime reports as live. Startup
+	// reconcile must adopt it into the in-memory tables without
+	// calling Create.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod.Spec.NodeName = "cocoon-pool"
+	meta.VMRuntime{VMID: "adopted-vmid", IP: "10.0.0.42"}.Apply(pod)
+
+	rt := &fakeRuntime{
+		listVMs: []vm.VM{{ID: "adopted-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+	}
+	p := NewCocoonProvider()
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager()
+	p.Clientset = fake.NewSimpleClientset(pod)
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "adopted-vmid" {
+		t.Fatalf("adopted VM not tracked, got %#v", got)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
+		t.Errorf("pod not adopted into in-memory table: %v", err)
 	}
 }
 
-func TestSplitRefDefaultsLatest(t *testing.T) {
-	repo, tag := splitRef("foo")
-	if repo != "foo" || tag != "latest" {
-		t.Errorf("got (%q, %q), want (foo, latest)", repo, tag)
+func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
+	rt := &fakeRuntime{
+		listVMs: []vm.VM{{ID: "orphan-vmid", Name: "vk-ghost", IP: "10.0.0.99"}},
 	}
-}
+	p := NewCocoonProvider()
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager()
+	p.Clientset = fake.NewSimpleClientset() // no pods
+	p.OrphanPolicy = OrphanDestroy
 
-func TestShouldSnapshotOnDelete(t *testing.T) {
-	cases := []struct {
-		spec meta.VMSpec
-		want bool
-	}{
-		{meta.VMSpec{SnapshotPolicy: "always", VMName: "vk-ns-demo-1"}, true},
-		{meta.VMSpec{SnapshotPolicy: "never", VMName: "vk-ns-demo-0"}, false},
-		{meta.VMSpec{SnapshotPolicy: "main-only", VMName: "vk-ns-demo-0"}, true},
-		{meta.VMSpec{SnapshotPolicy: "main-only", VMName: "vk-ns-demo-1"}, false},
-		{meta.VMSpec{SnapshotPolicy: "", VMName: "vk-ns-demo-0"}, true}, // default = always
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
 	}
-	for _, c := range cases {
-		t.Run(string(c.spec.SnapshotPolicy)+"/"+c.spec.VMName, func(t *testing.T) {
-			if got := shouldSnapshotOnDelete(c.spec); got != c.want {
-				t.Errorf("got %v, want %v", got, c.want)
-			}
-		})
+	if rt.removedID != "orphan-vmid" {
+		t.Errorf("orphan VM should be removed under OrphanDestroy, removedID=%q", rt.removedID)
 	}
 }
 

@@ -15,7 +15,11 @@ const (
 
 var (
 	// PodLifecycleTotal counts CreatePod / DeletePod / UpdatePod
-	// outcomes by phase ("created", "deleted", "updated", "failed").
+	// outcomes by (op, result). The op label is one of "create",
+	// "delete", "update". The result label is one of:
+	// "ok", "failed", "missing_vmname", "adopted", "no_vm",
+	// "hibernated", "hibernate_failed", "woken", "wake_failed",
+	// "noop".
 	PodLifecycleTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,

@@ -7,7 +7,6 @@ import (
 
 	"github.com/cocoonstack/epoch/manifest"
 	"github.com/cocoonstack/epoch/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

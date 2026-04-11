@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/epoch/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -26,7 +26,7 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 		repo = vmName
 	}
 	if tag == "" {
-		tag = "latest"
+		tag = meta.DefaultSnapshotTag
 	}
 
 	pusher := &snapshot.Pusher{

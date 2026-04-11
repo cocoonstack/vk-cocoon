@@ -69,22 +69,22 @@ func main() {
 	logger.Infof(ctx, "vk-cocoon %s starting (rev=%s built=%s)",
 		version.VERSION, version.REVISION, version.BUILTAT)
 
-	nodeName := envOrDefault("VK_NODE_NAME", defaultNodeName)
-	metricsAddr := envOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
-	epochURL := envOrDefault("EPOCH_URL", defaultEpochURL)
+	nodeName := commonk8s.EnvOrDefault("VK_NODE_NAME", defaultNodeName)
+	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
+	epochURL := commonk8s.EnvOrDefault("EPOCH_URL", defaultEpochURL)
 	epochToken := os.Getenv("EPOCH_TOKEN")
-	leasesPath := envOrDefault("VK_LEASES_PATH", defaultLeasesPath)
-	cocoonBin := envOrDefault("VK_COCOON_BIN", "")
+	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", defaultLeasesPath)
+	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	sshPassword := os.Getenv("VK_SSH_PASSWORD")
-	orphanPolicy := envOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
-	nodeIP := envOrDefault("VK_NODE_IP", "")
-	nodePool := envOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
+	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
+	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
+	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
 	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
-		nodeIP = detectNodeIP()
+		nodeIP = commonk8s.DetectNodeIP()
 	}
-	certPath := envOrDefault("VK_TLS_CERT", defaultTLSCert)
-	keyPath := envOrDefault("VK_TLS_KEY", defaultTLSKey)
+	certPath := commonk8s.EnvOrDefault("VK_TLS_CERT", defaultTLSCert)
+	keyPath := commonk8s.EnvOrDefault("VK_TLS_KEY", defaultTLSKey)
 
 	// Build the K8s clientset.
 	cfg, err := commonk8s.LoadConfig()
@@ -102,17 +102,25 @@ func main() {
 	defer cancel()
 
 	// Load (or self-sign) the TLS material the kubelet API needs.
-	tlsCert, tlsSource, err := loadOrGenerateTLS(certPath, keyPath, nodeName, nodeIP)
+	tlsCert, tlsSource, err := commonk8s.LoadOrGenerateCert(certPath, keyPath, nodeName, nodeIP)
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "tls setup: %v", err)
 	}
 	logger.Infof(signalCtx, "kubelet TLS from %s", tlsSource)
 
+	// Resolve advertised node capacity up-front so a malformed
+	// VK_NODE_* override fails loudly at startup rather than via
+	// a MustParse panic deep inside the node-controller factory.
+	nodeCapacity, err := NodeCapacity()
+	if err != nil {
+		logger.Fatalf(signalCtx, err, "node capacity: %v", err)
+	}
+
 	// Share a single CocoonProvider between the nodeutil factory
 	// and the startup reconcile path. We hand-wire it once so
 	// StartupReconcile runs against the real tables before the
 	// v-k node controller spins up.
-	provider := buildCocoonProvider(signalCtx, buildOpts{
+	provider := buildCocoonProvider(buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
 		epochToken:   epochToken,
@@ -149,8 +157,8 @@ func main() {
 				{Type: corev1.NodeInternalIP, Address: nodeIP},
 				{Type: corev1.NodeHostName, Address: nodeName},
 			}
-			cfg.Node.Status.Capacity = NodeCapacity()
-			cfg.Node.Status.Allocatable = cfg.Node.Status.Capacity
+			cfg.Node.Status.Capacity = nodeCapacity
+			cfg.Node.Status.Allocatable = nodeCapacity
 			cfg.Node.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
 				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
 			}
@@ -217,7 +225,11 @@ func main() {
 
 	<-signalCtx.Done()
 
-	shutdownCtx := context.Background()
+	// Shutdown must outlive signalCtx (which is already canceled),
+	// but a fresh Background() with no deadline could wedge the
+	// process if Shutdown waits for in-flight handlers. Bound it.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
 	}
@@ -243,7 +255,7 @@ type buildOpts struct {
 // registry, cocoon CLI runtime, SSH executor, lease parser, probe
 // manager) happens here so main stays a thin shell around
 // nodeutil.NewNode.
-func buildCocoonProvider(_ context.Context, opts buildOpts) *CocoonProvider {
+func buildCocoonProvider(opts buildOpts) *CocoonProvider {
 	registry := snapshots.New(opts.epochURL, opts.epochToken)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
 	p := NewCocoonProvider()
@@ -281,13 +293,13 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName string) {
 	logger := log.WithFunc("patchKubeletEndpoint")
 	// Give v-k a head-start to create the node object.
-	if !sleepCtx(ctx, endpointPatchWait) {
+	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}
 	for attempt := range 10 {
 		nodeObj, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
-			if !sleepCtx(ctx, endpointPatchRetry) {
+			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue
@@ -297,24 +309,13 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
 			logger.Warnf(ctx, "patch daemon endpoints attempt %d: %v", attempt, err)
-			if !sleepCtx(ctx, endpointPatchRetry) {
+			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue
 		}
 		logger.Infof(ctx, "node %s kubelet endpoint set to :%d", nodeName, kubeletAPIPort)
 		return
-	}
-}
-
-// sleepCtx blocks for d or until ctx is canceled, returning false
-// when the context fires first so callers can exit their retry loop.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
 	}
 }
 
@@ -351,13 +352,4 @@ func defaultNodeConditions() []corev1.NodeCondition {
 			Message: "NodeController create implicit route",
 		},
 	}
-}
-
-// envOrDefault returns the value of key from the environment, or
-// fallback when key is unset or empty.
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

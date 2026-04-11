@@ -8,6 +8,11 @@ import (
 	"io"
 )
 
+// StateRunning is the literal cocoon reports for a live VM, and the
+// value static-mode toolboxes use to fake a healthy adopted VM in
+// the in-memory table.
+const StateRunning = "running"
+
 // VM is the runtime view of a managed cocoon VM.
 type VM struct {
 	ID    string
@@ -28,11 +33,6 @@ type Snapshot struct {
 	Name  string
 	Image string
 }
-
-// StateRunning is the literal cocoon reports for a live VM, and the
-// value static-mode toolboxes use to fake a healthy adopted VM in
-// the in-memory table.
-const StateRunning = "running"
 
 // CloneOptions is the input to Runtime.Clone.
 type CloneOptions struct {

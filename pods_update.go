@@ -31,10 +31,10 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Refresh the in-memory copy so subsequent GetPod returns the
 	// latest spec / annotations.
-	p.trackPod(pod, p.vmForPod(pod.Namespace, pod.Name))
+	v := p.vmForPod(pod.Namespace, pod.Name)
+	p.trackPod(pod, v)
 
 	desire := bool(meta.ReadHibernateState(pod))
-	v := p.vmForPod(pod.Namespace, pod.Name)
 
 	switch {
 	case desire && v != nil:
@@ -64,6 +64,17 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // keeps the container in PodRunning) so K8s controllers do not
 // recreate it; the operator detects the snapshot via
 // epoch.GetManifest and marks the CocoonHibernation as Hibernated.
+//
+// Ordering is Save → Push → Remove with a compensating rollback on
+// Remove failure. The naive order (Save → Push → Remove without
+// rollback) is wrong: the operator's HasManifest probe fires the
+// moment Push succeeds, so a failed Remove would let the operator
+// observe Hibernated while the local VM is still running. If Remove
+// fails we best-effort DeleteManifest the tag we just published so
+// the next operator probe sees it absent and the
+// CocoonHibernation stays at Hibernating until a retry completes.
+// Push and Save are both idempotent — a compensated retry will
+// re-publish the tag and re-attempt Remove cleanly.
 func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("CocoonProvider.hibernate")
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
@@ -71,11 +82,19 @@ func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.V
 	}
 	if p.Pusher != nil {
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
-			logger.Warnf(ctx, "push hibernation snapshot %s: %v", v.Name, err)
 			return fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 		}
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+		if p.Registry != nil {
+			// Compensating transaction: drop the hibernate tag so
+			// the operator does not advance to Hibernated with a
+			// live VM still on the host. A rollback error here
+			// leaves drift, so log at Error so oncall sees it.
+			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
+				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
+			}
+		}
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 	// Clear the runtime annotations: the VM no longer exists, but
@@ -98,12 +117,17 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if spec.VMName == "" {
 		return nil
 	}
+	if p.Puller == nil {
+		// Without a puller we cannot import the hibernation tar
+		// epoch holds, and the subsequent Clone would fail with a
+		// confusing "snapshot not found". Surface the wiring gap
+		// up-front instead.
+		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
+	}
 	cpu, memory := vmResourceOverrides(pod)
 	importName := spec.VMName + hibernateImportSuffix
-	if p.Puller != nil {
-		if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
-			return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
-		}
+	if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
+		return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
 	}
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 		From:    importName,
@@ -133,5 +157,5 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 func (p *CocoonProvider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.dropVMLocked(podKey(namespace, name))
+	p.dropVMLocked(meta.PodKey(namespace, name))
 }

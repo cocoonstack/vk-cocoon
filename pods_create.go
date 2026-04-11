@@ -14,6 +14,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/utils"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -62,7 +63,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
 	if p.Probes != nil {
-		p.Probes.MarkReady(podKey(pod.Namespace, pod.Name))
+		p.Probes.MarkReady(meta.PodKey(pod.Namespace, pod.Name))
 	}
 
 	pod.Status.Phase = corev1.PodRunning
@@ -78,20 +79,23 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 // strategy is mode-driven, dispatched on the typed enum constants
 // from cocoon-common rather than bare strings:
 //
+//   - Managed=false (static toolboxes only): skip the runtime,
+//     adopt the pre-assigned IP / VMID the operator already wrote
+//     into the VMRuntime annotations on the pod. This is the
+//     canonical gate — spec.Managed is the single source of truth
+//     for "vk-cocoon owns this VM's lifecycle" vs "this VM lives
+//     outside my world".
 //   - clone: pull the snapshot from epoch (if not already local)
 //     and ask cocoon to clone it.
 //   - run:   ask cocoon to boot a fresh VM from the supplied image.
-//   - static (toolboxes only): skip the runtime, adopt the
-//     pre-assigned IP / VMID the operator already wrote into the
-//     VMRuntime annotations on the pod.
 func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
 	cpu, memory := vmResourceOverrides(pod)
 	mode := strings.ToLower(spec.Mode)
 	switch {
-	case mode == string(cocoonv1.ToolboxModeStatic):
+	case !spec.Managed:
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" || runtime.IP == "" {
-			return nil, fmt.Errorf("static toolbox %s missing static IP/VMID", spec.VMName)
+			return nil, fmt.Errorf("unmanaged vm %s missing pre-assigned IP/VMID", spec.VMName)
 		}
 		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, nil
 
@@ -133,7 +137,7 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 		// Top-level pods clone from the snapshot referenced by Image;
 		// the ForkFrom branch above handles the sub-agent fork path.
 		from := spec.Image
-		cloneFrom, _ := splitRef(from)
+		cloneFrom, _ := utils.ParseRef(from)
 		snapshot, err := p.ensureSnapshot(ctx, from)
 		if err != nil {
 			metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
@@ -171,7 +175,7 @@ func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Sn
 	if ref == "" {
 		return nil, nil
 	}
-	repo, tag := splitRef(ref)
+	repo, tag := utils.ParseRef(ref)
 	snapshot, err := p.Runtime.Snapshot(ctx, repo)
 	if err == nil {
 		return snapshot, nil
@@ -225,19 +229,15 @@ func (p *CocoonProvider) vmByName(name string) *vm.VM {
 
 // applyRuntime writes the runtime VMRuntime annotations onto a pod
 // so the operator can observe the VMID/IP vk-cocoon just learned.
+//
+// VNCPort is deliberately left unset: cloud-hypervisor (the backing
+// runtime for every VM vk-cocoon brings up itself) exposes no VNC
+// server, so there is no port to publish. Static toolboxes carry a
+// pre-seeded VNCPort written by cocoon-operator from the CocoonSet
+// spec at pod-build time; see meta.VMRuntime for the contract.
 func (p *CocoonProvider) applyRuntime(pod *corev1.Pod, v *vm.VM) {
 	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
 	runtime.Apply(pod)
-}
-
-// splitRef splits an OCI ref of the form "name:tag" into its
-// components. Refs without a tag default to "latest".
-func splitRef(ref string) (string, string) {
-	idx := strings.LastIndex(ref, ":")
-	if idx < 0 {
-		return ref, "latest"
-	}
-	return ref[:idx], ref[idx+1:]
 }
 
 // vmResourceOverrides translates pod resource requirements into the cocoon CLI

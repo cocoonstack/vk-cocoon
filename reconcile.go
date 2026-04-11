@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -31,19 +34,38 @@ import (
 func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 	logger := log.WithFunc("CocoonProvider.StartupReconcile")
 	if p.Clientset == nil {
-		return fmt.Errorf("clientset is required for startup reconcile")
+		return errors.New("clientset is required for startup reconcile")
 	}
 
-	pods, err := p.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		FieldSelector: "spec.nodeName=" + p.NodeName,
+	// Fetch the pod set and the cocoon VM set concurrently: the two
+	// lists are independent and hit completely different backends
+	// (kube-apiserver vs the local cocoon CLI), so serializing them
+	// needlessly doubles startup latency on large clusters.
+	var (
+		pods *corev1.PodList
+		vms  []vm.VM
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		list, err := p.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(gctx, metav1.ListOptions{
+			FieldSelector: "spec.nodeName=" + p.NodeName,
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("list pods on %s: %w", p.NodeName, err)
+		}
+		pods = list
+		return nil
 	})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("list pods on %s: %w", p.NodeName, err)
-	}
-
-	vms, err := p.Runtime.List(ctx)
-	if err != nil {
-		return fmt.Errorf("list local VMs: %w", err)
+	g.Go(func() error {
+		list, err := p.Runtime.List(gctx)
+		if err != nil {
+			return fmt.Errorf("list local VMs: %w", err)
+		}
+		vms = list
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	vmByID := make(map[string]int, len(vms))
@@ -69,7 +91,7 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 			p.trackPod(pod, &v)
 			matched[v.ID] = true
 			if p.Probes != nil {
-				p.Probes.MarkReady(podKey(pod.Namespace, pod.Name))
+				p.Probes.MarkReady(meta.PodKey(pod.Namespace, pod.Name))
 			}
 		}
 	}
