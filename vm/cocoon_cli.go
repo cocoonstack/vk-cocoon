@@ -132,11 +132,45 @@ func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// SnapshotSave runs `cocoon snapshot save --name <vmName> <vmID>`.
+// SnapshotSave runs `cocoon snapshot save --name <vmName> <vmID>`,
+// transparently handling the "snapshot already exists" failure mode
+// that prevents callers from being idempotent.
+//
+// The cocoon CLI's `snapshot save` rejects a name that is already
+// present on disk with `Error: snapshot name "X" already exists` and
+// exit 1. The hibernate path on top of this method is invoked from
+// vk-cocoon's UpdatePod, which the virtual-kubelet workqueue retries
+// rapidly when UpdatePod returns an error. The first crashed
+// hibernate (push failure, removed VM mid-flow, etc.) leaves a stale
+// snapshot on disk, and every retry then dead-loops on "already
+// exists" — a fork-bomb of cocoon CLI invocations against a snapshot
+// directory that is never going to clear itself. We see this in the
+// wild when an early hibernate succeeds the Save step but bounces on
+// Push or Remove and the workqueue requeues.
+//
+// Treat the existing-snapshot path as recoverable: drop the stale
+// row via `cocoon snapshot rm <name>` and re-issue Save. If the rm
+// itself fails, surface that error rather than the original — the rm
+// failure is the actionable one (snapshot dir corrupt, file locked).
+// If Save still fails after a successful rm we propagate that error
+// untouched on the assumption that the second failure is whatever
+// the first one would have been if the stale snapshot had not been
+// in the way.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
-	cmd := c.command(ctx, "snapshot", "save", "--name", vmName, vmID)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(string(out), "already exists") {
 		return fmt.Errorf("cocoon snapshot save %s: %w (output: %s)", vmName, err, strings.TrimSpace(string(out)))
+	}
+	rmOut, rmErr := c.command(ctx, "snapshot", "rm", vmName).CombinedOutput()
+	if rmErr != nil {
+		return fmt.Errorf("cocoon snapshot save %s: stale snapshot present and rm failed: %w (output: %s)", vmName, rmErr, strings.TrimSpace(string(rmOut)))
+	}
+	out2, err2 := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	if err2 != nil {
+		return fmt.Errorf("cocoon snapshot save %s (after rm): %w (output: %s)", vmName, err2, strings.TrimSpace(string(out2)))
 	}
 	return nil
 }
