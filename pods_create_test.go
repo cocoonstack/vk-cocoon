@@ -219,7 +219,7 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:   "vk-ns-demo-2",
-		Image:    "https://epoch.simular.cloud/windows/win11",
+		Image:    "https://epoch.example.org/dl/windows/win11",
 		Mode:     "run",
 		OS:       "windows",
 		ForkFrom: "vk-ns-demo-0",
