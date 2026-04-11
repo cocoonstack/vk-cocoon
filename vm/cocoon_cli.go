@@ -187,7 +187,21 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 // SnapshotImport spawns `cocoon snapshot import --name <name>` and
 // returns its stdin pipe so callers can stream tar bytes in. The
 // returned wait function blocks until the subprocess exits.
+//
+// A stale snapshot row at the same name is removed up-front rather
+// than allowed to fail the import — same reasoning as SnapshotSave:
+// vk-cocoon's wake path is invoked from UpdatePod, the v-k workqueue
+// requeues UpdatePod aggressively on error, and a name collision
+// from a prior aborted wake (or a left-over hibernate-import row
+// from an earlier session) would otherwise dead-loop the wake
+// against a snapshot directory that nothing on the system is going
+// to clear. The pre-clear is destructive but the only callers
+// (Puller.PullSnapshot for hibernate-import staging and fresh
+// registry fetches) always want overwrite semantics anyway.
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error) {
+	if err := c.snapshotRemoveIfExists(ctx, opts.Name); err != nil {
+		return nil, nil, err
+	}
 	args := []string{"snapshot", "import", "--name", opts.Name}
 	if opts.Description != "" {
 		args = append(args, "--description", opts.Description)
@@ -208,6 +222,25 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 		return nil
 	}
 	return stdin, wait, nil
+}
+
+// snapshotRemoveIfExists drops a snapshot row by name and treats
+// "snapshot not found" as success. Used by SnapshotImport (and
+// indirectly SnapshotSave's recovery path) to make the runtime
+// idempotent against name collisions left behind by an earlier
+// aborted hibernate / wake attempt. Any non-"not found" rm error
+// is surfaced verbatim because it indicates an actionable failure
+// (corrupt directory, file locked, permission denied) the caller
+// should not silently swallow.
+func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) error {
+	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(string(out), "snapshot not found") {
+		return nil
+	}
+	return fmt.Errorf("cocoon snapshot rm %s: %w (output: %s)", name, err, strings.TrimSpace(string(out)))
 }
 
 // SnapshotExport spawns `cocoon snapshot export <name> -o -` and
