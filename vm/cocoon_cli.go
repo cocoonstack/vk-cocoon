@@ -100,7 +100,7 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
 	}
 	out, err := c.command(ctx, "image", "pull", image).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("cocoon image pull %s: %w (output: %s)", image, err, strings.TrimSpace(string(out)))
+		return cocoonCmdError("image pull", image, err, out)
 	}
 	return nil
 }
@@ -127,7 +127,7 @@ func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	cmd := c.command(ctx, "vm", "rm", "--force", vmID)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("cocoon vm rm %s: %w (output: %s)", vmID, err, strings.TrimSpace(string(out)))
+		return cocoonCmdError("vm rm", vmID, err, out)
 	}
 	return nil
 }
@@ -162,7 +162,7 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 		return nil
 	}
 	if !strings.Contains(string(out), "already exists") {
-		return fmt.Errorf("cocoon snapshot save %s: %w (output: %s)", vmName, err, strings.TrimSpace(string(out)))
+		return cocoonCmdError("snapshot save", vmName, err, out)
 	}
 	rmOut, rmErr := c.command(ctx, "snapshot", "rm", vmName).CombinedOutput()
 	if rmErr != nil {
@@ -170,7 +170,7 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	}
 	out2, err2 := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err2 != nil {
-		return fmt.Errorf("cocoon snapshot save %s (after rm): %w (output: %s)", vmName, err2, strings.TrimSpace(string(out2)))
+		return cocoonCmdError("snapshot save (after rm)", vmName, err2, out2)
 	}
 	return nil
 }
@@ -240,7 +240,7 @@ func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) err
 	if strings.Contains(string(out), "snapshot not found") {
 		return nil
 	}
-	return fmt.Errorf("cocoon snapshot rm %s: %w (output: %s)", name, err, strings.TrimSpace(string(out)))
+	return cocoonCmdError("snapshot rm", name, err, out)
 }
 
 // SnapshotExport spawns `cocoon snapshot export <name> -o -` and
@@ -274,6 +274,14 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 		return nil, fmt.Errorf("%w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+// cocoonCmdError formats the canonical "cocoon <op> <ref>: <err> (output: ...)"
+// message used by every CombinedOutput-based runner in this file. Centralizing
+// it keeps the wording consistent and makes future redaction / truncation of
+// the subprocess output a one-place change.
+func cocoonCmdError(op, ref string, err error, output []byte) error {
+	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
 }
 
 // appendCreateArgs adds the resource / network / nics / dns flags
@@ -311,8 +319,8 @@ func normalizeSizeArg(raw string) string {
 	if err != nil {
 		return raw
 	}
-	if bytes := q.Value(); bytes > 0 {
-		return strconv.FormatInt(bytes, 10)
+	if n := q.Value(); n > 0 {
+		return strconv.FormatInt(n, 10)
 	}
 	return raw
 }

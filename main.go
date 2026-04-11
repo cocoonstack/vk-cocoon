@@ -145,7 +145,6 @@ func main() {
 	// factory is called once inside nodeutil.NewNode with the
 	// *corev1.Node the controller hands out; we stamp capacity +
 	// addresses + daemon endpoints on that object before returning.
-	var nodeProvider *CocoonNodeProvider
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
 			if cfg.Node.Labels == nil {
@@ -176,8 +175,7 @@ func main() {
 				})
 			}
 		}
-		nodeProvider = NewCocoonNodeProvider(cfg.Node)
-		return provider, nodeProvider, nil
+		return provider, NewCocoonNodeProvider(), nil
 	}
 
 	kubeletMux := http.NewServeMux()

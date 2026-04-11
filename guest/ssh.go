@@ -177,8 +177,7 @@ func posixQuote(s string) string {
 // POSIX shell would interpret, so posixQuote can skip the quoting
 // overhead on simple binary names and numeric arguments.
 func needsShellQuote(s string) bool {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for _, c := range []byte(s) {
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 			continue
