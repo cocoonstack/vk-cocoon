@@ -21,15 +21,15 @@ func TestAppendCreateArgsNormalizesResourceQuantities(t *testing.T) {
 	}
 }
 
-func TestAppendCloneArgsKeepsEmptyInheritedValues(t *testing.T) {
+func TestAppendCreateArgsKeepsEmptyInheritedValues(t *testing.T) {
 	t.Parallel()
 
-	got := appendCloneArgs([]string{"vm", "clone"}, 0, "", "", "20Gi", 0, nil)
+	got := appendCreateArgs([]string{"vm", "clone"}, 0, "", "", "20Gi", 0, nil)
 	want := []string{
 		"vm", "clone",
 		"--storage", "21474836480",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("appendCloneArgs() = %#v, want %#v", got, want)
+		t.Fatalf("appendCreateArgs() = %#v, want %#v", got, want)
 	}
 }

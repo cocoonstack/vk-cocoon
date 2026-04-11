@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 )
 
 // Executor runs commands inside the guest VM. It is satisfied by
@@ -26,8 +27,6 @@ type SSHExecutor struct {
 	User     string
 	Password string
 	Port     int
-	// Binary is the SSH client binary path; "" means /usr/bin/ssh.
-	Binary string
 }
 
 // NewSSHExecutor returns an SSHExecutor with the supplied
@@ -54,7 +53,7 @@ func (e *SSHExecutor) Run(ctx context.Context, host string, cmd []string, stdin 
 		"ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
-		"-p", fmt.Sprintf("%d", e.Port),
+		"-p", strconv.Itoa(e.Port),
 		fmt.Sprintf("%s@%s", e.User, host),
 	}
 	args = append(args, cmd...)
@@ -75,7 +74,7 @@ func (e *SSHExecutor) Run(ctx context.Context, host string, cmd []string, stdin 
 // guests.
 func (e *SSHExecutor) FetchJournal(ctx context.Context, host string, tailLines int) ([]byte, error) {
 	var out, errBuf bytes.Buffer
-	cmd := []string{"journalctl", "--no-pager", "-n", fmt.Sprintf("%d", tailLines)}
+	cmd := []string{"journalctl", "--no-pager", "-n", strconv.Itoa(tailLines)}
 	if err := e.Run(ctx, host, cmd, nil, &out, &errBuf); err != nil {
 		return nil, fmt.Errorf("%w (stderr: %s)", err, errBuf.String())
 	}

@@ -106,13 +106,12 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-		From:     importName,
-		To:       spec.VMName,
-		CPU:      cpu,
-		Memory:   memory,
-		Network:  spec.Network,
-		Storage:  spec.Storage,
-		NodeName: p.NodeName,
+		From:    importName,
+		To:      spec.VMName,
+		CPU:     cpu,
+		Memory:  memory,
+		Network: spec.Network,
+		Storage: spec.Storage,
 	})
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
@@ -134,10 +133,5 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 func (p *CocoonProvider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := podKey(namespace, name)
-	if v, ok := p.vmsByPod[key]; ok {
-		delete(p.vmsByID, v.ID)
-		delete(p.vmsByName, v.Name)
-		delete(p.vmsByPod, key)
-	}
+	p.dropVMLocked(podKey(namespace, name))
 }

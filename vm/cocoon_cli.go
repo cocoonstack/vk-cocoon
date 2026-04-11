@@ -55,7 +55,7 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	if opts.To != "" {
 		args = append(args, "--name", opts.To)
 	}
-	args = appendCloneArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
 	args = append(args, opts.From)
 	if _, err := c.runJSON(ctx, args...); err != nil {
 		return nil, fmt.Errorf("cocoon vm clone: %w", err)
@@ -91,14 +91,11 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
 	if image == "" {
 		return nil
 	}
-	inspect := c.command(ctx, "image", "inspect", image)
-	if out, err := inspect.CombinedOutput(); err == nil {
-		_ = out
+	if err := c.command(ctx, "image", "inspect", image).Run(); err == nil {
 		return nil
 	}
-
-	pull := c.command(ctx, "image", "pull", image)
-	if out, err := pull.CombinedOutput(); err != nil {
+	out, err := c.command(ctx, "image", "pull", image).CombinedOutput()
+	if err != nil {
 		return fmt.Errorf("cocoon image pull %s: %w (output: %s)", image, err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -206,38 +203,9 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// appendCreateArgs adds the network / storage / nics / dns flags
-// the cocoon vm run path accepts.
+// appendCreateArgs adds the resource / network / nics / dns flags
+// shared by cocoon vm run and cocoon vm clone.
 func appendCreateArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
-	args = appendResourceArgs(args, cpu, memory, storage)
-	if network != "" {
-		args = append(args, "--network", network)
-	}
-	if nics > 0 {
-		args = append(args, "--nics", strconv.Itoa(nics))
-	}
-	if len(dns) > 0 {
-		args = append(args, "--dns", strings.Join(dns, ","))
-	}
-	return args
-}
-
-// appendCloneArgs adds the resource flags supported by cocoon vm clone.
-func appendCloneArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
-	args = appendResourceArgs(args, cpu, memory, storage)
-	if network != "" {
-		args = append(args, "--network", network)
-	}
-	if nics > 0 {
-		args = append(args, "--nics", strconv.Itoa(nics))
-	}
-	if len(dns) > 0 {
-		args = append(args, "--dns", strings.Join(dns, ","))
-	}
-	return args
-}
-
-func appendResourceArgs(args []string, cpu int, memory, storage string) []string {
 	if cpu > 0 {
 		args = append(args, "--cpu", strconv.Itoa(cpu))
 	}
@@ -246,6 +214,15 @@ func appendResourceArgs(args []string, cpu int, memory, storage string) []string
 	}
 	if normalized := normalizeSizeArg(storage); normalized != "" {
 		args = append(args, "--storage", normalized)
+	}
+	if network != "" {
+		args = append(args, "--network", network)
+	}
+	if nics > 0 {
+		args = append(args, "--nics", strconv.Itoa(nics))
+	}
+	if len(dns) > 0 {
+		args = append(args, "--dns", strings.Join(dns, ","))
 	}
 	return args
 }

@@ -5,6 +5,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // GetPodStatus returns the latest status for a pod tracked by the
@@ -24,10 +26,13 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 			StartTime: pod.Status.StartTime,
 		}, nil
 	}
-	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
-		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
-			v.IP = lease.IP
-			p.applyRuntime(pod, v)
+	podIP := v.IP
+	mac := v.MAC
+	if podIP == "" && mac != "" && p.LeaseParser != nil {
+		if lease, err := p.LeaseParser.LookupByMAC(mac); err == nil {
+			podIP = lease.IP
+			p.setVMIP(namespace, name, podIP)
+			p.applyRuntime(pod, &vm.VM{ID: v.ID, IP: podIP})
 		}
 	}
 
@@ -36,10 +41,10 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 		ready = corev1.ConditionTrue
 	}
 
-	now := metav1.NewTime(metav1.Now().Time)
+	now := metav1.Now()
 	status := &corev1.PodStatus{
 		Phase:     corev1.PodRunning,
-		PodIP:     v.IP,
+		PodIP:     podIP,
 		StartTime: pod.Status.StartTime,
 		Conditions: []corev1.PodCondition{
 			{Type: corev1.PodReady, Status: ready, LastTransitionTime: now},

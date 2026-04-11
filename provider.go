@@ -36,7 +36,6 @@ type CocoonProvider struct {
 	mu         sync.RWMutex
 	pods       map[string]*corev1.Pod
 	vmsByPod   map[string]*vm.VM
-	vmsByID    map[string]*vm.VM
 	vmsByName  map[string]*vm.VM
 	notifyHook func(*corev1.Pod)
 }
@@ -63,7 +62,6 @@ func NewCocoonProvider() *CocoonProvider {
 		OrphanPolicy: OrphanAlert,
 		pods:         map[string]*corev1.Pod{},
 		vmsByPod:     map[string]*vm.VM{},
-		vmsByID:      map[string]*vm.VM{},
 		vmsByName:    map[string]*vm.VM{},
 	}
 }
@@ -124,13 +122,21 @@ func (p *CocoonProvider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.pods[key] = pod
 	if v != nil {
 		p.vmsByPod[key] = v
-		if v.ID != "" {
-			p.vmsByID[v.ID] = v
-		}
 		if v.Name != "" {
 			p.vmsByName[v.Name] = v
 		}
 	}
+}
+
+// dropVMLocked removes the VM record for key from the VM-indexed
+// maps. Callers must already hold p.mu for writing.
+func (p *CocoonProvider) dropVMLocked(key string) {
+	v, ok := p.vmsByPod[key]
+	if !ok {
+		return
+	}
+	delete(p.vmsByName, v.Name)
+	delete(p.vmsByPod, key)
 }
 
 // forgetPod drops the pod and associated VM from the in-memory
@@ -139,11 +145,7 @@ func (p *CocoonProvider) forgetPod(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := podKey(namespace, name)
-	if v, ok := p.vmsByPod[key]; ok {
-		delete(p.vmsByID, v.ID)
-		delete(p.vmsByName, v.Name)
-		delete(p.vmsByPod, key)
-	}
+	p.dropVMLocked(key)
 	delete(p.pods, key)
 }
 
@@ -153,4 +155,15 @@ func (p *CocoonProvider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByPod[podKey(namespace, name)]
+}
+
+// setVMIP updates the tracked VM's IP under the write lock. Used by
+// GetPodStatus when a dnsmasq lease lookup resolves an IP that was
+// unknown at create time.
+func (p *CocoonProvider) setVMIP(namespace, name, ip string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if v, ok := p.vmsByPod[podKey(namespace, name)]; ok {
+		v.IP = ip
+	}
 }

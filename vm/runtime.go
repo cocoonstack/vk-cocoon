@@ -29,40 +29,34 @@ type Snapshot struct {
 	Image string
 }
 
-// VM state literals shared by the cocoon CLI and downstream callers.
-// Static-mode toolboxes also use StateRunning to fake a healthy
-// adopted VM in the in-memory table.
-const (
-	StateRunning   = "running"
-	StateStopped   = "stopped"
-	StateImporting = "importing"
-)
+// StateRunning is the literal cocoon reports for a live VM, and the
+// value static-mode toolboxes use to fake a healthy adopted VM in
+// the in-memory table.
+const StateRunning = "running"
 
 // CloneOptions is the input to Runtime.Clone.
 type CloneOptions struct {
-	From     string // source VM name or snapshot ref
-	To       string // new VM name
-	CPU      int
-	Memory   string
-	Network  string
-	Storage  string
-	NICs     int
-	DNS      []string
-	NodeName string
+	From    string // source VM name or snapshot ref
+	To      string // new VM name
+	CPU     int
+	Memory  string
+	Network string
+	Storage string
+	NICs    int
+	DNS     []string
 }
 
 // RunOptions is the input to Runtime.Run (cold boot from a cloud image).
 type RunOptions struct {
-	Image    string // cloud image URL or local path
-	Name     string
-	CPU      int
-	Memory   string
-	Network  string
-	Storage  string
-	NICs     int
-	DNS      []string
-	OS       string
-	NodeName string
+	Image   string // cloud image URL or local path
+	Name    string
+	CPU     int
+	Memory  string
+	Network string
+	Storage string
+	NICs    int
+	DNS     []string
+	OS      string
 }
 
 // ImportOptions is the input to Runtime.SnapshotImport. The Reader

@@ -101,13 +101,12 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 			return nil, err
 		}
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:     cloneFrom,
-			To:       spec.VMName,
-			CPU:      cpu,
-			Memory:   memory,
-			Network:  spec.Network,
-			Storage:  spec.Storage,
-			NodeName: p.NodeName,
+			From:    cloneFrom,
+			To:      spec.VMName,
+			CPU:     cpu,
+			Memory:  memory,
+			Network: spec.Network,
+			Storage: spec.Storage,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -116,14 +115,13 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 
 	case mode == string(cocoonv1.AgentModeRun):
 		opts := vm.RunOptions{
-			Image:    spec.Image,
-			Name:     spec.VMName,
-			CPU:      cpu,
-			Memory:   memory,
-			Network:  spec.Network,
-			Storage:  spec.Storage,
-			OS:       spec.OS,
-			NodeName: p.NodeName,
+			Image:   spec.Image,
+			Name:    spec.VMName,
+			CPU:     cpu,
+			Memory:  memory,
+			Network: spec.Network,
+			Storage: spec.Storage,
+			OS:      spec.OS,
 		}
 		v, err := p.Runtime.Run(ctx, opts)
 		if err != nil {
@@ -132,8 +130,8 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 		return v, nil
 
 	default: // clone is the default
-		// The clone source is whichever of ForkFrom / Image is set:
-		// top-level pods fork from the snapshot referenced by Image.
+		// Top-level pods clone from the snapshot referenced by Image;
+		// the ForkFrom branch above handles the sub-agent fork path.
 		from := spec.Image
 		cloneFrom, _ := splitRef(from)
 		snapshot, err := p.ensureSnapshot(ctx, from)
@@ -149,13 +147,12 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 		}
 
 		opts := vm.CloneOptions{
-			From:     cloneFrom,
-			To:       spec.VMName,
-			CPU:      cpu,
-			Memory:   memory,
-			Network:  spec.Network,
-			Storage:  spec.Storage,
-			NodeName: p.NodeName,
+			From:    cloneFrom,
+			To:      spec.VMName,
+			CPU:     cpu,
+			Memory:  memory,
+			Network: spec.Network,
+			Storage: spec.Storage,
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
@@ -165,12 +162,11 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 	}
 }
 
-// ensureSnapshot returns the local snapshot metadata and pulls the
-// snapshot from epoch when it is not
-// already cached locally. The local cache check looks up the bare
-// snapshot repo name (after stripping the tag) since cocoon stores
-// imported snapshots under that name; the previous version passed
-// the full ref including tag and never matched.
+// ensureSnapshot returns the local snapshot metadata, pulling it
+// from epoch when it is not already cached locally. The lookup uses
+// the bare repo name (tag stripped) because cocoon stores imported
+// snapshots under that name — an earlier version passed the full
+// ref including the tag and never matched.
 func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
 	if ref == "" {
 		return nil, nil

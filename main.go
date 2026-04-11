@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -53,10 +54,11 @@ const (
 	defaultSSHPort      = 22
 	defaultOrphanPolicy = string(OrphanAlert)
 
-	defaultTLSCert    = "/etc/cocoon/vk/tls/vk-kubelet.crt"
-	defaultTLSKey     = "/etc/cocoon/vk/tls/vk-kubelet.key"
-	kubeletAPIPort    = 10250
-	endpointPatchWait = 5 * time.Second
+	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
+	defaultTLSKey      = "/etc/cocoon/vk/tls/vk-kubelet.key"
+	kubeletAPIPort     = 10250
+	endpointPatchWait  = 5 * time.Second
+	endpointPatchRetry = 2 * time.Second
 )
 
 func main() {
@@ -128,7 +130,7 @@ func main() {
 		// and would 404 every pod the scheduler already placed.
 		// systemd restarts the binary so transient API-server
 		// hiccups still recover.
-		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node")
+		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node: %v", reconcileErr)
 	}
 
 	// Wire the virtual-kubelet node controller. The newProvider
@@ -155,7 +157,10 @@ func main() {
 			if providerID != "" {
 				cfg.Node.Spec.ProviderID = providerID
 			}
-			if !hasTaint(cfg.Node.Spec.Taints, meta.TolerationKey) {
+			hasCocoonTaint := slices.ContainsFunc(cfg.Node.Spec.Taints, func(t corev1.Taint) bool {
+				return t.Key == meta.TolerationKey
+			})
+			if !hasCocoonTaint {
 				cfg.Node.Spec.Taints = append(cfg.Node.Spec.Taints, corev1.Taint{
 					Key:    meta.TolerationKey,
 					Value:  "cocoon",
@@ -193,7 +198,7 @@ func main() {
 	go func() {
 		logger.Infof(signalCtx, "vk-cocoon metrics listening on %s", metricsAddr)
 		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Errorf(signalCtx, err, "metrics listen and serve")
+			logger.Error(signalCtx, err, "metrics listen and serve")
 		}
 	}()
 
@@ -216,7 +221,7 @@ func main() {
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
 	}
-	logger.Infof(shutdownCtx, "vk-cocoon exiting")
+	logger.Info(shutdownCtx, "vk-cocoon exiting")
 }
 
 // buildOpts is the bag of env-sourced values buildCocoonProvider
@@ -276,18 +281,15 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName string) {
 	logger := log.WithFunc("patchKubeletEndpoint")
 	// Give v-k a head-start to create the node object.
-	select {
-	case <-ctx.Done():
+	if !sleepCtx(ctx, endpointPatchWait) {
 		return
-	case <-time.After(endpointPatchWait):
 	}
 	for attempt := range 10 {
-		if ctx.Err() != nil {
-			return
-		}
 		nodeObj, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
-			time.Sleep(2 * time.Second)
+			if !sleepCtx(ctx, endpointPatchRetry) {
+				return
+			}
 			continue
 		}
 		nodeObj.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
@@ -295,7 +297,9 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
 			logger.Warnf(ctx, "patch daemon endpoints attempt %d: %v", attempt, err)
-			time.Sleep(2 * time.Second)
+			if !sleepCtx(ctx, endpointPatchRetry) {
+				return
+			}
 			continue
 		}
 		logger.Infof(ctx, "node %s kubelet endpoint set to :%d", nodeName, kubeletAPIPort)
@@ -303,13 +307,15 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 	}
 }
 
-func hasTaint(taints []corev1.Taint, key string) bool {
-	for _, taint := range taints {
-		if taint.Key == key {
-			return true
-		}
+// sleepCtx blocks for d or until ctx is canceled, returning false
+// when the context fires first so callers can exit their retry loop.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
-	return false
 }
 
 func defaultNodeConditions() []corev1.NodeCondition {

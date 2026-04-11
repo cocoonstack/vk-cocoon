@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,9 @@ const (
 	defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
 )
 
+// ErrNoLease is returned when no lease matches the lookup.
+var ErrNoLease = errors.New("no dnsmasq lease for the requested MAC")
+
 // Lease describes one DHCP entry the parser found.
 type Lease struct {
 	Expires  time.Time
@@ -25,10 +30,18 @@ type Lease struct {
 	Hostname string
 }
 
-// LeaseParser reads dnsmasq leases from a file. The file path is
-// configurable so tests can point at fixtures.
+// LeaseParser reads dnsmasq leases from a file, caching the parsed
+// result until the lease file's mtime changes. GetPodStatus calls
+// this on every kubelet heartbeat, so re-parsing unconditionally
+// would be a hot-path waste.
 type LeaseParser struct {
 	Path string
+
+	mu     sync.Mutex
+	mtime  time.Time
+	size   int64
+	cached []Lease
+	byMAC  map[string]*Lease
 }
 
 // NewLeaseParser returns a parser that reads from path. Empty path
@@ -43,26 +56,59 @@ func NewLeaseParser(path string) *LeaseParser {
 // LookupByMAC returns the first lease whose MAC matches mac
 // (case-insensitive). Returns ErrNoLease when no lease matches.
 func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
-	leases, err := p.parse()
-	if err != nil {
+	if err := p.refresh(); err != nil {
 		return nil, err
 	}
-	mac = strings.ToLower(mac)
-	for i := range leases {
-		if strings.ToLower(leases[i].MAC) == mac {
-			return &leases[i], nil
-		}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if lease, ok := p.byMAC[strings.ToLower(mac)]; ok {
+		return lease, nil
 	}
 	return nil, ErrNoLease
 }
 
 // All returns every lease currently in the file.
 func (p *LeaseParser) All() ([]Lease, error) {
-	return p.parse()
+	if err := p.refresh(); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]Lease, len(p.cached))
+	copy(out, p.cached)
+	return out, nil
 }
 
-// ErrNoLease is returned when no lease matches the lookup.
-var ErrNoLease = errors.New("no dnsmasq lease for the requested MAC")
+// refresh re-reads the lease file when mtime or size has changed.
+// When the file is unchanged the cached slice is reused verbatim.
+func (p *LeaseParser) refresh() error {
+	info, err := os.Stat(p.Path)
+	if err != nil {
+		return fmt.Errorf("stat lease file %s: %w", p.Path, err)
+	}
+	p.mu.Lock()
+	fresh := p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size
+	p.mu.Unlock()
+	if fresh {
+		return nil
+	}
+
+	leases, err := p.parse()
+	if err != nil {
+		return err
+	}
+	byMAC := make(map[string]*Lease, len(leases))
+	for i := range leases {
+		byMAC[strings.ToLower(leases[i].MAC)] = &leases[i]
+	}
+	p.mu.Lock()
+	p.cached = leases
+	p.byMAC = byMAC
+	p.mtime = info.ModTime()
+	p.size = info.Size()
+	p.mu.Unlock()
+	return nil
+}
 
 // parse reads the lease file and returns a slice of Lease records.
 // dnsmasq leases are space-separated:
@@ -101,8 +147,8 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 }
 
 func parseUnixSecond(s string) (time.Time, error) {
-	var sec int64
-	if _, err := fmt.Sscanf(s, "%d", &sec); err != nil {
+	sec, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
 		return time.Time{}, err
 	}
 	return time.Unix(sec, 0), nil
