@@ -19,24 +19,16 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// OrphanPolicy controls what vk-cocoon does when startup reconcile
-// finds a VM with no matching pod.
+// OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
 type OrphanPolicy string
 
 const (
-	// OrphanAlert logs and increments a metric counter but leaves
-	// the VM alone. The default; safest.
-	OrphanAlert OrphanPolicy = "alert"
-	// OrphanDestroy removes the VM. Aggressive; opt-in.
+	OrphanAlert   OrphanPolicy = "alert"
 	OrphanDestroy OrphanPolicy = "destroy"
-	// OrphanKeep is a no-op (no log, no metric).
-	OrphanKeep OrphanPolicy = "keep"
+	OrphanKeep    OrphanPolicy = "keep"
 )
 
-// CocoonProvider is the virtual-kubelet provider that maps
-// Kubernetes pods to cocoon MicroVMs. It owns the in-memory pod
-// table and the dependencies the per-feature files (pods_create,
-// pods_delete, etc.) operate against.
+// CocoonProvider maps Kubernetes pods to cocoon MicroVMs.
 type CocoonProvider struct {
 	NodeName string
 
@@ -59,13 +51,8 @@ type CocoonProvider struct {
 	notifyHook func(*corev1.Pod)
 }
 
-// NewCocoonProvider constructs a CocoonProvider with empty in-memory
-// tables. Callers fill in the dependencies, then call StartupReconcile
-// once to populate the tables from the live cluster + cocoon state.
-// The default Pinger is NopPinger so tests and misconfigured hosts
-// degrade to "an IP was resolved == Ready" instead of crashing the
-// probe loop on a nil deref; production wiring in buildCocoonProvider
-// replaces it with the real ICMPv4 pinger.
+// NewCocoonProvider constructs a CocoonProvider with empty tables.
+// Default Pinger is NopPinger so tests degrade gracefully.
 func NewCocoonProvider() *CocoonProvider {
 	return &CocoonProvider{
 		OrphanPolicy: OrphanAlert,
@@ -76,10 +63,7 @@ func NewCocoonProvider() *CocoonProvider {
 	}
 }
 
-// GetPod returns a deep copy of the pod previously stored for the
-// given key. Callers can freely mutate the returned object without
-// affecting other goroutines or the in-memory table — the map
-// entry itself is written only by trackPod under the write lock.
+// GetPod returns a deep copy of the stored pod.
 func (p *CocoonProvider) GetPod(_ context.Context, namespace, name string) (*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -90,23 +74,21 @@ func (p *CocoonProvider) GetPod(_ context.Context, namespace, name string) (*cor
 	return pod.DeepCopy(), nil
 }
 
-// GetPods returns every pod the provider currently owns.
+// GetPods returns every pod the provider owns.
 func (p *CocoonProvider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return slices.Collect(maps.Values(p.pods)), nil
 }
 
-// NotifyPods stores the callback the kubelet uses to receive pod
-// status updates from the provider.
+// NotifyPods stores the kubelet's pod-status callback.
 func (p *CocoonProvider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.notifyHook = notifier
 }
 
-// notify pushes a pod status update through the kubelet callback,
-// if one is registered.
+// notify pushes a pod status update through the kubelet callback.
 func (p *CocoonProvider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
 	hook := p.notifyHook
@@ -116,8 +98,7 @@ func (p *CocoonProvider) notify(pod *corev1.Pod) {
 	}
 }
 
-// trackPod stores the pod and (optionally) its associated VM in
-// the in-memory tables.
+// trackPod stores the pod and its VM in the in-memory tables.
 func (p *CocoonProvider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -131,8 +112,7 @@ func (p *CocoonProvider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	}
 }
 
-// dropVMLocked removes the VM record for key from the VM-indexed
-// maps. Callers must already hold p.mu for writing.
+// dropVMLocked removes the VM record for key. Caller must hold p.mu for writing.
 func (p *CocoonProvider) dropVMLocked(key string) {
 	v, ok := p.vmsByPod[key]
 	if !ok {
@@ -144,8 +124,7 @@ func (p *CocoonProvider) dropVMLocked(key string) {
 	delete(p.vmsByPod, key)
 }
 
-// forgetPod drops the pod and associated VM from the in-memory
-// tables. Used by DeletePod and the orphan reconcile loop.
+// forgetPod drops the pod and VM from the in-memory tables.
 func (p *CocoonProvider) forgetPod(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -154,21 +133,14 @@ func (p *CocoonProvider) forgetPod(namespace, name string) {
 	delete(p.pods, key)
 }
 
-// vmForPod returns the VM record currently associated with a pod,
-// or nil when none has been recorded.
+// vmForPod returns the VM associated with a pod, or nil.
 func (p *CocoonProvider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
-// setVMIP updates the tracked VM's IP under the write lock. Used by
-// the probe agent when a dnsmasq lease lookup resolves an IP that
-// was unknown at create time, and by GetPodStatus as a defensive
-// fallback for external callers. The update is copy-on-write: a
-// fresh *vm.VM replaces the map entry so concurrent readers that
-// captured the old pointer via vmForPod never observe a field
-// mutation.
+// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
 func (p *CocoonProvider) setVMIP(namespace, name, ip string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -185,17 +157,8 @@ func (p *CocoonProvider) setVMIP(namespace, name, ip string) {
 	}
 }
 
-// resolveVMIP returns the best IP we have for v and, if the record
-// was missing an IP but carries a MAC, looks it up in the dnsmasq
-// lease file and writes the result back into the tracked VM record
-// via setVMIP (copy-on-write, lock-protected). Called from both
-// GetPodStatus and buildProbe — centralizing the logic keeps the
-// two call sites from drifting.
-//
-// The IP is not written back into the pod's runtime annotation
-// because GetPod returns a deep copy (callers never hold the map
-// pointer), and the authoritative IP source is the VM table, not
-// annotations. GetPodStatus builds PodIP from the VM record.
+// resolveVMIP returns the VM's IP, falling back to a dnsmasq lease lookup
+// when the IP is unknown but a MAC is available.
 func (p *CocoonProvider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	ip := v.IP
 	if ip != "" || v.MAC == "" || p.LeaseParser == nil {
@@ -209,17 +172,8 @@ func (p *CocoonProvider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	return lease.IP
 }
 
-// buildProbe returns a probes.Probe closure that the per-pod agent
-// runs on a ticker. Each tick:
-//
-//  1. Reads the tracked VM; if it disappeared the probe reports
-//     "vm gone" so the agent can flip the pod back to unreachable.
-//  2. Resolves the IP via resolveVMIP (dnsmasq lease fallback if
-//     the in-memory record is still empty from create time).
-//  3. Pings the resolved IP. Success == Ready; the ICMP check is
-//     the same check cocoon's Windows autounattend.xml enables, so
-//     one probe works for both Linux and Windows guests without
-//     assuming a particular remote service is exposed.
+// buildProbe returns a probe closure that resolves the VM's IP and pings it.
+// ICMP works for both Linux and Windows guests.
 func (p *CocoonProvider) buildProbe(namespace, name string) probes.Probe {
 	return func(ctx context.Context) (bool, string) {
 		v := p.vmForPod(namespace, name)
@@ -237,13 +191,8 @@ func (p *CocoonProvider) buildProbe(namespace, name string) probes.Probe {
 	}
 }
 
-// buildOnUpdate returns the readiness-transition callback the
-// probe agent invokes whenever a pod flips between Ready and
-// unreachable. Under the async provider contract this is the ONLY
-// way a status change reaches the kubelet — there is no framework
-// poll loop sitting behind GetPodStatus. The probe agent passes
-// its per-pod context so any downstream work we kick off cancels
-// cleanly when the pod is Forget'd.
+// buildOnUpdate returns the callback invoked on readiness transitions.
+// Under the async provider contract this is the only way status changes reach the kubelet.
 func (p *CocoonProvider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 	return func(ctx context.Context) {
 		pod, err := p.GetPod(ctx, namespace, name)

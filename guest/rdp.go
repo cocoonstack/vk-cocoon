@@ -6,13 +6,10 @@ import (
 	"io"
 )
 
-// RDPExecutor is a Windows guest stand-in. Windows VMs do not have
-// a kubectl-style log/exec channel, so this executor returns
-// helpful messages instead of attempting to run anything.
+// RDPExecutor is a Windows guest stand-in that returns "use RDP" help text.
 type RDPExecutor struct{}
 
-// Run on Windows always returns a "use RDP" message; the caller is
-// expected to surface it to the user as the kubectl exec output.
+// Run writes a "use RDP" message to stdout.
 func (RDPExecutor) Run(_ context.Context, host string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
 	if stdout != nil {
 		_, _ = fmt.Fprintf(stdout,

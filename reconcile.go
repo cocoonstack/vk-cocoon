@@ -16,31 +16,16 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// StartupReconcile rebuilds the in-memory pod / VM tables from the
-// live cluster state and the cocoon runtime so vk-cocoon can be
-// stopped and restarted without leaking VMs or losing pod
-// associations. K8s API is the source of truth; cocoon vm list is
-// the cross-check.
-//
-// Algorithm:
-//
-//  1. List every pod scheduled to NodeName via fieldSelector.
-//  2. Ask the Runtime for every VM currently running on the host.
-//  3. For each pod with a VMID annotation, look up the VM by ID
-//     and adopt it into the in-memory tables.
-//  4. Any pod missing a VMID annotation is left alone — the
-//     CreatePod path will pick it up.
-//  5. Any VM not matched to a pod is an orphan; apply OrphanPolicy.
+// StartupReconcile rebuilds the in-memory tables from K8s pods and
+// cocoon VMs so restarts don't leak VMs or lose pod associations.
+// Unmatched VMs are handled per OrphanPolicy.
 func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 	logger := log.WithFunc("CocoonProvider.StartupReconcile")
 	if p.Clientset == nil {
 		return errors.New("clientset is required for startup reconcile")
 	}
 
-	// Fetch the pod set and the cocoon VM set concurrently: the two
-	// lists are independent and hit completely different backends
-	// (kube-apiserver vs the local cocoon CLI), so serializing them
-	// needlessly doubles startup latency on large clusters.
+	// Fetch pods and VMs concurrently (independent backends).
 	var (
 		pods *corev1.PodList
 		vms  []vm.VM
@@ -91,11 +76,6 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 			p.trackPod(pod, &v)
 			matched[v.ID] = true
 			if p.Probes != nil {
-				// Start a real probe loop for every adopted pod
-				// rather than trusting VMID-matched as a synonym
-				// for reachable. A VM the runtime reports as
-				// running might still be mid-reboot, mid-hibernate,
-				// or networking-flapping; let the probe decide.
 				p.Probes.Start(
 					meta.PodKey(pod.Namespace, pod.Name),
 					p.buildProbe(pod.Namespace, pod.Name),
@@ -117,8 +97,7 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 	return nil
 }
 
-// handleOrphan applies the configured OrphanPolicy to a VM that
-// startup reconcile could not match to any pod.
+// handleOrphan applies OrphanPolicy to an unmatched VM.
 func (p *CocoonProvider) handleOrphan(ctx context.Context, v *vm.VM) {
 	logger := log.WithFunc("CocoonProvider.handleOrphan")
 	switch p.OrphanPolicy {

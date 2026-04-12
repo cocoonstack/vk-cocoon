@@ -10,19 +10,13 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Puller streams a snapshot or cloud image from epoch into the
-// local cocoon runtime. It uses epoch/snapshot.Stream and
-// epoch/cloudimg.Stream so vk-cocoon never needs to speak OCI
-// distribution directly.
+// Puller streams a snapshot or cloud image from epoch into the local cocoon runtime.
 type Puller struct {
 	Registry RegistryClient
 	Runtime  vm.Runtime
 }
 
-// PullSnapshot fetches the manifest at (name, tag) and pipes the
-// reassembled cocoon-import tar straight into the local
-// `cocoon snapshot import --name <localName>` subprocess. localName
-// defaults to name when empty.
+// PullSnapshot fetches and imports a snapshot from epoch. localName defaults to name.
 func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) error {
 	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
 	if err != nil {
@@ -55,16 +49,13 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 	return nil
 }
 
-// PullCloudImage fetches the manifest at (name, tag) and writes the
-// concatenated raw disk bytes to the supplied io.Writer.
+// PullCloudImage fetches a cloud image manifest and writes raw disk bytes to w.
 func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writer) error {
 	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
 	if err != nil {
 		return fmt.Errorf("get cloudimg manifest %s:%s: %w", name, tag, err)
 	}
-	// Verify it really is a cloud-image manifest before streaming;
-	// snapshots and container images would corrupt the destination
-	// if treated as raw disk bytes.
+	// Verify it is actually a cloud-image manifest.
 	kind, err := manifest.Classify(raw)
 	if err != nil {
 		return fmt.Errorf("classify manifest: %w", err)

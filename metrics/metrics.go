@@ -1,8 +1,4 @@
-// Package metrics defines the prometheus collectors vk-cocoon
-// publishes alongside its kubelet endpoint. Counters track pod
-// lifecycle outcomes by phase, gauges track in-memory VM table
-// sizes, and the Register helper installs everything against the
-// supplied registry.
+// Package metrics defines the prometheus collectors for vk-cocoon.
 package metrics
 
 import (
@@ -14,12 +10,6 @@ const (
 )
 
 var (
-	// PodLifecycleTotal counts CreatePod / DeletePod / UpdatePod
-	// outcomes by (op, result). The op label is one of "create",
-	// "delete", "update". The result label is one of:
-	// "ok", "failed", "missing_vmname", "adopted", "no_vm",
-	// "hibernated", "hibernate_failed", "woken", "wake_failed",
-	// "noop".
 	PodLifecycleTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -29,7 +19,6 @@ var (
 		[]string{"op", "result"},
 	)
 
-	// SnapshotPullTotal counts snapshot pulls from epoch by result.
 	SnapshotPullTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -39,7 +28,6 @@ var (
 		[]string{"result"},
 	)
 
-	// SnapshotPushTotal counts snapshot pushes to epoch by result.
 	SnapshotPushTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -49,7 +37,6 @@ var (
 		[]string{"result"},
 	)
 
-	// VMTableSize is a gauge of the current in-memory VM table size.
 	VMTableSize = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: metricNamespace,
@@ -58,8 +45,6 @@ var (
 		},
 	)
 
-	// OrphanVMTotal counts orphan VMs detected at startup
-	// reconcile time.
 	OrphanVMTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -69,7 +54,7 @@ var (
 	)
 )
 
-// Register installs every collector against the supplied registry.
+// Register installs all collectors.
 func Register(reg prometheus.Registerer) {
 	reg.MustRegister(
 		PodLifecycleTotal,

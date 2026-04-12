@@ -11,18 +11,14 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
-// DeletePod is the virtual-kubelet entry point for pod removal. It
-// optionally snapshots the VM into epoch (driven by the
-// SnapshotPolicy annotation), tells the cocoon runtime to destroy
-// the VM, and forgets the pod from the in-memory tables.
+// DeletePod removes a pod, optionally snapshotting the VM first.
 func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("CocoonProvider.DeletePod")
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	if v == nil {
-		// Forget the pod and return success so the controller stops
-		// retrying — there is no VM to tear down.
+		// No VM to tear down; forget and succeed.
 		p.forgetPod(pod.Namespace, pod.Name)
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "no_vm").Inc()
 		return nil

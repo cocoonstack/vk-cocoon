@@ -9,9 +9,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// GetPodStatus returns the latest status for a pod tracked by the
-// provider. The status is derived from the in-memory VM record plus
-// the probe manager's most recent reading.
+// GetPodStatus derives status from the VM record and latest probe result.
 func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
 	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {
@@ -19,8 +17,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 	}
 	v := p.vmForPod(namespace, name)
 	if v == nil {
-		// VM gone (hibernated, or startup-reconcile orphan removed
-		// it). Surface a Pending status with the original IP cleared.
+		// VM gone (hibernated or removed).
 		return &corev1.PodStatus{
 			Phase:     corev1.PodPending,
 			StartTime: pod.Status.StartTime,

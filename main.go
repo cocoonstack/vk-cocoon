@@ -1,15 +1,4 @@
-// vk-cocoon is the cocoonstack virtual-kubelet provider that maps
-// Kubernetes pods to cocoon MicroVMs. It runs as a host-level
-// systemd service alongside the cocoon CLI and a single
-// cloud-hypervisor instance per VM.
-//
-// This file is the binary entry point. The provider lives in
-// provider.go and the per-feature files alongside it (pods_create,
-// pods_delete, pods_update, pods_status, access, reconcile);
-// the supporting subpackages (vm, snapshots, network, guest,
-// probes, metrics) carry the cocoon CLI wrapper, the epoch SDK
-// adapter, the dnsmasq lease parser, the SSH/RDP exec layer, the
-// probe loop, and the prometheus collectors respectively.
+// vk-cocoon is the virtual-kubelet provider that maps Kubernetes pods to cocoon MicroVMs.
 package main
 
 import (
@@ -86,7 +75,6 @@ func main() {
 	certPath := commonk8s.EnvOrDefault("VK_TLS_CERT", defaultTLSCert)
 	keyPath := commonk8s.EnvOrDefault("VK_TLS_KEY", defaultTLSKey)
 
-	// Build the K8s clientset.
 	cfg, err := commonk8s.LoadConfig()
 	if err != nil {
 		logger.Fatalf(ctx, err, "load kubeconfig: %v", err)
@@ -101,25 +89,18 @@ func main() {
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Load (or self-sign) the TLS material the kubelet API needs.
 	tlsCert, tlsSource, err := commonk8s.LoadOrGenerateCert(certPath, keyPath, nodeName, nodeIP)
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "tls setup: %v", err)
 	}
 	logger.Infof(signalCtx, "kubelet TLS from %s", tlsSource)
 
-	// Resolve advertised node capacity up-front so a malformed
-	// VK_NODE_* override fails loudly at startup rather than via
-	// a MustParse panic deep inside the node-controller factory.
+	// Fail early on malformed overrides.
 	nodeCapacity, err := NodeCapacity()
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "node capacity: %v", err)
 	}
 
-	// Share a single CocoonProvider between the nodeutil factory
-	// and the startup reconcile path. We hand-wire it once so
-	// StartupReconcile runs against the real tables before the
-	// v-k node controller spins up.
 	provider := buildCocoonProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
@@ -132,19 +113,9 @@ func main() {
 	})
 
 	if reconcileErr := provider.StartupReconcile(signalCtx); reconcileErr != nil {
-		// Refusing to register the v-k node is the safe default:
-		// continuing with empty pod / VM tables would make every
-		// live cocoon VM look like an orphan on the next reconcile
-		// and would 404 every pod the scheduler already placed.
-		// systemd restarts the binary so transient API-server
-		// hiccups still recover.
 		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node: %v", reconcileErr)
 	}
 
-	// Wire the virtual-kubelet node controller. The newProvider
-	// factory is called once inside nodeutil.NewNode with the
-	// *corev1.Node the controller hands out; we stamp capacity +
-	// addresses + daemon endpoints on that object before returning.
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
 			if cfg.Node.Labels == nil {
@@ -193,7 +164,6 @@ func main() {
 		logger.Fatalf(signalCtx, err, "create virtual-kubelet node: %v", err)
 	}
 
-	// Plain-HTTP metrics listener (kubelet TLS lives on :10250).
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
 	metricsServer := &http.Server{
@@ -215,32 +185,20 @@ func main() {
 		}
 	}()
 
-	// NaiveNodeProvider does not propagate DaemonEndpoints on its
-	// own, so wait briefly for the node object to land in the API
-	// server and then patch the kubelet port directly. Retry a few
-	// times to ride out cache warm-up races.
+	// NaiveNodeProvider doesn't propagate DaemonEndpoints; patch directly.
 	go patchKubeletEndpoint(signalCtx, clientset, nodeName)
 
 	<-signalCtx.Done()
 
-	// Shutdown must outlive signalCtx (which is already canceled),
-	// but a fresh Background() with no deadline could wedge the
-	// process if Shutdown waits for in-flight handlers. Bound it.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
 	}
-	// Cancel every per-pod probe goroutine; they own nothing we
-	// need to drain (no outbound RPCs, just ICMP replies), so a
-	// single cancel is sufficient cleanup.
 	provider.Probes.Close()
 	logger.Info(shutdownCtx, "vk-cocoon exiting")
 }
 
-// buildOpts is the bag of env-sourced values buildCocoonProvider
-// needs to wire a full CocoonProvider. Keeping them in a struct
-// stops main from growing a hand-rolled 10-parameter call.
 type buildOpts struct {
 	nodeName     string
 	epochURL     string
@@ -252,11 +210,6 @@ type buildOpts struct {
 	clientset    kubernetes.Interface
 }
 
-// buildCocoonProvider constructs a fully-wired CocoonProvider from
-// the supplied options. All side-effect construction (epoch
-// registry, cocoon CLI runtime, SSH executor, lease parser, probe
-// manager) happens here so main stays a thin shell around
-// nodeutil.NewNode.
 func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
 	logger := log.WithFunc("buildCocoonProvider")
 	registry := snapshots.New(opts.epochURL, opts.epochToken)
@@ -269,13 +222,7 @@ func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
 	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime}
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
-	// Capability-check the raw ICMPv4 socket the probe loop uses to
-	// verify a guest is reachable. This needs CAP_NET_RAW (granted
-	// via the systemd unit in packaging/vk-cocoon.service). If the
-	// open fails — typically because the binary was run outside the
-	// unit or in a container without the capability — fall back to
-	// NopPinger so readiness degrades to "an IP was resolved"
-	// rather than crashing the provider at startup.
+	// NopPinger fallback when CAP_NET_RAW is unavailable.
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {
 		logger.Warnf(ctx, "icmp pinger disabled (%v); readiness will fall back to ip-resolved heuristic", err)
 		p.Pinger = network.NopPinger{}
@@ -289,11 +236,6 @@ func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
 	return p
 }
 
-// withHandler is the nodeutil.NodeOpt that attaches our HTTP mux
-// to the kubelet API server nodeutil.NewNode brings up. The
-// provider routes (exec, logs, attach, port-forward) are installed
-// via nodeutil.AttachProviderRoutes; this opt just ensures the
-// handler chain includes them.
 func withHandler(h http.Handler) nodeutil.NodeOpt {
 	return func(cfg *nodeutil.NodeConfig) error {
 		cfg.Handler = h
@@ -301,14 +243,11 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 	}
 }
 
-// patchKubeletEndpoint writes the kubelet API port into the node
-// object's status.daemonEndpoints. v-k's NaiveNodeProvider does not
-// propagate this field, so we patch it directly with a short retry
-// loop to ride out the window between node creation and when the
-// cache is warm.
+// patchKubeletEndpoint writes daemonEndpoints into the node status
+// with retries to ride out the window between node creation and cache warm-up.
 func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName string) {
 	logger := log.WithFunc("patchKubeletEndpoint")
-	// Give v-k a head-start to create the node object.
+	// Give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}

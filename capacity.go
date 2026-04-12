@@ -9,14 +9,8 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
-// NodeCapacity returns the advertised capacity of the virtual
-// cocoon node. The numbers are intentionally generous — the cocoon
-// runtime caps each VM at its own limits, so this acts as a ceiling
-// that keeps the K8s scheduler from refusing to place pods on the
-// virtual node. Overlays can override VK_NODE_CPU / VK_NODE_MEM /
-// VK_NODE_PODS to match the actual host budget. Malformed overrides
-// surface as an error rather than a panic from MustParse so the
-// caller can log context and exit cleanly.
+// NodeCapacity returns the advertised capacity of the virtual node.
+// Values are generous defaults; override via VK_NODE_CPU / VK_NODE_MEM / VK_NODE_PODS.
 func NodeCapacity() (corev1.ResourceList, error) {
 	cpu, err := parseQuantityEnv("VK_NODE_CPU", "128")
 	if err != nil {

@@ -9,18 +9,13 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Pusher streams a snapshot from the local cocoon runtime up into
-// epoch via epoch/snapshot.Pusher. The vm.Runtime adapter satisfies
-// epoch's CocoonRunner interface.
+// Pusher streams a local snapshot up into epoch.
 type Pusher struct {
 	Registry RegistryClient
 	Runtime  vm.Runtime
 }
 
-// PushSnapshot snapshots the named VM and uploads it to the
-// supplied epoch repo at the given tag. baseImage is optional and
-// gets stamped into the manifest annotations for downstream
-// fork tracking.
+// PushSnapshot uploads a snapshot to epoch at the given repo/tag.
 func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) (*snapshot.PushResult, error) {
 	if repo == "" {
 		repo = vmName

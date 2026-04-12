@@ -12,30 +12,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const (
-	// defaultCocoonBinary is the path used when COCOON_BIN is unset.
-	defaultCocoonBinary = "/usr/local/bin/cocoon"
-)
+const defaultCocoonBinary = "/usr/local/bin/cocoon"
 
-// Compile-time guarantee that CocoonCLI satisfies the Runtime
-// interface vk-cocoon consumes.
 var _ Runtime = (*CocoonCLI)(nil)
 
-// CocoonCLI is the production Runtime that shells out to the local
-// `cocoon` binary. The binary path is resolved once in
-// NewCocoonCLI; tests use a fake.
+// CocoonCLI is the production Runtime that shells out to `cocoon`.
 type CocoonCLI struct {
-	// binary is the resolved path to the cocoon executable.
 	binary string
-	// sudo runs the command via sudo when true. Required on most
-	// production hosts because cocoon needs root.
-	sudo bool
+	sudo   bool
 }
 
-// NewCocoonCLI returns a CocoonCLI that runs the cocoon binary at
-// the supplied path; an empty path resolves to defaultCocoonBinary.
-// The binary path is captured here so the hot path does not pay a
-// branch on every Clone / Run / Inspect call.
+// NewCocoonCLI returns a CocoonCLI; empty binary resolves to defaultCocoonBinary.
 func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
 	if binary == "" {
 		binary = defaultCocoonBinary
@@ -43,8 +30,7 @@ func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
 	return &CocoonCLI{binary: binary, sudo: sudo}
 }
 
-// command builds an *exec.Cmd that invokes cocoon with the supplied
-// args, optionally wrapped in sudo.
+// command builds an exec.Cmd, optionally wrapped in sudo.
 func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	if c.sudo {
 		full := append([]string{c.binary}, args...)
@@ -53,7 +39,7 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
 }
 
-// Clone runs `cocoon vm clone --name <To> <From>`.
+// Clone runs `cocoon vm clone`.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	args := []string{"vm", "clone"}
 	if opts.To != "" {
@@ -67,7 +53,7 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.Inspect(ctx, opts.To)
 }
 
-// Run runs `cocoon vm run <image>`.
+// Run runs `cocoon vm run`.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	if err := c.EnsureImage(ctx, opts.Image); err != nil {
 		return nil, fmt.Errorf("ensure image %s: %w", opts.Image, err)
@@ -88,9 +74,7 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	return c.Inspect(ctx, opts.Name)
 }
 
-// EnsureImage makes sure the cocoon image store can resolve image before vm
-// run. Local image names succeed via `cocoon image inspect`; remote OCI refs
-// and cloud-image URLs fall back to `cocoon image pull`.
+// EnsureImage ensures image is available locally, pulling if needed.
 func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
 	if image == "" {
 		return nil
@@ -105,7 +89,7 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
 	return nil
 }
 
-// Inspect runs `cocoon vm inspect <ref>`.
+// Inspect runs `cocoon vm inspect`.
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
 	if err != nil {
@@ -114,7 +98,7 @@ func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	return parseInspectJSON(out)
 }
 
-// List runs `cocoon vm list -o json` and returns every known VM.
+// List runs `cocoon vm list`.
 func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 	out, err := c.runJSON(ctx, "vm", "list", "-o", "json")
 	if err != nil {
@@ -123,7 +107,7 @@ func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 	return parseVMListJSON(out)
 }
 
-// Remove runs `cocoon vm rm --force <id>`.
+// Remove runs `cocoon vm rm --force`.
 func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	cmd := c.command(ctx, "vm", "rm", "--force", vmID)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -132,30 +116,10 @@ func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// SnapshotSave runs `cocoon snapshot save --name <vmName> <vmID>`,
-// transparently handling the "snapshot already exists" failure mode
-// that prevents callers from being idempotent.
-//
-// The cocoon CLI's `snapshot save` rejects a name that is already
-// present on disk with `Error: snapshot name "X" already exists` and
-// exit 1. The hibernate path on top of this method is invoked from
-// vk-cocoon's UpdatePod, which the virtual-kubelet workqueue retries
-// rapidly when UpdatePod returns an error. The first crashed
-// hibernate (push failure, removed VM mid-flow, etc.) leaves a stale
-// snapshot on disk, and every retry then dead-loops on "already
-// exists" — a fork-bomb of cocoon CLI invocations against a snapshot
-// directory that is never going to clear itself. We see this in the
-// wild when an early hibernate succeeds the Save step but bounces on
-// Push or Remove and the workqueue requeues.
-//
-// Treat the existing-snapshot path as recoverable: drop the stale
-// row via `cocoon snapshot rm <name>` and re-issue Save. If the rm
-// itself fails, surface that error rather than the original — the rm
-// failure is the actionable one (snapshot dir corrupt, file locked).
-// If Save still fails after a successful rm we propagate that error
-// untouched on the assumption that the second failure is whatever
-// the first one would have been if the stale snapshot had not been
-// in the way.
+// SnapshotSave runs `cocoon snapshot save`, handling "already exists" idempotently.
+// The v-k workqueue retries UpdatePod rapidly, and a crashed hibernate can leave
+// a stale snapshot that blocks every retry. When "already exists" is detected,
+// we rm the stale snapshot and re-issue save.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
 	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err == nil {
@@ -175,7 +139,7 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	return nil
 }
 
-// Snapshot runs `cocoon snapshot inspect <name>`.
+// Snapshot runs `cocoon snapshot inspect`.
 func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error) {
 	out, err := c.runJSON(ctx, "snapshot", "inspect", name)
 	if err != nil {
@@ -184,20 +148,9 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 	return parseSnapshotJSON(out)
 }
 
-// SnapshotImport spawns `cocoon snapshot import --name <name>` and
-// returns its stdin pipe so callers can stream tar bytes in. The
-// returned wait function blocks until the subprocess exits.
-//
-// A stale snapshot row at the same name is removed up-front rather
-// than allowed to fail the import — same reasoning as SnapshotSave:
-// vk-cocoon's wake path is invoked from UpdatePod, the v-k workqueue
-// requeues UpdatePod aggressively on error, and a name collision
-// from a prior aborted wake (or a left-over hibernate-import row
-// from an earlier session) would otherwise dead-loop the wake
-// against a snapshot directory that nothing on the system is going
-// to clear. The pre-clear is destructive but the only callers
-// (Puller.PullSnapshot for hibernate-import staging and fresh
-// registry fetches) always want overwrite semantics anyway.
+// SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe.
+// Stale snapshots at the same name are removed up-front for idempotency
+// (same retry-loop reasoning as SnapshotSave).
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error) {
 	if err := c.snapshotRemoveIfExists(ctx, opts.Name); err != nil {
 		return nil, nil, err
@@ -224,14 +177,7 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 	return stdin, wait, nil
 }
 
-// snapshotRemoveIfExists drops a snapshot row by name and treats
-// "snapshot not found" as success. Used by SnapshotImport (and
-// indirectly SnapshotSave's recovery path) to make the runtime
-// idempotent against name collisions left behind by an earlier
-// aborted hibernate / wake attempt. Any non-"not found" rm error
-// is surfaced verbatim because it indicates an actionable failure
-// (corrupt directory, file locked, permission denied) the caller
-// should not silently swallow.
+// snapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.
 func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) error {
 	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
 	if err == nil {
@@ -243,8 +189,7 @@ func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) err
 	return cocoonCmdError("snapshot rm", name, err, out)
 }
 
-// SnapshotExport spawns `cocoon snapshot export <name> -o -` and
-// returns its stdout pipe.
+// SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
 	stdout, err := cmd.StdoutPipe()
@@ -264,7 +209,7 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 	return stdout, wait, nil
 }
 
-// runJSON runs cocoon and returns its stdout as raw JSON bytes.
+// runJSON runs cocoon and returns stdout as raw JSON.
 func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := c.command(ctx, args...)
 	var stdout, stderr bytes.Buffer
@@ -276,16 +221,12 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// cocoonCmdError formats the canonical "cocoon <op> <ref>: <err> (output: ...)"
-// message used by every CombinedOutput-based runner in this file. Centralizing
-// it keeps the wording consistent and makes future redaction / truncation of
-// the subprocess output a one-place change.
+// cocoonCmdError formats a consistent error message for cocoon subprocess failures.
 func cocoonCmdError(op, ref string, err error, output []byte) error {
 	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
 }
 
-// appendCreateArgs adds the resource / network / nics / dns flags
-// shared by cocoon vm run and cocoon vm clone.
+// appendCreateArgs adds resource/network flags shared by clone and run.
 func appendCreateArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
 	if cpu > 0 {
 		args = append(args, "--cpu", strconv.Itoa(cpu))
@@ -308,8 +249,7 @@ func appendCreateArgs(args []string, cpu int, memory, network, storage string, n
 	return args
 }
 
-// normalizeSizeArg converts Kubernetes-style quantities (for example "20Gi")
-// into plain byte counts, which cocoon's CLI parser accepts reliably.
+// normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.
 func normalizeSizeArg(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

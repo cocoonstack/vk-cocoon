@@ -1,5 +1,4 @@
-// Package network resolves IP addresses for cocoon VMs by parsing
-// the dnsmasq lease file the host runs alongside the cocoon bridge.
+// Package network resolves VM IPs from the host's dnsmasq lease file.
 package network
 
 import (
@@ -14,16 +13,12 @@ import (
 	"time"
 )
 
-const (
-	// defaultLeasesPath is the standard dnsmasq lease file path on
-	// the cocoon hosts that cocoon-net provisions.
-	defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
-)
+const defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
 
-// ErrNoLease is returned when no lease matches the lookup.
+// ErrNoLease means no lease matches the lookup.
 var ErrNoLease = errors.New("no dnsmasq lease for the requested MAC")
 
-// Lease describes one DHCP entry the parser found.
+// Lease is one dnsmasq DHCP entry.
 type Lease struct {
 	Expires  time.Time
 	MAC      string
@@ -31,10 +26,7 @@ type Lease struct {
 	Hostname string
 }
 
-// LeaseParser reads dnsmasq leases from a file, caching the parsed
-// result until the lease file's mtime changes. GetPodStatus calls
-// this on every kubelet heartbeat, so re-parsing unconditionally
-// would be a hot-path waste.
+// LeaseParser reads dnsmasq leases, caching until mtime changes.
 type LeaseParser struct {
 	Path string
 
@@ -45,8 +37,7 @@ type LeaseParser struct {
 	byMAC  map[string]*Lease
 }
 
-// NewLeaseParser returns a parser that reads from path. Empty path
-// resolves to the standard /var/lib/dnsmasq/dnsmasq.leases.
+// NewLeaseParser returns a parser; empty path uses the default.
 func NewLeaseParser(path string) *LeaseParser {
 	if path == "" {
 		path = defaultLeasesPath
@@ -54,8 +45,7 @@ func NewLeaseParser(path string) *LeaseParser {
 	return &LeaseParser{Path: path}
 }
 
-// LookupByMAC returns the first lease whose MAC matches mac
-// (case-insensitive). Returns ErrNoLease when no lease matches.
+// LookupByMAC returns the lease matching mac (case-insensitive).
 func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	if err := p.refresh(); err != nil {
 		return nil, err
@@ -68,7 +58,7 @@ func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	return nil, ErrNoLease
 }
 
-// All returns every lease currently in the file.
+// All returns every lease in the file.
 func (p *LeaseParser) All() ([]Lease, error) {
 	if err := p.refresh(); err != nil {
 		return nil, err
@@ -78,10 +68,7 @@ func (p *LeaseParser) All() ([]Lease, error) {
 	return slices.Clone(p.cached), nil
 }
 
-// refresh re-reads the lease file when mtime or size has changed.
-// The entire cache-check / parse / publish path runs under the
-// mutex so two concurrent callers that both miss the cache do not
-// reparse the file twice.
+// refresh re-reads the lease file when mtime or size changed.
 func (p *LeaseParser) refresh() error {
 	info, err := os.Stat(p.Path)
 	if err != nil {
@@ -107,10 +94,7 @@ func (p *LeaseParser) refresh() error {
 	return nil
 }
 
-// parse reads the lease file and returns a slice of Lease records.
-// dnsmasq leases are space-separated:
-//
-//	<expiry> <mac> <ip> <hostname> <client-id>
+// parse reads the lease file. Format: <expiry> <mac> <ip> <hostname> <client-id>
 func (p *LeaseParser) parse() ([]Lease, error) {
 	f, err := os.Open(p.Path)
 	if err != nil {
@@ -131,9 +115,7 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 		}
 		expiry, err := parseUnixSecond(fields[0])
 		if err != nil {
-			// Skip lines with a malformed timestamp rather than
-			// inserting a zero-time entry that would look
-			// permanently expired to callers.
+			// Skip lines with malformed timestamps.
 			continue
 		}
 		out = append(out, Lease{

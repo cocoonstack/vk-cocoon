@@ -12,25 +12,15 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// hibernateImportSuffix is appended to the VM name when wake-time
-// PullSnapshot imports the hibernation tar back from epoch. The
-// import target needs a different name from the live VM that the
-// subsequent Clone produces, otherwise cocoon snapshot import and
-// cocoon vm clone collide on the same name.
+// hibernateImportSuffix avoids name collision between the import target
+// and the live VM that the subsequent Clone produces.
 const hibernateImportSuffix = "-hibernate-import"
 
-// UpdatePod is the virtual-kubelet entry point for in-place pod
-// updates. The only update vk-cocoon honors is a HibernateState
-// transition: when the operator (via CocoonHibernation) flips the
-// hibernate annotation we either snapshot + tear down (true) or
-// restore (false). Other spec changes are ignored — the operator is
-// expected to delete and recreate the pod for anything else.
+// UpdatePod handles hibernate/wake transitions. Other spec changes are ignored.
 func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("CocoonProvider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
-	// Refresh the in-memory copy so subsequent GetPod returns the
-	// latest spec / annotations.
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	p.trackPod(pod, v)
 
@@ -44,8 +34,7 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "hibernated").Inc()
 	case !desire && v == nil:
-		// Wake path: hibernate annotation cleared but the VM is gone.
-		// Recreate it from the snapshot tag epoch knows about.
+		// Wake: recreate from the hibernation snapshot.
 		if err := p.wake(ctx, pod); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("update", "wake_failed").Inc()
 			return err
@@ -59,22 +48,9 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// hibernate snapshots the VM into epoch under the well-known
-// hibernate tag, then tears it down. The pod stays alive (vk-cocoon
-// keeps the container in PodRunning) so K8s controllers do not
-// recreate it; the operator detects the snapshot via
-// epoch.GetManifest and marks the CocoonHibernation as Hibernated.
-//
-// Ordering is Save → Push → Remove with a compensating rollback on
-// Remove failure. The naive order (Save → Push → Remove without
-// rollback) is wrong: the operator's HasManifest probe fires the
-// moment Push succeeds, so a failed Remove would let the operator
-// observe Hibernated while the local VM is still running. If Remove
-// fails we best-effort DeleteManifest the tag we just published so
-// the next operator probe sees it absent and the
-// CocoonHibernation stays at Hibernating until a retry completes.
-// Push and Save are both idempotent — a compensated retry will
-// re-publish the tag and re-attempt Remove cleanly.
+// hibernate snapshots the VM to epoch then tears it down. Order is
+// Save -> Push -> Remove. If Remove fails, the pushed tag is rolled back
+// so the operator does not observe Hibernated while the VM is still running.
 func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("CocoonProvider.hibernate")
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
@@ -87,21 +63,14 @@ func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.V
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {
-			// Compensating transaction: drop the hibernate tag so
-			// the operator does not advance to Hibernated with a
-			// live VM still on the host. A rollback error here
-			// leaves drift, so log at Error so oncall sees it.
+			// Roll back the hibernate tag.
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
-	// Clear the runtime annotations: the VM no longer exists, but
-	// the pod and the VMSpec stay so the wake path knows what to
-	// restore. Use delete so absence-as-default reads cleanly,
-	// rather than writing empty strings that ParseVMRuntime would
-	// dutifully decode as a present-but-empty record.
+	// Clear runtime annotations; the pod stays so wake knows what to restore.
 	if pod.Annotations != nil {
 		delete(pod.Annotations, meta.AnnotationVMID)
 		delete(pod.Annotations, meta.AnnotationIP)
@@ -110,18 +79,14 @@ func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.V
 	return nil
 }
 
-// wake restores the VM from the hibernation snapshot tag and
-// re-tracks it in the in-memory tables.
+// wake restores the VM from the hibernation snapshot.
 func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
 		return nil
 	}
 	if p.Puller == nil {
-		// Without a puller we cannot import the hibernation tar
-		// epoch holds, and the subsequent Clone would fail with a
-		// confusing "snapshot not found". Surface the wiring gap
-		// up-front instead.
+		// Cannot import without a puller.
 		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
 	}
 	cpu, memory := vmResourceOverrides(pod)
@@ -143,17 +108,12 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
 	if p.Registry != nil {
-		// Best-effort: drop the hibernation tag now that we have
-		// successfully restored. The operator's wake reconcile also
-		// tries this so a stale tag is not a hard failure.
 		_ = p.Registry.DeleteManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
 	}
 	return nil
 }
 
-// forgetVMOnly clears the VM record but leaves the pod in the
-// in-memory table; used by hibernate to keep the pod alive while
-// the underlying VM is destroyed.
+// forgetVMOnly clears the VM record but keeps the pod (used by hibernate).
 func (p *CocoonProvider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

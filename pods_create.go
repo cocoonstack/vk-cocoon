@@ -19,12 +19,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// CreatePod is the virtual-kubelet entry point for pod admission.
-// It reads the meta.VMSpec contract written by the operator (or
-// webhook), pulls the snapshot or cloud image from epoch if needed,
-// asks the cocoon runtime to clone or boot the VM, then writes the
-// runtime metadata back into the pod's annotations and stores it
-// in the in-memory table.
+// CreatePod admits a pod by pulling its snapshot/image and creating the VM.
 func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("CocoonProvider.CreatePod")
 	logger.Infof(ctx, "create pod %s/%s", pod.Namespace, pod.Name)
@@ -35,9 +30,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
 
-	// If a VM with that name already exists locally, adopt it
-	// rather than creating a new one. This is the path startup
-	// reconcile takes for pods we already own.
+	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
 		p.applyRuntime(pod, existing)
 		p.trackPod(pod, existing)
@@ -51,9 +44,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 
-	// Resolve the IP from the local dnsmasq lease file before
-	// returning so subsequent GetPodStatus calls have something
-	// real to report.
+	// Resolve IP from dnsmasq lease before returning.
 	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
 		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
 			v.IP = lease.IP
@@ -63,14 +54,8 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
 	if p.Probes != nil {
-		// Kick the per-pod probe loop. Start runs its first probe
-		// synchronously, so the refreshStatus call below already
-		// reflects whatever the initial reachability decision was —
-		// on a Linux clone that usually means "ping ok" → Ready;
-		// on a cold-booting Windows guest it means "waiting for
-		// dhcp lease" → NotReady until the agent loop catches up
-		// a few seconds later and calls onUpdate to push a fresh
-		// status through the v-k notify hook.
+		// Start runs its first probe synchronously so refreshStatus below
+		// already reflects the initial reachability.
 		key := meta.PodKey(pod.Namespace, pod.Name)
 		p.Probes.Start(key, p.buildProbe(pod.Namespace, pod.Name), p.buildOnUpdate(pod.Namespace, pod.Name))
 	}
@@ -84,19 +69,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// bringUpVM does the actual cocoon CLI work for a fresh pod. The
-// strategy is mode-driven, dispatched on the typed enum constants
-// from cocoon-common rather than bare strings:
-//
-//   - Managed=false (static toolboxes only): skip the runtime,
-//     adopt the pre-assigned IP / VMID the operator already wrote
-//     into the VMRuntime annotations on the pod. This is the
-//     canonical gate — spec.Managed is the single source of truth
-//     for "vk-cocoon owns this VM's lifecycle" vs "this VM lives
-//     outside my world".
-//   - clone: pull the snapshot from epoch (if not already local)
-//     and ask cocoon to clone it.
-//   - run:   ask cocoon to boot a fresh VM from the supplied image.
+// bringUpVM dispatches on mode: unmanaged (adopt), clone, run, or fork.
 func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
 	cpu, memory := vmResourceOverrides(pod)
 	mode := strings.ToLower(spec.Mode)
@@ -143,8 +116,6 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 		return v, nil
 
 	default: // clone is the default
-		// Top-level pods clone from the snapshot referenced by Image;
-		// the ForkFrom branch above handles the sub-agent fork path.
 		from := spec.Image
 		cloneFrom, _ := utils.ParseRef(from)
 		snapshot, err := p.ensureSnapshot(ctx, from)
@@ -175,11 +146,8 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 	}
 }
 
-// ensureSnapshot returns the local snapshot metadata, pulling it
-// from epoch when it is not already cached locally. The lookup uses
-// the bare repo name (tag stripped) because cocoon stores imported
-// snapshots under that name — an earlier version passed the full
-// ref including the tag and never matched.
+// ensureSnapshot returns the local snapshot, pulling from epoch if needed.
+// Lookup uses the bare repo name (tag stripped) because cocoon stores imports under that name.
 func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
 	if ref == "" {
 		return nil, nil
@@ -202,9 +170,8 @@ func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Sn
 	return snapshot, nil
 }
 
-// ensureForkSnapshot makes a cloneable local snapshot for sub-agents.
-// cocoon's `vm clone` CLI restores from snapshot refs, not live VM
-// names, so a local fork must materialize a snapshot first.
+// ensureForkSnapshot creates a cloneable local snapshot for sub-agents,
+// since cocoon's clone requires a snapshot ref, not a live VM name.
 func (p *CocoonProvider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
@@ -229,28 +196,20 @@ func forkSnapshotName(sourceVMName string) string {
 	return "fork-" + sourceVMName
 }
 
-// vmByName looks up a VM in the in-memory table by name.
+// vmByName looks up a VM by name.
 func (p *CocoonProvider) vmByName(name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByName[name]
 }
 
-// applyRuntime writes the runtime VMRuntime annotations onto a pod
-// so the operator can observe the VMID/IP vk-cocoon just learned.
-//
-// VNCPort is deliberately left unset: cloud-hypervisor (the backing
-// runtime for every VM vk-cocoon brings up itself) exposes no VNC
-// server, so there is no port to publish. Static toolboxes carry a
-// pre-seeded VNCPort written by cocoon-operator from the CocoonSet
-// spec at pod-build time; see meta.VMRuntime for the contract.
+// applyRuntime writes VMID/IP annotations onto the pod.
 func (p *CocoonProvider) applyRuntime(pod *corev1.Pod, v *vm.VM) {
 	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
 	runtime.Apply(pod)
 }
 
-// vmResourceOverrides translates pod resource requirements into the cocoon CLI
-// resource model. cocoon only accepts whole CPUs, so milliCPU values round up.
+// vmResourceOverrides translates pod resources into cocoon CLI args (milliCPU rounds up).
 func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	if pod == nil || len(pod.Spec.Containers) == 0 {
 		return 0, ""

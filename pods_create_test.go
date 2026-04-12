@@ -19,9 +19,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// fakeRuntime is a vm.Runtime stand-in for the provider tests. Each
-// method records its arguments so the assertion side can verify
-// what the provider asked for.
 type fakeRuntime struct {
 	cloned        *vm.CloneOptions
 	ran           *vm.RunOptions
@@ -121,10 +118,6 @@ func (nopWriteCloser) Close() error                { return nil }
 
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	// Default every test pod to Managed=true because that is what the
-	// operator writes for real clone/run/fork workloads. The
-	// unmanaged-adoption path has its own builder that overrides this
-	// after calling Apply.
 	spec.Managed = true
 	spec.Apply(pod)
 	return pod
@@ -175,7 +168,6 @@ func TestCreatePodCloneMode(t *testing.T) {
 		t.Fatalf("EnsureImage calls = %#v, want [%q]", rt.ensuredImages, rt.snapshots["snapshot-repo"].Image)
 	}
 
-	// VMRuntime should be written back into the pod annotations.
 	runtime := meta.ParseVMRuntime(pod)
 	if runtime.VMID == "" {
 		t.Errorf("VMID annotation was not written back")
@@ -296,7 +288,6 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 	if err := p.CreatePod(t.Context(), pod); err == nil {
 		t.Fatalf("expected clone error to surface, got nil")
 	}
-	// Failed CreatePod must NOT leave a VM in the tracked tables.
 	if got := p.vmByName("vk-ns-demo-0"); got != nil {
 		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
 	}
@@ -354,10 +345,6 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
-	// Managed=false is the canonical gate for "this VM lives outside
-	// vk-cocoon; adopt the pre-assigned runtime hints instead of
-	// calling Clone/Run". Built inline rather than via newPodWithSpec
-	// because the helper force-sets Managed=true for the common path.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.99"}.Apply(pod)
@@ -371,10 +358,6 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 }
 
 func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
-	// Pod is scheduled to our node and carries the VMID annotation
-	// for a VM that the fake cocoon runtime reports as live. Startup
-	// reconcile must adopt it into the in-memory tables without
-	// calling Create.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
 	meta.VMRuntime{VMID: "adopted-vmid", IP: "10.0.0.42"}.Apply(pod)
@@ -439,9 +422,6 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	if status.PodIP != "172.20.0.88" {
 		t.Fatalf("PodIP = %q, want 172.20.0.88", status.PodIP)
 	}
-	// The IP is persisted in the VM record (not in the pod's
-	// annotations, which are no longer mutated in place now that
-	// GetPod returns a deep copy). Verify the VM table.
 	if got := p.vmForPod("ns", "demo-0"); got == nil || got.IP != "172.20.0.88" {
 		t.Fatalf("VM IP = %q, want 172.20.0.88", got.IP)
 	}

@@ -6,9 +6,7 @@ import (
 	"fmt"
 )
 
-// inspectJSON is the on-the-wire shape `cocoon vm inspect --json`
-// (and `vm clone --json` / `run --json`) returns. Only the fields
-// vk-cocoon needs are decoded; the rest are ignored.
+// inspectJSON is the wire format of `cocoon vm inspect --json`.
 type inspectJSON struct {
 	ID     string `json:"id"`
 	State  string `json:"state"`
@@ -25,15 +23,14 @@ type inspectJSON struct {
 	} `json:"network_configs,omitempty"`
 }
 
-// snapshotJSON is the subset of `cocoon snapshot inspect` output
-// vk-cocoon needs to restore a clone on another node.
+// snapshotJSON is the wire format of `cocoon snapshot inspect`.
 type snapshotJSON struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Image string `json:"image"`
 }
 
-// parseInspectJSON unmarshals a single VM record into a *VM.
+// parseInspectJSON unmarshals a VM record.
 func parseInspectJSON(raw []byte) (*VM, error) {
 	var d inspectJSON
 	if err := json.Unmarshal(raw, &d); err != nil {
@@ -42,8 +39,8 @@ func parseInspectJSON(raw []byte) (*VM, error) {
 	return inspectJSONToVM(d), nil
 }
 
-// parseVMListJSON unmarshals the `cocoon vm list -o json` output into VMs.
-// cocoon prints a plain "No VMs found." line instead of JSON for an empty list.
+// parseVMListJSON unmarshals the VM list output.
+// cocoon prints "No VMs found." instead of JSON for an empty list.
 func parseVMListJSON(raw []byte) ([]VM, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("No VMs found.")) {
@@ -65,7 +62,7 @@ func parseVMListJSON(raw []byte) ([]VM, error) {
 	return out, nil
 }
 
-// parseSnapshotJSON unmarshals a single snapshot record into a *Snapshot.
+// parseSnapshotJSON unmarshals a snapshot record.
 func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
 	var d snapshotJSON
 	if err := json.Unmarshal(raw, &d); err != nil {

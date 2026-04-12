@@ -15,21 +15,14 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// Stub errors returned by the not-yet-implemented kubelet surface.
-// virtual-kubelet's handler turns these into 500s; kubectl still
-// gets a readable message.
 var (
 	errAttachNotImplemented      = errors.New("vk-cocoon: AttachToContainer is not implemented")
 	errPortForwardNotImplemented = errors.New("vk-cocoon: PortForward is not implemented")
 	errSSHNotConfigured          = errors.New("vk-cocoon: SSH executor not configured")
 )
 
-// GetContainerLogs returns the most recent log output from a pod's
-// guest VM. For Linux guests this is the systemd journal; for
-// Windows guests it returns a help-text message pointing the user
-// at RDP. The opts struct is currently consulted only for Tail —
-// everything else (Follow, SinceTime, Previous, etc.) is ignored
-// and a fresh snapshot is returned.
+// GetContainerLogs returns the guest's systemd journal (Linux) or a
+// help-text pointing at RDP (Windows). Only opts.Tail is honored.
 func (p *CocoonProvider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	pod, err := p.GetPod(ctx, namespace, podName)
 	if err != nil {
@@ -60,8 +53,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, namespace, podNam
 	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
-// RunInContainer is the kubectl exec entrypoint. The Linux path
-// goes through the SSH executor; Windows returns the help text.
+// RunInContainer is the kubectl exec entrypoint (SSH for Linux, RDP help for Windows).
 func (p *CocoonProvider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
 	v := p.vmForPod(namespace, podName)
 	if v == nil || v.IP == "" {
@@ -80,30 +72,24 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, namespace, podName,
 	return p.GuestSSH.Run(ctx, v.IP, cmd, attach.Stdin(), attach.Stdout(), attach.Stderr())
 }
 
-// AttachToContainer is not yet implemented. virtual-kubelet turns
-// the returned error into a 500 so the kubectl client gets a
-// readable message.
+// AttachToContainer is not implemented.
 func (p *CocoonProvider) AttachToContainer(_ context.Context, _, _, _ string, _ api.AttachIO) error {
 	return errAttachNotImplemented
 }
 
-// PortForward is not yet implemented.
+// PortForward is not implemented.
 func (p *CocoonProvider) PortForward(_ context.Context, _, _ string, _ int32, _ io.ReadWriteCloser) error {
 	return errPortForwardNotImplemented
 }
 
-// GetStatsSummary returns a minimal kubelet stats summary. The
-// cocoon runtime tracks its own hypervisor stats elsewhere; this
-// stub keeps the kubelet /stats/summary endpoint answering.
+// GetStatsSummary returns a minimal kubelet stats summary stub.
 func (p *CocoonProvider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	return &statsv1alpha1.Summary{
 		Node: statsv1alpha1.NodeStats{NodeName: p.NodeName},
 	}, nil
 }
 
-// GetMetricsResource returns an empty Prometheus metric family
-// slice. vk-cocoon's real prometheus collectors live on the
-// separate metrics listener managed in main.go.
+// GetMetricsResource returns nil; real collectors live on the metrics listener.
 func (p *CocoonProvider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	return nil, nil
 }

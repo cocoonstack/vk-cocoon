@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// TestStartInitialProbeRunsSynchronously pins the contract CreatePod
-// relies on: Start must call the Probe once before returning so the
-// subsequent refreshStatus/notify pass already reflects the initial
-// reachability decision.
 func TestStartInitialProbeRunsSynchronously(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
@@ -32,17 +28,11 @@ func TestStartInitialProbeRunsSynchronously(t *testing.T) {
 	}
 }
 
-// TestStartTriggersOnUpdateOnReadinessChange covers the async side:
-// after a not-ready start, once the probe starts returning ready the
-// agent goroutine must fire onUpdate so the provider can push a
-// fresh PodStatus through the v-k notify hook.
 func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
 
-	// Flip the probe from unready to ready on the second call, so
-	// the first (synchronous) probe records NotReady and the first
-	// ticker-driven call records Ready.
+	// Flip from unready to ready on the second call.
 	var calls atomic.Int32
 	probe := func(_ context.Context) (bool, string) {
 		n := calls.Add(1)
@@ -63,16 +53,12 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 
 	m.Start("ns/demo-0", probe, onUpdate)
 
-	// The synchronous probe must have logged NotReady; no onUpdate
-	// yet because there is no transition (starting state is
-	// implicitly "not ready").
+	// First probe should be NotReady; no onUpdate yet (no transition).
 	if m.Get("ns/demo-0").Ready {
 		t.Fatalf("first probe should record NotReady")
 	}
 
-	// Wait for the agent goroutine to run a second probe. The initial
-	// interval is 2s; give it a generous budget so slow CI does not
-	// flake.
+	// Wait for the agent to run a second probe (generous timeout for CI).
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
@@ -87,8 +73,6 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 	}
 }
 
-// TestForgetCancelsAgent proves Forget stops a running agent so
-// DeletePod cannot leak per-pod goroutines.
 func TestForgetCancelsAgent(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
@@ -106,8 +90,7 @@ func TestForgetCancelsAgent(t *testing.T) {
 	m.Start("ns/demo-0", probe, nil)
 	m.Forget("ns/demo-0")
 
-	// After Forget there must be no result for the key (GC'd) and
-	// the agent map entry must be gone.
+	// Result and agent entry should be gone.
 	if r := m.Get("ns/demo-0"); r.Ready || r.Message != "" || !r.LastSeen.IsZero() {
 		t.Fatalf("Forget should drop the result, got %#v", r)
 	}
