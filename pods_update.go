@@ -107,9 +107,7 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
-	if p.Registry != nil {
-		_ = p.Registry.DeleteManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
-	}
+	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil
 }
 
