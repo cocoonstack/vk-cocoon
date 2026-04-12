@@ -59,35 +59,28 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 	}
 	matched := make(map[string]bool, len(vms))
 
-	if pods != nil {
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			runtime := meta.ParseVMRuntime(pod)
-			if runtime.VMID == "" {
-				// Hibernated pods have no VM and no VMID; track them
-				// without a VM so v-k does not re-create via CreatePod.
-				if meta.ReadHibernateState(pod) {
-					p.trackPod(pod, nil)
-					logger.Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
-				}
-				continue
-			}
-			idx, ok := vmByID[runtime.VMID]
-			if !ok {
-				logger.Warnf(ctx, "pod %s/%s annotates VMID %s but no such VM exists locally; CreatePod will recreate",
-					pod.Namespace, pod.Name, runtime.VMID)
-				continue
-			}
-			v := vms[idx]
-			p.trackPod(pod, &v)
-			matched[v.ID] = true
-			if p.Probes != nil {
-				p.Probes.Start(
-					meta.PodKey(pod.Namespace, pod.Name),
-					p.buildProbe(pod.Namespace, pod.Name),
-					p.buildOnUpdate(pod.Namespace, pod.Name),
-				)
-			}
+	for i := range podItems(pods) {
+		pod := &pods.Items[i]
+		runtime := meta.ParseVMRuntime(pod)
+		if runtime.VMID == "" {
+			p.reconcileNoVMID(ctx, pod)
+			continue
+		}
+		idx, ok := vmByID[runtime.VMID]
+		if !ok {
+			logger.Warnf(ctx, "pod %s/%s annotates VMID %s but no such VM exists locally; CreatePod will recreate",
+				pod.Namespace, pod.Name, runtime.VMID)
+			continue
+		}
+		v := vms[idx]
+		p.trackPod(pod, &v)
+		matched[v.ID] = true
+		if p.Probes != nil {
+			p.Probes.Start(
+				meta.PodKey(pod.Namespace, pod.Name),
+				p.buildProbe(pod.Namespace, pod.Name),
+				p.buildOnUpdate(pod.Namespace, pod.Name),
+			)
 		}
 	}
 
@@ -101,6 +94,25 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 	metrics.VMTableSize.Set(float64(len(matched)))
 	logger.Infof(ctx, "startup reconcile: %d pods adopted, %d orphan VMs", len(matched), len(vms)-len(matched))
 	return nil
+}
+
+// podItems returns the Items slice from a PodList, or nil if the list is nil.
+func podItems(list *corev1.PodList) []corev1.Pod {
+	if list == nil {
+		return nil
+	}
+	return list.Items
+}
+
+// reconcileNoVMID handles a pod with no VMID during startup reconcile.
+// Hibernated pods are tracked without a VM; others are skipped.
+func (p *CocoonProvider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
+	if !meta.ReadHibernateState(pod) {
+		return
+	}
+	p.trackPod(pod, nil)
+	log.WithFunc("CocoonProvider.StartupReconcile").
+		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
 
 // handleOrphan applies OrphanPolicy to an unmatched VM.
