@@ -19,6 +19,7 @@ type Pinger interface {
 // NopPinger always succeeds; used when CAP_NET_RAW is unavailable.
 type NopPinger struct{}
 
+// Ping always returns nil; NopPinger is a no-op fallback.
 func (NopPinger) Ping(_ context.Context, _ string) error { return nil }
 
 // ICMPPinger opens a fresh raw ICMPv4 socket per Ping call for concurrency safety.

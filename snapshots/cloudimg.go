@@ -7,6 +7,8 @@ import (
 	"github.com/cocoonstack/epoch/cloudimg"
 )
 
+var _ cloudimg.BlobReader = blobReader{}
+
 // blobReader adapts RegistryClient to cloudimg.BlobReader.
 type blobReader struct {
 	client RegistryClient

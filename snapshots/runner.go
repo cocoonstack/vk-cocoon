@@ -8,12 +8,12 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+var _ snapshot.CocoonRunner = runnerAdapter{}
+
 // runnerAdapter wraps vm.Runtime to satisfy epoch's snapshot.CocoonRunner.
 type runnerAdapter struct {
 	Runtime vm.Runtime
 }
-
-var _ snapshot.CocoonRunner = runnerAdapter{}
 
 // Export forwards to vm.Runtime.SnapshotExport.
 func (a runnerAdapter) Export(ctx context.Context, name string) (io.ReadCloser, func() error, error) {

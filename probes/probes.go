@@ -27,11 +27,6 @@ type Result struct {
 	Message  string
 }
 
-// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
-type agent struct {
-	cancel context.CancelFunc
-}
-
 // Manager tracks probe results per pod and manages per-pod agent goroutines.
 type Manager struct {
 	agentRoot       context.Context
@@ -40,6 +35,11 @@ type Manager struct {
 	mu      sync.RWMutex
 	results map[string]Result
 	agents  map[string]*agent
+}
+
+// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
+type agent struct {
+	cancel context.CancelFunc
 }
 
 // NewManager constructs an empty Manager. Close or canceling ctx tears agents down.

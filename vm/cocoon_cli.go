@@ -30,15 +30,6 @@ func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
 	return &CocoonCLI{binary: binary, sudo: sudo}
 }
 
-// command builds an exec.Cmd, optionally wrapped in sudo.
-func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
-	if c.sudo {
-		full := append([]string{c.binary}, args...)
-		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input
-	}
-	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
-}
-
 // Clone runs `cocoon vm clone`.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	args := []string{"vm", "clone"}
@@ -177,18 +168,6 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 	return stdin, wait, nil
 }
 
-// snapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.
-func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) error {
-	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	if strings.Contains(string(out), "snapshot not found") {
-		return nil
-	}
-	return cocoonCmdError("snapshot rm", name, err, out)
-}
-
 // SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
@@ -207,6 +186,27 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 		return nil
 	}
 	return stdout, wait, nil
+}
+
+// command builds an exec.Cmd, optionally wrapped in sudo.
+func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
+	if c.sudo {
+		full := append([]string{c.binary}, args...)
+		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input
+	}
+	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
+}
+
+// snapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.
+func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) error {
+	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(string(out), "snapshot not found") {
+		return nil
+	}
+	return cocoonCmdError("snapshot rm", name, err, out)
 }
 
 // runJSON runs cocoon and returns stdout as raw JSON.
