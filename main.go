@@ -120,7 +120,7 @@ func main() {
 	// and the startup reconcile path. We hand-wire it once so
 	// StartupReconcile runs against the real tables before the
 	// v-k node controller spins up.
-	provider := buildCocoonProvider(buildOpts{
+	provider := buildCocoonProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
 		epochToken:   epochToken,
@@ -231,6 +231,10 @@ func main() {
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
 	}
+	// Cancel every per-pod probe goroutine; they own nothing we
+	// need to drain (no outbound RPCs, just ICMP replies), so a
+	// single cancel is sufficient cleanup.
+	provider.Probes.Close()
 	logger.Info(shutdownCtx, "vk-cocoon exiting")
 }
 
@@ -253,7 +257,8 @@ type buildOpts struct {
 // registry, cocoon CLI runtime, SSH executor, lease parser, probe
 // manager) happens here so main stays a thin shell around
 // nodeutil.NewNode.
-func buildCocoonProvider(opts buildOpts) *CocoonProvider {
+func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
+	logger := log.WithFunc("buildCocoonProvider")
 	registry := snapshots.New(opts.epochURL, opts.epochToken)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
 	p := NewCocoonProvider()
@@ -264,9 +269,22 @@ func buildCocoonProvider(opts buildOpts) *CocoonProvider {
 	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime}
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
+	// Capability-check the raw ICMPv4 socket the probe loop uses to
+	// verify a guest is reachable. This needs CAP_NET_RAW (granted
+	// via the systemd unit in packaging/vk-cocoon.service). If the
+	// open fails — typically because the binary was run outside the
+	// unit or in a container without the capability — fall back to
+	// NopPinger so readiness degrades to "an IP was resolved"
+	// rather than crashing the provider at startup.
+	if icmpPinger, err := network.NewICMPPinger(); err != nil {
+		logger.Warnf(ctx, "icmp pinger disabled (%v); readiness will fall back to ip-resolved heuristic", err)
+		p.Pinger = network.NopPinger{}
+	} else {
+		p.Pinger = icmpPinger
+	}
 	p.GuestSSH = guest.NewSSHExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
 	p.GuestRDP = guest.RDPExecutor{}
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = OrphanPolicy(strings.ToLower(opts.orphanPolicy))
 	return p
 }

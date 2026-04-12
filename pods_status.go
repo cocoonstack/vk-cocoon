@@ -7,7 +7,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // GetPodStatus returns the latest status for a pod tracked by the
@@ -27,15 +26,7 @@ func (p *CocoonProvider) GetPodStatus(ctx context.Context, namespace, name strin
 			StartTime: pod.Status.StartTime,
 		}, nil
 	}
-	podIP := v.IP
-	mac := v.MAC
-	if podIP == "" && mac != "" && p.LeaseParser != nil {
-		if lease, err := p.LeaseParser.LookupByMAC(mac); err == nil {
-			podIP = lease.IP
-			p.setVMIP(namespace, name, podIP)
-			p.applyRuntime(pod, &vm.VM{ID: v.ID, IP: podIP})
-		}
-	}
+	podIP := p.resolveVMIP(namespace, name, v)
 
 	ready := corev1.ConditionFalse
 	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready {

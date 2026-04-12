@@ -133,7 +133,7 @@ func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 func TestCreatePodMissingVMNameRejected(t *testing.T) {
 	p := NewCocoonProvider()
 	p.Runtime = &fakeRuntime{}
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "ns"}}
 	if err := p.CreatePod(t.Context(), pod); err == nil {
@@ -152,7 +152,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 	}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName: "vk-ns-demo-0",
@@ -186,7 +186,7 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:   "vk-ns-demo-1",
@@ -215,7 +215,7 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:   "vk-ns-demo-2",
@@ -242,7 +242,7 @@ func TestCreatePodRunMode(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName: "vk-ns-toolbox",
@@ -286,7 +286,7 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 	}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName: "vk-ns-demo-0",
@@ -306,7 +306,7 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	rt := &fakeRuntime{runErr: errors.New("cocoon vm run boom")}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName: "vk-ns-run",
@@ -325,14 +325,14 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:         "vk-ns-demo-0",
 		SnapshotPolicy: "never", // skip push path — not under test here
 	})
 	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0"})
-	p.Probes.MarkReady(meta.PodKey("ns", "demo-0"))
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true, Live: true})
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
 		t.Fatalf("DeletePod: %v", err)
@@ -352,7 +352,7 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := NewCocoonProvider()
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 
 	// Managed=false is the canonical gate for "this VM lives outside
 	// vk-cocoon; adopt the pre-assigned runtime hints instead of
@@ -385,7 +385,7 @@ func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	p := NewCocoonProvider()
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset(pod)
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
@@ -406,7 +406,7 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	p := NewCocoonProvider()
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Probes = probes.NewManager()
+	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset() // no pods
 	p.OrphanPolicy = OrphanDestroy
 
@@ -420,8 +420,8 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p := NewCocoonProvider()
-	p.Probes = probes.NewManager()
-	p.Probes.MarkReady("ns/demo-0")
+	p.Probes = probes.NewManager(t.Context())
+	p.Probes.Set("ns/demo-0", probes.Result{Ready: true, Live: true})
 
 	leasePath := filepath.Join(t.TempDir(), "dnsmasq.leases")
 	if err := os.WriteFile(leasePath, []byte("1775888313 aa:bb:cc:dd:ee:ff 172.20.0.88 demo *\n"), 0o644); err != nil {
@@ -439,7 +439,10 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	if status.PodIP != "172.20.0.88" {
 		t.Fatalf("PodIP = %q, want 172.20.0.88", status.PodIP)
 	}
-	if meta.ParseVMRuntime(pod).IP != "172.20.0.88" {
-		t.Fatalf("runtime annotation IP = %q, want 172.20.0.88", meta.ParseVMRuntime(pod).IP)
+	// The IP is persisted in the VM record (not in the pod's
+	// annotations, which are no longer mutated in place now that
+	// GetPod returns a deep copy). Verify the VM table.
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.IP != "172.20.0.88" {
+		t.Fatalf("VM IP = %q, want 172.20.0.88", got.IP)
 	}
 }

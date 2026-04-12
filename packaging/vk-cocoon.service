@@ -19,6 +19,12 @@ KillMode=process
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
+# CAP_NET_RAW lets the probe loop open an ICMPv4 raw socket for
+# its guest-reachability check. Without it the pinger falls back
+# to "an IP was resolved == Ready", which is still correct but
+# weaker than a real end-to-end ping.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target

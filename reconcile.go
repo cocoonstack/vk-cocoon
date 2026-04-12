@@ -91,7 +91,16 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 			p.trackPod(pod, &v)
 			matched[v.ID] = true
 			if p.Probes != nil {
-				p.Probes.MarkReady(meta.PodKey(pod.Namespace, pod.Name))
+				// Start a real probe loop for every adopted pod
+				// rather than trusting VMID-matched as a synonym
+				// for reachable. A VM the runtime reports as
+				// running might still be mid-reboot, mid-hibernate,
+				// or networking-flapping; let the probe decide.
+				p.Probes.Start(
+					meta.PodKey(pod.Namespace, pod.Name),
+					p.buildProbe(pod.Namespace, pod.Name),
+					p.buildOnUpdate(pod.Namespace, pod.Name),
+				)
 			}
 		}
 	}

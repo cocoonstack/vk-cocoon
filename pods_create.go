@@ -63,7 +63,16 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(pod, v)
 	p.trackPod(pod, v)
 	if p.Probes != nil {
-		p.Probes.MarkReady(meta.PodKey(pod.Namespace, pod.Name))
+		// Kick the per-pod probe loop. Start runs its first probe
+		// synchronously, so the refreshStatus call below already
+		// reflects whatever the initial reachability decision was —
+		// on a Linux clone that usually means "ping ok" → Ready;
+		// on a cold-booting Windows guest it means "waiting for
+		// dhcp lease" → NotReady until the agent loop catches up
+		// a few seconds later and calls onUpdate to push a fresh
+		// status through the v-k notify hook.
+		key := meta.PodKey(pod.Namespace, pod.Name)
+		p.Probes.Start(key, p.buildProbe(pod.Namespace, pod.Name), p.buildOnUpdate(pod.Namespace, pod.Name))
 	}
 
 	pod.Status.Phase = corev1.PodRunning
