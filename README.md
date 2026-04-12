@@ -95,6 +95,11 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_SSH_PASSWORD` | unset | SSH password for `kubectl logs / exec` against Linux guests. |
 | `VK_ORPHAN_POLICY` | `alert` | `alert`, `destroy`, or `keep`. |
+| `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
+| `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |
+| `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |
+| `VK_TLS_CERT` | `/etc/cocoon/vk/tls/vk-kubelet.crt` | Path to the kubelet serving TLS certificate. |
+| `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |
 | `VK_METRICS_ADDR` | `:9091` | Plain-HTTP prometheus listener. |
 
 ## Installation
