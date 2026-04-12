@@ -401,6 +401,32 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", Managed: true})
+	pod.Spec.NodeName = "cocoon-pool"
+	// Simulate a hibernated pod: hibernate annotation set, no VMID.
+	meta.HibernateState(true).Apply(pod)
+
+	rt := &fakeRuntime{listVMs: nil}
+	p := NewCocoonProvider()
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset(pod)
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	// Pod must be tracked so v-k does not call CreatePod.
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
+		t.Errorf("hibernated pod should be tracked: %v", err)
+	}
+	// No VM should be associated.
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Errorf("hibernated pod should have no VM, got %+v", got)
+	}
+}
+
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p := NewCocoonProvider()
 	p.Probes = probes.NewManager(t.Context())

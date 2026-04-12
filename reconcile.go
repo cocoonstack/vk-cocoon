@@ -64,6 +64,12 @@ func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
 			pod := &pods.Items[i]
 			runtime := meta.ParseVMRuntime(pod)
 			if runtime.VMID == "" {
+				// Hibernated pods have no VM and no VMID; track them
+				// without a VM so v-k does not re-create via CreatePod.
+				if meta.ReadHibernateState(pod) {
+					p.trackPod(pod, nil)
+					logger.Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
+				}
 				continue
 			}
 			idx, ok := vmByID[runtime.VMID]
