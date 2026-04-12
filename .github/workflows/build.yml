@@ -3,7 +3,6 @@ name: build
 on:
   push:
     branches:
-      - master
       - main
     paths-ignore:
       - 'os-image/**'
