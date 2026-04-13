@@ -76,13 +76,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		v := vms[idx]
 		p.trackPod(pod, &v)
 		matched[v.ID] = true
-		if p.Probes != nil {
-			p.Probes.Start(
-				meta.PodKey(pod.Namespace, pod.Name),
-				p.buildProbe(pod.Namespace, pod.Name),
-				p.buildOnUpdate(pod.Namespace, pod.Name),
-			)
-		}
+		p.startProbeIfEnabled(pod)
 	}
 
 	for i := range vms {

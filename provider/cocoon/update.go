@@ -107,7 +107,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 	}
-	p.applyRuntime(pod, v)
+	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil

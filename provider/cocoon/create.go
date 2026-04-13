@@ -11,8 +11,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/epoch/utils"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -32,8 +34,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
-		p.applyRuntime(pod, existing)
+		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
+		p.startProbeIfEnabled(pod)
+		p.refreshStatus(ctx, pod)
+		p.notify(pod)
 		metrics.PodLifecycleTotal.WithLabelValues("create", "adopted").Inc()
 		return nil
 	}
@@ -51,14 +56,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	p.applyRuntime(pod, v)
+	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
-	if p.Probes != nil {
-		// Start runs its first probe synchronously so refreshStatus below
-		// already reflects the initial reachability.
-		key := meta.PodKey(pod.Namespace, pod.Name)
-		p.Probes.Start(key, p.buildProbe(pod.Namespace, pod.Name), p.buildOnUpdate(pod.Namespace, pod.Name))
-	}
+	// Start runs its first probe synchronously so refreshStatus below
+	// already reflects the initial reachability.
+	p.startProbeIfEnabled(pod)
 
 	pod.Status.Phase = corev1.PodRunning
 	pod.Status.StartTime = nowPtr()
@@ -199,10 +201,41 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-// applyRuntime writes VMID/IP annotations onto the pod.
-func (p *Provider) applyRuntime(pod *corev1.Pod, v *vm.VM) {
+// applyRuntime writes VMID/IP annotations onto the in-memory pod and
+// patches them back to the API server so they survive provider restarts.
+func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
 	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
 	runtime.Apply(pod)
+	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
+}
+
+// patchRuntimeAnnotations patches VMID/IP annotations back to the API server.
+func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
+	if p.Clientset == nil {
+		return
+	}
+	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{
+		meta.AnnotationVMID: v.ID,
+		meta.AnnotationIP:   v.IP,
+	})
+	if err != nil {
+		logger.Warnf(ctx, "marshal annotations %s/%s: %v", namespace, name, err)
+		return
+	}
+	if _, err := p.Clientset.CoreV1().Pods(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		logger.Warnf(ctx, "patch annotations %s/%s: %v", namespace, name, err)
+	}
+}
+
+func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
+	if p.Probes == nil {
+		return
+	}
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.Probes.Start(key, p.buildProbe(pod.Namespace, pod.Name), p.buildOnUpdate(pod.Namespace, pod.Name))
 }
 
 func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
