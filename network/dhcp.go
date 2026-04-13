@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
+	defaultLeasesPath = "/var/lib/misc/dnsmasq.leases"
 )
 
 // ErrNoLease means no lease matches the lookup.
