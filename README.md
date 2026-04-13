@@ -8,8 +8,10 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 
 | Layer | Package | Responsibility |
 |---|---|---|
-| Application | `package main` | `CocoonProvider`, lifecycle methods (CreatePod / DeletePod / UpdatePod / GetPodStatus / GetContainerLogs / RunInContainer), startup reconcile, orphan policy |
-| Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `sudo cocoon …` |
+| Application | `package main` | Entry point, node registration, metrics server, VM event watcher startup |
+| Provider | `provider/cocoon/` | `Provider` struct with lifecycle methods (CreatePod / DeletePod / UpdatePod / GetPodStatus), startup reconcile, orphan policy, VM event watcher, pod eviction |
+| Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
+| Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `sudo cocoon …` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | Wraps the [epoch](https://github.com/cocoonstack/epoch) SDK as a `RegistryClient` interface, plus `Puller` and `Pusher` that stream snapshots and cloud images via `epoch/snapshot` and `epoch/cloudimg` |
 | Network | `network/` | dnsmasq lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
 | Guest exec | `guest/` | SSH executor (Linux) and RDP help-text shim (Windows) |
@@ -77,8 +79,30 @@ The `probes/` package owns that loop:
     2. If the in-memory VM record has no IP, re-try the dnsmasq lease file by MAC and write it back via `setVMIP`.
     3. `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the cocoon Windows golden image contract (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables all firewall profiles), and it decouples readiness from specific services so the same probe works for Linux and Windows guests alike.
 2. The first probe runs **synchronously inside `Start`** so the refreshStatus/notify pass that `CreatePod` does before returning already reflects the initial reachability decision.
-3. A background goroutine re-runs the probe on a ticker (2 s cold-start, 15 s once Ready) and invokes `onUpdate` on every readiness transition. `onUpdate` re-reads the pod, rebuilds the status, and calls `notify` so the kubelet observes the change.
+3. A background goroutine re-runs the probe on a ticker (2 s cold-start, 5 s once Ready) and invokes `onUpdate` after 3 consecutive failures flip readiness back to false. `onUpdate` re-reads the pod, rebuilds the status, and calls `notify` so the kubelet observes the change.
 4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod goroutine; `Manager.Close` is called once at shutdown to tear every remaining agent down.
+
+### VM event watcher
+
+In addition to the periodic probe, vk-cocoon subscribes to cocoon's real-time VM event stream via `cocoon vm status --event --format json`. This provides sub-second detection of VM state changes (DELETED, stopped, error) without waiting for the next probe tick.
+
+The watcher goroutine (`vmWatchLoop`) runs for the lifetime of the process with automatic restart on subprocess failure (2 s backoff). When an event arrives:
+
+| Event | Inspect result | Action |
+|---|---|---|
+| `DELETED` | VM not found | `evictPod`: delete pod from API server → operator recreates |
+| `MODIFIED` (state ≠ running) | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
+| `MODIFIED` (state ≠ running) | state = running | False alarm — ignore |
+
+A 30-second **restart cooldown** (`restartCooldown`) prevents tight restart loops when a VM keeps crashing. If the cooldown has not elapsed since the last restart, the pod is evicted instead so the operator can do a clean recreation.
+
+Detection latency comparison:
+
+| Mechanism | Worst-case latency |
+|---|---|
+| Probe only (old: 15 s × 5 failures) | ~75 s |
+| Probe only (current: 5 s × 3 failures) | ~24 s |
+| VM event watcher | **< 1 s** |
 
 If the ICMP raw socket cannot be opened — typically because the binary is running without `CAP_NET_RAW` — the provider falls back to `network.NopPinger` and the probe degrades to "an IP was resolved == Ready". That is weaker than a real end-to-end ping but still strictly better than the previous behaviour of marking the pod Ready the instant `cocoon vm clone/run` returned. The systemd unit in `packaging/vk-cocoon.service` grants `AmbientCapabilities=CAP_NET_RAW` so the production path gets the real pinger.
 
