@@ -59,6 +59,12 @@ type ImportOptions struct {
 	Description string
 }
 
+// VMEvent is a single event from the cocoon event stream.
+type VMEvent struct {
+	Event string `json:"event"` // ADDED, MODIFIED, DELETED
+	VM    VM     `json:"vm"`
+}
+
 // Runtime is the interface vk-cocoon uses to drive cocoon.
 type Runtime interface {
 	Clone(ctx context.Context, opts CloneOptions) (*VM, error)
@@ -66,9 +72,11 @@ type Runtime interface {
 	Inspect(ctx context.Context, vmID string) (*VM, error)
 	List(ctx context.Context) ([]VM, error)
 	Remove(ctx context.Context, vmID string) error
+	Start(ctx context.Context, vmID string) error
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)
 	SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string) error
+	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 }

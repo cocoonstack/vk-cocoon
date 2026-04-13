@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ var (
 
 // GetContainerLogs returns the guest's systemd journal (Linux) or a
 // help-text pointing at RDP (Windows). Only opts.Tail is honored.
-func (p *CocoonProvider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
+func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	pod, err := p.GetPod(ctx, namespace, podName)
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func (p *CocoonProvider) GetContainerLogs(ctx context.Context, namespace, podNam
 }
 
 // RunInContainer is the kubectl exec entrypoint (SSH for Linux, RDP help for Windows).
-func (p *CocoonProvider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
+func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
 	v := p.vmForPod(namespace, podName)
 	if v == nil || v.IP == "" {
 		return fmt.Errorf("pod %s/%s has no live VM", namespace, podName)
@@ -73,23 +73,23 @@ func (p *CocoonProvider) RunInContainer(ctx context.Context, namespace, podName,
 }
 
 // AttachToContainer is not implemented.
-func (p *CocoonProvider) AttachToContainer(_ context.Context, _, _, _ string, _ api.AttachIO) error {
+func (p *Provider) AttachToContainer(_ context.Context, _, _, _ string, _ api.AttachIO) error {
 	return errAttachNotImplemented
 }
 
 // PortForward is not implemented.
-func (p *CocoonProvider) PortForward(_ context.Context, _, _ string, _ int32, _ io.ReadWriteCloser) error {
+func (p *Provider) PortForward(_ context.Context, _, _ string, _ int32, _ io.ReadWriteCloser) error {
 	return errPortForwardNotImplemented
 }
 
 // GetStatsSummary returns a minimal kubelet stats summary stub.
-func (p *CocoonProvider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
+func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	return &statsv1alpha1.Summary{
 		Node: statsv1alpha1.NodeStats{NodeName: p.NodeName},
 	}, nil
 }
 
 // GetMetricsResource returns nil; real collectors live on the metrics listener.
-func (p *CocoonProvider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
+func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	return nil, nil
 }

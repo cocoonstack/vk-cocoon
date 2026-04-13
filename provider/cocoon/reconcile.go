@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"context"
@@ -13,14 +13,15 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // StartupReconcile rebuilds the in-memory tables from K8s pods and
 // cocoon VMs so restarts don't leak VMs or lose pod associations.
 // Unmatched VMs are handled per OrphanPolicy.
-func (p *CocoonProvider) StartupReconcile(ctx context.Context) error {
-	logger := log.WithFunc("CocoonProvider.StartupReconcile")
+func (p *Provider) StartupReconcile(ctx context.Context) error {
+	logger := log.WithFunc("Provider.StartupReconcile")
 	if p.Clientset == nil {
 		return errors.New("clientset is required for startup reconcile")
 	}
@@ -106,27 +107,27 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 
 // reconcileNoVMID handles a pod with no VMID during startup reconcile.
 // Hibernated pods are tracked without a VM; others are skipped.
-func (p *CocoonProvider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
+func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 	if !meta.ReadHibernateState(pod) {
 		return
 	}
 	p.trackPod(pod, nil)
-	log.WithFunc("CocoonProvider.StartupReconcile").
+	log.WithFunc("Provider.StartupReconcile").
 		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
 
 // handleOrphan applies OrphanPolicy to an unmatched VM.
-func (p *CocoonProvider) handleOrphan(ctx context.Context, v *vm.VM) {
-	logger := log.WithFunc("CocoonProvider.handleOrphan")
+func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
+	logger := log.WithFunc("Provider.handleOrphan")
 	switch p.OrphanPolicy {
-	case OrphanDestroy:
+	case provider.OrphanDestroy:
 		logger.Warnf(ctx, "destroying orphan VM %s (id=%s)", v.Name, v.ID)
 		if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 			logger.Errorf(ctx, err, "remove orphan VM %s", v.ID)
 		}
-	case OrphanKeep:
+	case provider.OrphanKeep:
 		// no-op
-	default: // OrphanAlert
+	default: // provider.OrphanAlert
 		metrics.OrphanVMTotal.Inc()
 		logger.Warnf(ctx, "orphan VM detected: name=%s id=%s state=%s ip=%s — apply policy=destroy to clean up automatically",
 			v.Name, v.ID, v.State, v.IP)

@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -188,6 +189,55 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 	return stdout, wait, nil
 }
 
+// Start runs `cocoon vm start`.
+func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
+	out, err := c.command(ctx, "vm", "start", vmID).CombinedOutput()
+	if err != nil {
+		return cocoonCmdError("vm start", vmID, err, out)
+	}
+	return nil
+}
+
+// WatchEvents starts `cocoon vm status --event --format json` and streams
+// parsed VMEvent values. The channel closes when ctx is canceled or the
+// subprocess exits. On parse errors the line is silently skipped.
+func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
+	cmd := c.command(ctx, "vm", "status", "--event", "--format", "json")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start cocoon vm status: %w", err)
+	}
+	ch := make(chan VMEvent, 16)
+	go func() {
+		defer close(ch)
+		defer cmd.Wait() //nolint:errcheck
+		dec := json.NewDecoder(stdout)
+		for {
+			var raw struct {
+				Event string          `json:"event"`
+				VM    json.RawMessage `json:"vm"`
+			}
+			if err := dec.Decode(&raw); err != nil {
+				return // EOF or ctx canceled
+			}
+			ev := VMEvent{Event: raw.Event}
+			ev.VM = parseVMFromStatusJSON(raw.VM)
+			if ev.VM.ID == "" && ev.VM.Name == "" {
+				continue
+			}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
 // command builds an exec.Cmd, optionally wrapped in sudo.
 func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	if c.sudo {
@@ -195,6 +245,38 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input
 	}
 	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
+}
+
+// parseVMFromStatusJSON extracts ID, Name, State from the vm status JSON.
+func parseVMFromStatusJSON(data []byte) VM {
+	var obj struct {
+		ID     string `json:"id"`
+		Config struct {
+			Name string `json:"name"`
+		} `json:"config"`
+		State          string `json:"state"`
+		NetworkConfigs []struct {
+			Mac     string `json:"mac"`
+			Network *struct {
+				IP string `json:"ip"`
+			} `json:"network"`
+		} `json:"network_configs"`
+	}
+	if json.Unmarshal(data, &obj) != nil {
+		return VM{}
+	}
+	v := VM{
+		ID:    obj.ID,
+		Name:  obj.Config.Name,
+		State: obj.State,
+	}
+	if len(obj.NetworkConfigs) > 0 {
+		v.MAC = obj.NetworkConfigs[0].Mac
+		if obj.NetworkConfigs[0].Network != nil {
+			v.IP = obj.NetworkConfigs[0].Network.IP
+		}
+	}
+	return v
 }
 
 // snapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.

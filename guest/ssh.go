@@ -15,8 +15,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// defaultDialTimeout bounds a single connect attempt.
-const defaultDialTimeout = 10 * time.Second
+const (
+	// defaultDialTimeout bounds a single connect attempt.
+	defaultDialTimeout = 10 * time.Second
+)
 
 // Executor runs commands inside a guest VM.
 type Executor interface {

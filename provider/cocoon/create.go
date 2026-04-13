@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"context"
@@ -20,8 +20,8 @@ import (
 )
 
 // CreatePod admits a pod by pulling its snapshot/image and creating the VM.
-func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("CocoonProvider.CreatePod")
+func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.WithFunc("Provider.CreatePod")
 	logger.Infof(ctx, "create pod %s/%s", pod.Namespace, pod.Name)
 
 	spec := meta.ParseVMSpec(pod)
@@ -70,7 +70,7 @@ func (p *CocoonProvider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 }
 
 // bringUpVM dispatches on mode: unmanaged (adopt), clone, run, or fork.
-func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
+func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
 	cpu, memory := vmResourceOverrides(pod)
 	mode := strings.ToLower(spec.Mode)
 	switch {
@@ -148,7 +148,7 @@ func (p *CocoonProvider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec me
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.
 // Lookup uses the bare repo name (tag stripped) because cocoon stores imports under that name.
-func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
+func (p *Provider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
 	if ref == "" {
 		return nil, nil
 	}
@@ -172,7 +172,7 @@ func (p *CocoonProvider) ensureSnapshot(ctx context.Context, ref string) (*vm.Sn
 
 // ensureForkSnapshot creates a cloneable local snapshot for sub-agents,
 // since cocoon's clone requires a snapshot ref, not a live VM name.
-func (p *CocoonProvider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
+func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
 		return snapshotName, nil
@@ -192,21 +192,32 @@ func (p *CocoonProvider) ensureForkSnapshot(ctx context.Context, sourceVMName st
 	return snapshotName, nil
 }
 
-func forkSnapshotName(sourceVMName string) string {
-	return "fork-" + sourceVMName
-}
-
 // vmByName looks up a VM by name.
-func (p *CocoonProvider) vmByName(name string) *vm.VM {
+func (p *Provider) vmByName(name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByName[name]
 }
 
 // applyRuntime writes VMID/IP annotations onto the pod.
-func (p *CocoonProvider) applyRuntime(pod *corev1.Pod, v *vm.VM) {
+func (p *Provider) applyRuntime(pod *corev1.Pod, v *vm.VM) {
 	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
 	runtime.Apply(pod)
+}
+
+func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
+	if pod == nil {
+		return
+	}
+	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+	if err != nil || status == nil {
+		return
+	}
+	pod.Status = *status
+}
+
+func forkSnapshotName(sourceVMName string) string {
+	return "fork-" + sourceVMName
 }
 
 // vmResourceOverrides translates pod resources into cocoon CLI args (milliCPU rounds up).
@@ -249,17 +260,6 @@ func quantityBytes(q resource.Quantity) string {
 		return strconv.FormatInt(bytes, 10)
 	}
 	return ""
-}
-
-func (p *CocoonProvider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
-	if pod == nil {
-		return
-	}
-	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
-	if err != nil || status == nil {
-		return
-	}
-	pod.Status = *status
 }
 
 func nowPtr() *metav1.Time {

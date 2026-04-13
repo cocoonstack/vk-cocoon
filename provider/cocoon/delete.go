@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 )
 
 // DeletePod removes a pod, optionally snapshotting the VM first.
-func (p *CocoonProvider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("CocoonProvider.DeletePod")
+func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.WithFunc("Provider.DeletePod")
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)

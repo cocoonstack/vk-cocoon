@@ -12,8 +12,8 @@ import (
 
 const (
 	defaultInitialInterval  = 2 * time.Second
-	defaultSteadyInterval   = 15 * time.Second
-	defaultFailureThreshold = 5
+	defaultSteadyInterval   = 5 * time.Second
+	defaultFailureThreshold = 3
 )
 
 // Probe is the per-tick health check; returns (ready, message).

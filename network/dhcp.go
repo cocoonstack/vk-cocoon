@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
+const (
+	defaultLeasesPath = "/var/lib/dnsmasq/dnsmasq.leases"
+)
 
 // ErrNoLease means no lease matches the lookup.
 var ErrNoLease = errors.New("no dnsmasq lease for the requested MAC")

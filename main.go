@@ -29,6 +29,8 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
+	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/provider/cocoon"
 	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/version"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -41,7 +43,7 @@ const (
 	defaultLeasesPath   = "/var/lib/dnsmasq/dnsmasq.leases"
 	defaultSSHUser      = "root"
 	defaultSSHPort      = 22
-	defaultOrphanPolicy = string(OrphanAlert)
+	defaultOrphanPolicy = string(provider.OrphanAlert)
 
 	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
 	defaultTLSKey      = "/etc/cocoon/vk/tls/vk-kubelet.key"
@@ -96,12 +98,12 @@ func main() {
 	logger.Infof(signalCtx, "kubelet TLS from %s", tlsSource)
 
 	// Fail early on malformed overrides.
-	nodeCapacity, err := NodeCapacity()
+	nodeCapacity, err := provider.NodeCapacity()
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "node capacity: %v", err)
 	}
 
-	provider := buildCocoonProvider(signalCtx, buildOpts{
+	p := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
 		epochToken:   epochToken,
@@ -112,9 +114,11 @@ func main() {
 		clientset:    clientset,
 	})
 
-	if reconcileErr := provider.StartupReconcile(signalCtx); reconcileErr != nil {
+	if reconcileErr := p.StartupReconcile(signalCtx); reconcileErr != nil {
 		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node: %v", reconcileErr)
 	}
+
+	p.StartVMWatcher(signalCtx)
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
@@ -122,6 +126,8 @@ func main() {
 				cfg.Node.Labels = map[string]string{}
 			}
 			cfg.Node.Labels[meta.LabelNodePool] = nodePool
+			cfg.Node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
+			cfg.Node.Status.NodeInfo.KubeletVersion = version.VERSION
 			cfg.Node.Status.Conditions = defaultNodeConditions()
 			cfg.Node.Status.Addresses = []corev1.NodeAddress{
 				{Type: corev1.NodeInternalIP, Address: nodeIP},
@@ -146,7 +152,7 @@ func main() {
 				})
 			}
 		}
-		return provider, NewCocoonNodeProvider(), nil
+		return p, cocoon.NewNodeProvider(), nil
 	}
 
 	kubeletMux := http.NewServeMux()
@@ -195,7 +201,7 @@ func main() {
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
 	}
-	provider.Probes.Close()
+	p.Close()
 	logger.Info(shutdownCtx, "vk-cocoon exiting")
 }
 
@@ -210,11 +216,11 @@ type buildOpts struct {
 	clientset    kubernetes.Interface
 }
 
-func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
-	logger := log.WithFunc("buildCocoonProvider")
+func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
+	logger := log.WithFunc("buildProvider")
 	registry := snapshots.New(opts.epochURL, opts.epochToken)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
-	p := NewCocoonProvider()
+	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName
 	p.Clientset = opts.clientset
 	p.Runtime = runtime
@@ -232,7 +238,7 @@ func buildCocoonProvider(ctx context.Context, opts buildOpts) *CocoonProvider {
 	p.GuestSSH = guest.NewSSHExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
 	p.GuestRDP = guest.RDPExecutor{}
 	p.Probes = probes.NewManager(ctx)
-	p.OrphanPolicy = OrphanPolicy(strings.ToLower(opts.orphanPolicy))
+	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
 	return p
 }
 

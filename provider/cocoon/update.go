@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"context"
@@ -12,28 +12,30 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// hibernateImportSuffix avoids name collision between the import target
-// and the live VM that the subsequent Clone produces.
-const hibernateImportSuffix = "-hibernate-import"
+const (
+	// hibernateImportSuffix avoids name collision between the import target
+	// and the live VM that the subsequent Clone produces.
+	hibernateImportSuffix = "-hibernate-import"
+)
 
 // UpdatePod handles hibernate/wake transitions. Other spec changes are ignored.
-func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("CocoonProvider.UpdatePod")
+func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	p.trackPod(pod, v)
 
-	desire := bool(meta.ReadHibernateState(pod))
+	wantHibernate := bool(meta.ReadHibernateState(pod))
 
 	switch {
-	case desire && v != nil:
+	case wantHibernate && v != nil:
 		if err := p.hibernate(ctx, pod, v); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("update", "hibernate_failed").Inc()
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "hibernated").Inc()
-	case !desire && v == nil:
+	case !wantHibernate && v == nil:
 		// Wake: recreate from the hibernation snapshot.
 		if err := p.wake(ctx, pod); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("update", "wake_failed").Inc()
@@ -51,8 +53,8 @@ func (p *CocoonProvider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // hibernate snapshots the VM to epoch then tears it down. Order is
 // Save -> Push -> Remove. If Remove fails, the pushed tag is rolled back
 // so the operator does not observe Hibernated while the VM is still running.
-func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
-	logger := log.WithFunc("CocoonProvider.hibernate")
+func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
+	logger := log.WithFunc("Provider.hibernate")
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		return fmt.Errorf("snapshot save %s: %w", v.Name, err)
 	}
@@ -80,7 +82,7 @@ func (p *CocoonProvider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.V
 }
 
 // wake restores the VM from the hibernation snapshot.
-func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
+func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
 		return nil
@@ -112,7 +114,7 @@ func (p *CocoonProvider) wake(ctx context.Context, pod *corev1.Pod) error {
 }
 
 // forgetVMOnly clears the VM record but keeps the pod (used by hibernate).
-func (p *CocoonProvider) forgetVMOnly(namespace, name string) {
+func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))

@@ -1,4 +1,4 @@
-package main
+package cocoon
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
+	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -111,6 +112,14 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string) error {
 	return nil
 }
 
+func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+
+func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
+	ch := make(chan vm.VMEvent)
+	close(ch)
+	return ch, nil
+}
+
 type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
@@ -124,7 +133,7 @@ func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 }
 
 func TestCreatePodMissingVMNameRejected(t *testing.T) {
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = &fakeRuntime{}
 	p.Probes = probes.NewManager(t.Context())
 
@@ -143,7 +152,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 			},
 		},
 	}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -176,7 +185,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 
 func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -205,7 +214,7 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 
 func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -232,7 +241,7 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 
 func TestCreatePodRunMode(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -276,7 +285,7 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 			"snapshot-repo": {Name: "snapshot-repo", Image: "https://example.invalid/img.img"},
 		},
 	}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -295,7 +304,7 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 
 func TestCreatePodRunErrorPropagates(t *testing.T) {
 	rt := &fakeRuntime{runErr: errors.New("cocoon vm run boom")}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -314,7 +323,7 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 
 func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -341,7 +350,7 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 
 func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -365,7 +374,7 @@ func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "adopted-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
 	}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -386,12 +395,12 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "orphan-vmid", Name: "vk-ghost", IP: "10.0.0.99"}},
 	}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset() // no pods
-	p.OrphanPolicy = OrphanDestroy
+	p.OrphanPolicy = provider.OrphanDestroy
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
@@ -408,7 +417,7 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	meta.HibernateState(true).Apply(pod)
 
 	rt := &fakeRuntime{listVMs: nil}
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -428,7 +437,7 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 }
 
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
-	p := NewCocoonProvider()
+	p := NewProvider()
 	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set("ns/demo-0", probes.Result{Ready: true, Live: true})
 
