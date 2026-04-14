@@ -278,6 +278,52 @@ func TestCreatePodRunMode(t *testing.T) {
 	}
 }
 
+func TestLocalSnapshotName(t *testing.T) {
+	tests := []struct {
+		repo, tag, want string
+	}{
+		{"myvm", "latest", "myvm"},
+		{"myvm", "", "myvm"},
+		{"myvm", "v2", "myvm:v2"},
+		{"org/repo", "snapshot-v1", "org/repo:snapshot-v1"},
+	}
+	for _, tt := range tests {
+		got := localSnapshotName(tt.repo, tt.tag)
+		if got != tt.want {
+			t.Errorf("localSnapshotName(%q, %q) = %q, want %q", tt.repo, tt.tag, got, tt.want)
+		}
+	}
+}
+
+func TestCreatePodCloneModeWithTag(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo:v2": {
+				Name:  "snapshot-repo:v2",
+				Image: "https://example.invalid/base.img",
+			},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "snapshot-repo:v2",
+		Mode:   "clone",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatalf("Runtime.Clone was not called")
+	}
+	if rt.cloned.From != "snapshot-repo:v2" {
+		t.Errorf("clone source: %q, want snapshot-repo:v2", rt.cloned.From)
+	}
+}
+
 func TestCreatePodCloneErrorPropagates(t *testing.T) {
 	rt := &fakeRuntime{
 		cloneErr: errors.New("cocoon vm clone boom"),

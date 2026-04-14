@@ -118,22 +118,22 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, nil
 
 	default: // clone is the default
-		from := spec.Image
-		cloneFrom, _ := utils.ParseRef(from)
-		snapshot, err := p.ensureSnapshot(ctx, from)
+		repo, tag := utils.ParseRef(spec.Image)
+		local := localSnapshotName(repo, tag)
+		snapshot, err := p.ensureSnapshot(ctx, repo, tag, local)
 		if err != nil {
 			metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-			return nil, fmt.Errorf("ensure snapshot %s: %w", from, err)
+			return nil, fmt.Errorf("ensure snapshot %s: %w", local, err)
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 		if snapshot != nil && snapshot.Image != "" {
 			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image); ensureErr != nil {
-				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", cloneFrom, ensureErr)
+				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
 			}
 		}
 
 		opts := vm.CloneOptions{
-			From:    cloneFrom,
+			From:    local,
 			To:      spec.VMName,
 			CPU:     cpu,
 			Memory:  memory,
@@ -142,32 +142,32 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
+			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
 		}
 		return v, nil
 	}
 }
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.
-// Lookup uses the bare repo name (tag stripped) because cocoon stores imports under that name.
-func (p *Provider) ensureSnapshot(ctx context.Context, ref string) (*vm.Snapshot, error) {
-	if ref == "" {
+// The local snapshot name includes the tag so that different tags of the
+// same repo are stored separately (e.g. "myvm:v1" and "myvm:v2").
+func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) (*vm.Snapshot, error) {
+	if repo == "" {
 		return nil, nil
 	}
-	repo, tag := utils.ParseRef(ref)
-	snapshot, err := p.Runtime.Snapshot(ctx, repo)
+	snapshot, err := p.Runtime.Snapshot(ctx, local)
 	if err == nil {
 		return snapshot, nil
 	}
 	if p.Puller == nil {
 		return nil, nil
 	}
-	if pullErr := p.Puller.PullSnapshot(ctx, repo, tag, ""); pullErr != nil {
+	if pullErr := p.Puller.PullSnapshot(ctx, repo, tag, local); pullErr != nil {
 		return nil, pullErr
 	}
-	snapshot, err = p.Runtime.Snapshot(ctx, repo)
+	snapshot, err = p.Runtime.Snapshot(ctx, local)
 	if err != nil {
-		return nil, fmt.Errorf("inspect imported snapshot %s: %w", repo, err)
+		return nil, fmt.Errorf("inspect imported snapshot %s: %w", local, err)
 	}
 	return snapshot, nil
 }
@@ -247,6 +247,15 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	pod.Status = *status
+}
+
+// localSnapshotName builds the cocoon-local snapshot name from a repo and tag.
+// The default tag is omitted for backward compatibility with existing snapshots.
+func localSnapshotName(repo, tag string) string {
+	if tag == "" || tag == meta.DefaultSnapshotTag {
+		return repo
+	}
+	return repo + ":" + tag
 }
 
 func forkSnapshotName(sourceVMName string) string {
