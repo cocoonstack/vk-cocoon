@@ -74,6 +74,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 // bringUpVM dispatches on mode: unmanaged (adopt), clone, run, or fork.
 func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
 	cpu, memory := vmResourceOverrides(pod)
+	forcePull := spec.ForcePull
 	mode := strings.ToLower(spec.Mode)
 	switch {
 	case !spec.Managed:
@@ -110,6 +111,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network: spec.Network,
 			Storage: spec.Storage,
 			OS:      spec.OS,
+			Force:   forcePull,
 		}
 		v, err := p.Runtime.Run(ctx, opts)
 		if err != nil {
@@ -127,7 +129,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 		if snapshot != nil && snapshot.Image != "" {
-			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image); ensureErr != nil {
+			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image, forcePull); ensureErr != nil {
 				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
 			}
 		}

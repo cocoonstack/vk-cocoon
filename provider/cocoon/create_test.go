@@ -36,7 +36,10 @@ type fakeRuntime struct {
 	runVM         *vm.VM
 	snapshots     map[string]*vm.Snapshot
 	listVMs       []vm.VM
-	ensuredImages []string
+	ensuredImages []struct {
+		image string
+		force bool
+	}
 }
 
 func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, error) {
@@ -107,8 +110,11 @@ func (f *fakeRuntime) SnapshotExport(_ context.Context, _ string) (io.ReadCloser
 	return io.NopCloser(nil), func() error { return nil }, nil
 }
 
-func (f *fakeRuntime) EnsureImage(_ context.Context, image string) error {
-	f.ensuredImages = append(f.ensuredImages, image)
+func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) error {
+	f.ensuredImages = append(f.ensuredImages, struct {
+		image string
+		force bool
+	}{image, force})
 	return nil
 }
 
@@ -173,8 +179,11 @@ func TestCreatePodCloneMode(t *testing.T) {
 	if rt.cloned.From != "snapshot-repo" {
 		t.Errorf("clone source: %q, want snapshot-repo", rt.cloned.From)
 	}
-	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0] != rt.snapshots["snapshot-repo"].Image {
+	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != rt.snapshots["snapshot-repo"].Image {
 		t.Fatalf("EnsureImage calls = %#v, want [%q]", rt.ensuredImages, rt.snapshots["snapshot-repo"].Image)
+	}
+	if rt.ensuredImages[0].force {
+		t.Errorf("EnsureImage force = true, want false (default policy)")
 	}
 
 	runtime := meta.ParseVMRuntime(pod)

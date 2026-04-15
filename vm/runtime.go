@@ -51,6 +51,7 @@ type RunOptions struct {
 	NICs    int
 	DNS     []string
 	OS      string
+	Force   bool
 }
 
 // ImportOptions is the input to Runtime.SnapshotImport.
@@ -77,6 +78,6 @@ type Runtime interface {
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)
 	SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
-	EnsureImage(ctx context.Context, image string) error
+	EnsureImage(ctx context.Context, image string, force bool) error
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 }

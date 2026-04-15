@@ -47,7 +47,7 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 
 // Run runs `cocoon vm run`.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
-	if err := c.EnsureImage(ctx, opts.Image); err != nil {
+	if err := c.EnsureImage(ctx, opts.Image, opts.Force); err != nil {
 		return nil, fmt.Errorf("ensure image %s: %w", opts.Image, err)
 	}
 
@@ -66,15 +66,22 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	return c.Inspect(ctx, opts.Name)
 }
 
-// EnsureImage ensures image is available locally, pulling if needed.
-func (c *CocoonCLI) EnsureImage(ctx context.Context, image string) error {
+// EnsureImage ensures the image is available locally and up to date.
+// It always attempts a pull so that mutable tags (e.g. ":latest") pick up
+// upstream replacements. The pull itself is idempotent — cocoon skips the
+// download when the local content already matches the remote digest.
+// When force is true, --force is passed to cocoon to bypass the cache
+// entirely and re-download from upstream.
+func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) error {
 	if image == "" {
 		return nil
 	}
-	if err := c.command(ctx, "image", "inspect", image).Run(); err == nil {
-		return nil
+	args := []string{"image", "pull"}
+	if force {
+		args = append(args, "--force")
 	}
-	out, err := c.command(ctx, "image", "pull", image).CombinedOutput()
+	args = append(args, image)
+	out, err := c.command(ctx, args...).CombinedOutput()
 	if err != nil {
 		return cocoonCmdError("image pull", image, err, out)
 	}
