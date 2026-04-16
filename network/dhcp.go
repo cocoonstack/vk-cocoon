@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	defaultLeasesPath = "/var/lib/cocoon/net/leases.json"
+	// DefaultLeasesPath is cocoon-net's default JSON lease file location.
+	DefaultLeasesPath = "/var/lib/cocoon/net/leases.json"
 )
 
 // ErrNoLease means no lease matches the lookup.
@@ -21,9 +22,9 @@ var ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
 
 // Lease is one cocoon-net DHCP entry.
 type Lease struct {
-	Expires time.Time
 	MAC     string
 	IP      string
+	Expires time.Time
 }
 
 // LeaseParser reads cocoon-net leases, caching until mtime changes.
@@ -37,10 +38,17 @@ type LeaseParser struct {
 	byMAC  map[string]*Lease
 }
 
+// cocoonNetLease is the on-disk JSON shape written by cocoon-net.
+type cocoonNetLease struct {
+	MAC    string `json:"mac"`
+	IP     string `json:"ip"`
+	Expiry string `json:"expiry"`
+}
+
 // NewLeaseParser returns a parser; empty path uses the default.
 func NewLeaseParser(path string) *LeaseParser {
 	if path == "" {
-		path = defaultLeasesPath
+		path = DefaultLeasesPath
 	}
 	return &LeaseParser{Path: path}
 }
@@ -94,13 +102,6 @@ func (p *LeaseParser) refresh() error {
 	return nil
 }
 
-// cocoonNetLease is the on-disk JSON shape written by cocoon-net.
-type cocoonNetLease struct {
-	MAC    string `json:"mac"`
-	IP     string `json:"ip"`
-	Expiry string `json:"expiry"`
-}
-
 // parse decodes cocoon-net's JSON lease file.
 func (p *LeaseParser) parse() ([]Lease, error) {
 	data, err := os.ReadFile(p.Path) //nolint:gosec // operator-supplied path
@@ -113,15 +114,16 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	}
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
+		// Tolerate partial rows: cocoon-net may flush a lease mid-write,
+		// and one bad timestamp shouldn't block lookups for healthy leases.
 		expiry, err := time.Parse(time.RFC3339, r.Expiry)
 		if err != nil {
-			// Skip entries with malformed timestamps.
 			continue
 		}
 		out = append(out, Lease{
-			Expires: expiry,
 			MAC:     r.MAC,
 			IP:      r.IP,
+			Expires: expiry,
 		})
 	}
 	return out, nil

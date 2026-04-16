@@ -40,7 +40,6 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultEpochURL     = "http://epoch.cocoon-system.svc:8080"
-	defaultLeasesPath   = "/var/lib/cocoon/net/leases.json"
 	defaultSSHUser      = "root"
 	defaultSSHPort      = 22
 	defaultOrphanPolicy = string(provider.OrphanAlert)
@@ -64,7 +63,7 @@ func main() {
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
 	epochURL := commonk8s.EnvOrDefault("EPOCH_URL", defaultEpochURL)
 	epochToken := os.Getenv("EPOCH_TOKEN")
-	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", defaultLeasesPath)
+	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	sshPassword := os.Getenv("VK_SSH_PASSWORD")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
