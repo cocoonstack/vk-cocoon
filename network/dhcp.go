@@ -1,8 +1,10 @@
-// Package network resolves VM IPs from the host's dnsmasq lease file.
+// Package network resolves VM IPs from either the host's dnsmasq lease file
+// (legacy, space-separated) or cocoon-net's JSON lease file.
 package network
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +16,7 @@ import (
 )
 
 const (
-	defaultLeasesPath = "/var/lib/misc/dnsmasq.leases"
+	defaultLeasesPath = "/var/lib/cocoon/net/leases.json"
 )
 
 // ErrNoLease means no lease matches the lookup.
@@ -96,16 +98,63 @@ func (p *LeaseParser) refresh() error {
 	return nil
 }
 
-// parse reads the lease file. Format: <expiry> <mac> <ip> <hostname> <client-id>
+// parse reads the lease file, auto-detecting the format by the first
+// non-whitespace byte: '[' or '{' -> cocoon-net JSON, anything else ->
+// legacy dnsmasq text format.
 func (p *LeaseParser) parse() ([]Lease, error) {
-	f, err := os.Open(p.Path)
+	data, err := os.ReadFile(p.Path) //nolint:gosec // operator-supplied path
 	if err != nil {
-		return nil, fmt.Errorf("open lease file %s: %w", p.Path, err)
+		return nil, fmt.Errorf("read lease file %s: %w", p.Path, err)
 	}
-	defer func() { _ = f.Close() }()
+	if leadingByte(data) == '[' || leadingByte(data) == '{' {
+		return parseCocoonNet(data)
+	}
+	return parseDnsmasq(data)
+}
 
+// leadingByte returns the first non-whitespace byte, or 0 if data is empty.
+func leadingByte(data []byte) byte {
+	for _, b := range data {
+		if b != ' ' && b != '\t' && b != '\n' && b != '\r' {
+			return b
+		}
+	}
+	return 0
+}
+
+// parseCocoonNet decodes cocoon-net's JSON lease format.
+type cocoonNetLease struct {
+	MAC    string `json:"mac"`
+	IP     string `json:"ip"`
+	Expiry string `json:"expiry"`
+}
+
+func parseCocoonNet(data []byte) ([]Lease, error) {
+	var raw []cocoonNetLease
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode cocoon-net leases: %w", err)
+	}
+	out := make([]Lease, 0, len(raw))
+	for _, r := range raw {
+		expiry, err := time.Parse(time.RFC3339, r.Expiry)
+		if err != nil {
+			// Skip entries with malformed timestamps.
+			continue
+		}
+		out = append(out, Lease{
+			Expires: expiry,
+			MAC:     r.MAC,
+			IP:      r.IP,
+		})
+	}
+	return out, nil
+}
+
+// parseDnsmasq decodes dnsmasq's space-separated lease format.
+// Format: <expiry> <mac> <ip> <hostname> <client-id>
+func parseDnsmasq(data []byte) ([]Lease, error) {
 	var out []Lease
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -117,7 +166,6 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 		}
 		expiry, err := parseUnixSecond(fields[0])
 		if err != nil {
-			// Skip lines with malformed timestamps.
 			continue
 		}
 		out = append(out, Lease{
