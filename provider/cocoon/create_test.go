@@ -496,8 +496,9 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set("ns/demo-0", probes.Result{Ready: true, Live: true})
 
-	leasePath := filepath.Join(t.TempDir(), "dnsmasq.leases")
-	if err := os.WriteFile(leasePath, []byte("1775888313 aa:bb:cc:dd:ee:ff 172.20.0.88 demo *\n"), 0o644); err != nil {
+	leasePath := filepath.Join(t.TempDir(), "leases.json")
+	leases := `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.88","expiry":"2099-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(leasePath, []byte(leases), 0o644); err != nil {
 		t.Fatalf("write leases: %v", err)
 	}
 	p.LeaseParser = network.NewLeaseParser(leasePath)

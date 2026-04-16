@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestLeaseParserCocoonNetJSON(t *testing.T) {
+func TestLeaseParserLookupByMAC(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "leases.json")
 	data := `[
@@ -34,22 +34,42 @@ func TestLeaseParserCocoonNetJSON(t *testing.T) {
 	}
 }
 
-func TestLeaseParserDnsmasqBackwardCompat(t *testing.T) {
+func TestLeaseParserAll(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "dnsmasq.leases")
-	data := "1775888313 aa:bb:cc:dd:ee:ff 172.20.0.88 demo *\n"
+	path := filepath.Join(dir, "leases.json")
+	data := `[
+  {"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"2099-01-01T00:00:00Z"},
+  {"mac":"11:22:33:44:55:66","ip":"172.20.0.11","expiry":"2099-01-01T00:00:00Z"}
+]`
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	p := NewLeaseParser(path)
-	lease, err := p.LookupByMAC("aa:bb:cc:dd:ee:ff")
+	leases, err := p.All()
 	if err != nil {
-		t.Fatalf("LookupByMAC: %v", err)
+		t.Fatalf("All: %v", err)
 	}
-	if lease.IP != "172.20.0.88" {
-		t.Errorf("IP = %q, want 172.20.0.88", lease.IP)
+	if len(leases) != 2 {
+		t.Fatalf("len = %d, want 2", len(leases))
 	}
-	if lease.Hostname != "demo" {
-		t.Errorf("Hostname = %q, want demo", lease.Hostname)
+}
+
+func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "leases.json")
+	data := `[
+  {"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"not-a-timestamp"},
+  {"mac":"11:22:33:44:55:66","ip":"172.20.0.11","expiry":"2099-01-01T00:00:00Z"}
+]`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	p := NewLeaseParser(path)
+	leases, err := p.All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(leases) != 1 {
+		t.Fatalf("malformed entry should be skipped, got %d leases", len(leases))
 	}
 }

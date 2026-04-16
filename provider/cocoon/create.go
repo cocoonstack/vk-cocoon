@@ -49,7 +49,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 
-	// Resolve IP from dnsmasq lease before returning.
+	// Resolve IP from cocoon-net lease before returning.
 	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
 		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
 			v.IP = lease.IP

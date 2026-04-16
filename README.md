@@ -13,7 +13,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 | Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `sudo cocoon …` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | Wraps the [epoch](https://github.com/cocoonstack/epoch) SDK as a `RegistryClient` interface, plus `Puller` and `Pusher` that stream snapshots and cloud images via `epoch/snapshot` and `epoch/cloudimg` |
-| Network | `network/` | dnsmasq lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
+| Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
 | Guest exec | `guest/` | SSH executor (Linux) and RDP help-text shim (Windows) |
 | Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
 | Metrics | `metrics/` | Prometheus collectors for pod lifecycle, snapshot pull / push, VM table size, orphans |
@@ -29,7 +29,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from epoch via `Puller.PullSnapshot`. When the snapshot carries a base image, `EnsureImage` pulls it (always attempts `cocoon image pull`; with `spec.ForcePull` it passes `--force` to bypass the URL-level cache). Then `Runtime.Clone(from=<local>, to=spec.VMName)`.
    - **Mode `run`** (`Managed=true`): `EnsureImage` pulls the image (always attempts `cocoon image pull`; `--force` when `spec.ForcePull` is true), then `Runtime.Run(image=spec.Image, name=spec.VMName)`.
-4. Resolve the IP from the dnsmasq lease file by MAC.
+4. Resolve the IP from the cocoon-net JSON lease file by MAC.
 5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up. `VNCPort` is intentionally left unset here — cloud-hypervisor has no VNC server, so only the pre-seeded static-toolbox path ever carries a non-zero value.
 6. Launch a per-pod probe agent in `probes/` (see [Readiness probing](#readiness-probing) below). The agent's first probe runs synchronously so the initial `notify` push already reflects reachability; later probes run on a ticker and call back into the provider whenever readiness flips so the async notify hook re-fires.
 
@@ -76,7 +76,7 @@ The `probes/` package owns that loop:
 
 1. `CreatePod` (and startup reconcile) call `Manager.Start(key, probe, onUpdate)`. The probe closure the provider supplies performs three checks in order:
     1. The tracked VM still exists.
-    2. If the in-memory VM record has no IP, re-try the dnsmasq lease file by MAC and write it back via `setVMIP`.
+    2. If the in-memory VM record has no IP, re-try the cocoon-net lease file by MAC and write it back via `setVMIP`.
     3. `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the cocoon Windows golden image contract (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables all firewall profiles), and it decouples readiness from specific services so the same probe works for Linux and Windows guests alike.
 2. The first probe runs **synchronously inside `Start`** so the refreshStatus/notify pass that `CreatePod` does before returning already reflects the initial reachability decision.
 3. A background goroutine re-runs the probe on a ticker (2 s cold-start, 5 s once Ready) and invokes `onUpdate` after 3 consecutive failures flip readiness back to false. `onUpdate` re-reads the pod, rebuilds the status, and calls `notify` so the kubelet observes the change.
@@ -115,7 +115,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
 | `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Epoch base URL. |
 | `EPOCH_TOKEN` | unset | Bearer token (only needed for `/v2/` pushes; `/dl/` is anonymous). |
-| `VK_LEASES_PATH` | `/var/lib/misc/dnsmasq.leases` | dnsmasq lease file (must match cocoon-net). |
+| `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_SSH_PASSWORD` | unset | SSH password for `kubectl logs / exec` against Linux guests. |
 | `VK_ORPHAN_POLICY` | `alert` | `alert`, `destroy`, or `keep`. |
@@ -165,7 +165,7 @@ The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy`
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers. |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation. |
 | [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; vk-cocoon pulls and pushes via `epoch/snapshot` + `epoch/cloudimg`. |
-| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking provisioning (dnsmasq + iptables); vk-cocoon reads its lease file. |
+| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file. |
 
 ## License
 

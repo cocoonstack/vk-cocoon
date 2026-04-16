@@ -40,7 +40,7 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultEpochURL     = "http://epoch.cocoon-system.svc:8080"
-	defaultLeasesPath   = "/var/lib/misc/dnsmasq.leases"
+	defaultLeasesPath   = "/var/lib/cocoon/net/leases.json"
 	defaultSSHUser      = "root"
 	defaultSSHPort      = 22
 	defaultOrphanPolicy = string(provider.OrphanAlert)

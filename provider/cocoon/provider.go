@@ -169,8 +169,8 @@ func (p *Provider) setVMIP(namespace, name, ip string) {
 	}
 }
 
-// resolveVMIP returns the VM's IP, falling back to a dnsmasq lease lookup
-// when the IP is unknown but a MAC is available.
+// resolveVMIP returns the VM's IP, falling back to a cocoon-net lease
+// lookup when the IP is unknown but a MAC is available.
 func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	ip := v.IP
 	if ip != "" || v.MAC == "" || p.LeaseParser == nil {

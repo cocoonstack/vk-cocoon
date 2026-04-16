@@ -8,13 +8,13 @@ import (
 func TestAppendCreateArgsNormalizesResourceQuantities(t *testing.T) {
 	t.Parallel()
 
-	got := appendCreateArgs([]string{"vm", "run"}, 2, "4Gi", "dnsmasq-dhcp", "20Gi", 0, nil)
+	got := appendCreateArgs([]string{"vm", "run"}, 2, "4Gi", "cocoon-dhcp", "20Gi", 0, nil)
 	want := []string{
 		"vm", "run",
 		"--cpu", "2",
 		"--memory", "4294967296",
 		"--storage", "21474836480",
-		"--network", "dnsmasq-dhcp",
+		"--network", "cocoon-dhcp",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("appendCreateArgs() = %#v, want %#v", got, want)
