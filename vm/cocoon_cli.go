@@ -39,16 +39,29 @@ func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
 
 // Clone runs `cocoon vm clone`.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
-	args := []string{"vm", "clone"}
-	if opts.To != "" {
-		args = append(args, "--name", opts.To)
-	}
-	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
-	args = append(args, opts.From)
+	args := buildCloneArgs(opts)
 	if _, err := c.runJSON(ctx, args...); err != nil {
 		return nil, fmt.Errorf("cocoon vm clone: %w", err)
 	}
 	return c.Inspect(ctx, opts.To)
+}
+
+// buildCloneArgs assembles the cocoon vm clone argv. Firecracker restores
+// the entire VM state from the snapshot and cannot resize CPU/memory on
+// load, so those overrides are stripped when targeting firecracker. Extracted
+// for direct unit-test coverage.
+func buildCloneArgs(opts CloneOptions) []string {
+	args := []string{"vm", "clone"}
+	if opts.To != "" {
+		args = append(args, "--name", opts.To)
+	}
+	cpu, memory := opts.CPU, opts.Memory
+	if opts.Backend == backendFirecracker {
+		cpu, memory = 0, ""
+	}
+	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	args = append(args, opts.From)
+	return args
 }
 
 // Run runs `cocoon vm run`.

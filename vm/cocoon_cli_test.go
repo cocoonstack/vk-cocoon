@@ -34,6 +34,40 @@ func TestAppendCreateArgsKeepsEmptyInheritedValues(t *testing.T) {
 	}
 }
 
+func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		opts CloneOptions
+		want []string
+	}{
+		{
+			name: "cloud-hypervisor clone passes cpu/memory through",
+			opts: CloneOptions{From: "snap-a", To: "vm-a", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "cloud-hypervisor"},
+			want: []string{"vm", "clone", "--name", "vm-a", "--cpu", "2", "--memory", "4294967296", "--storage", "21474836480", "snap-a"},
+		},
+		{
+			name: "firecracker clone drops cpu/memory but keeps storage",
+			opts: CloneOptions{From: "snap-a", To: "vm-b", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "firecracker"},
+			want: []string{"vm", "clone", "--name", "vm-b", "--storage", "21474836480", "snap-a"},
+		},
+		{
+			name: "empty backend behaves like cloud-hypervisor",
+			opts: CloneOptions{From: "snap-a", To: "vm-c", CPU: 1, Memory: "1Gi"},
+			want: []string{"vm", "clone", "--name", "vm-c", "--cpu", "1", "--memory", "1073741824", "snap-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildCloneArgs(tc.opts)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("buildCloneArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildRunArgsAppendsBackendAndOSFlags(t *testing.T) {
 	t.Parallel()
 
