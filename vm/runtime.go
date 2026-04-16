@@ -22,10 +22,14 @@ type VM struct {
 
 // Snapshot is the subset of `cocoon snapshot inspect` needed to restore
 // a VM. Image is required for cloudimg-backed snapshots' qcow2 backing chain.
+// Hypervisor records which backend ("cloud-hypervisor" or "firecracker")
+// produced the snapshot, so vk-cocoon can reject backend-mismatched clones
+// before shelling out to cocoon.
 type Snapshot struct {
-	ID    string
-	Name  string
-	Image string
+	ID         string
+	Name       string
+	Image      string
+	Hypervisor string
 }
 
 // CloneOptions is the input to Runtime.Clone.
@@ -38,6 +42,7 @@ type CloneOptions struct {
 	Storage string
 	NICs    int
 	DNS     []string
+	Backend string
 }
 
 // RunOptions is the input to Runtime.Run.
@@ -52,6 +57,7 @@ type RunOptions struct {
 	DNS     []string
 	OS      string
 	Force   bool
+	Backend string
 }
 
 // ImportOptions is the input to Runtime.SnapshotImport.

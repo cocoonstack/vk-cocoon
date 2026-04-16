@@ -25,9 +25,10 @@ type inspectJSON struct {
 
 // snapshotJSON is the wire format of `cocoon snapshot inspect`.
 type snapshotJSON struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Hypervisor string `json:"hypervisor"`
 }
 
 // parseInspectJSON unmarshals a VM record.
@@ -69,9 +70,10 @@ func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
 		return nil, fmt.Errorf("decode snapshot inspect: %w", err)
 	}
 	return &Snapshot{
-		ID:    d.ID,
-		Name:  d.Name,
-		Image: d.Image,
+		ID:         d.ID,
+		Name:       d.Name,
+		Image:      d.Image,
+		Hypervisor: d.Hypervisor,
 	}, nil
 }
 

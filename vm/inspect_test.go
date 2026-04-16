@@ -103,7 +103,8 @@ func TestParseSnapshotJSON(t *testing.T) {
 	raw := []byte(`{
   "id": "snap-1",
   "name": "demo-snapshot",
-  "image": "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+  "image": "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img",
+  "hypervisor": "firecracker"
 }`)
 
 	got, err := parseSnapshotJSON(raw)
@@ -118,5 +119,8 @@ func TestParseSnapshotJSON(t *testing.T) {
 	}
 	if got.Image == "" {
 		t.Fatal("Image should not be empty")
+	}
+	if got.Hypervisor != "firecracker" {
+		t.Fatalf("Hypervisor = %q, want firecracker", got.Hypervisor)
 	}
 }

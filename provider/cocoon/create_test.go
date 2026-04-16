@@ -304,6 +304,115 @@ func TestLocalSnapshotName(t *testing.T) {
 	}
 }
 
+func TestAssertSnapshotBackend(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		snapshot *vm.Snapshot
+		target   string
+		wantErr  bool
+	}{
+		{name: "nil snapshot accepts any target", snapshot: nil, target: "firecracker"},
+		{name: "empty hypervisor accepts any target", snapshot: &vm.Snapshot{Name: "s"}, target: "firecracker"},
+		{name: "empty target accepts any snapshot", snapshot: &vm.Snapshot{Name: "s", Hypervisor: "firecracker"}, target: ""},
+		{name: "matching backends accepted", snapshot: &vm.Snapshot{Name: "s", Hypervisor: "firecracker"}, target: "firecracker"},
+		{name: "ch snapshot vs fc target rejected", snapshot: &vm.Snapshot{Name: "s", Hypervisor: "cloud-hypervisor"}, target: "firecracker", wantErr: true},
+		{name: "fc snapshot vs ch target rejected", snapshot: &vm.Snapshot{Name: "s", Hypervisor: "firecracker"}, target: "cloud-hypervisor", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := assertSnapshotBackend(tc.snapshot, tc.target)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("assertSnapshotBackend(%#v, %q) err = %v, wantErr = %v", tc.snapshot, tc.target, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCreatePodCloneModePropagatesBackend(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo": {
+				Name:       "snapshot-repo",
+				Image:      "ghcr.io/x/y:1",
+				Hypervisor: "firecracker",
+			},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-fc",
+		Image:   "snapshot-repo:latest",
+		Mode:    "clone",
+		Backend: "firecracker",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatalf("Runtime.Clone was not called")
+	}
+	if rt.cloned.Backend != "firecracker" {
+		t.Errorf("Clone Backend = %q, want firecracker", rt.cloned.Backend)
+	}
+}
+
+func TestCreatePodCloneModeRejectsBackendMismatch(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo": {
+				Name:       "snapshot-repo",
+				Image:      "ghcr.io/x/y:1",
+				Hypervisor: "cloud-hypervisor",
+			},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-fc",
+		Image:   "snapshot-repo:latest",
+		Mode:    "clone",
+		Backend: "firecracker",
+	})
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil {
+		t.Fatalf("expected backend mismatch error, got nil")
+	}
+	if rt.cloned != nil {
+		t.Errorf("Runtime.Clone should not have been called on backend mismatch")
+	}
+}
+
+func TestCreatePodRunModePropagatesBackend(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-fc-run",
+		Image:   "ghcr.io/x/y:1",
+		Mode:    "run",
+		Backend: "firecracker",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.ran == nil {
+		t.Fatalf("Runtime.Run was not called")
+	}
+	if rt.ran.Backend != "firecracker" {
+		t.Errorf("Run Backend = %q, want firecracker", rt.ran.Backend)
+	}
+}
+
 func TestCreatePodCloneModeWithTag(t *testing.T) {
 	rt := &fakeRuntime{
 		snapshots: map[string]*vm.Snapshot{

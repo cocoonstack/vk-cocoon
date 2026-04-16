@@ -13,7 +13,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const defaultCocoonBinary = "/usr/local/bin/cocoon"
+const (
+	defaultCocoonBinary = "/usr/local/bin/cocoon"
+	// backendFirecracker matches cocoonv1.BackendFirecracker; kept as a
+	// literal string here to avoid dragging the CRD types into the runtime
+	// package just for a single compare.
+	backendFirecracker = "firecracker"
+)
 
 var _ Runtime = (*CocoonCLI)(nil)
 
@@ -51,6 +57,16 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 		return nil, fmt.Errorf("ensure image %s: %w", opts.Image, err)
 	}
 
+	args := buildRunArgs(opts)
+	if _, err := c.runJSON(ctx, args...); err != nil {
+		return nil, fmt.Errorf("cocoon vm run: %w", err)
+	}
+	return c.Inspect(ctx, opts.Name)
+}
+
+// buildRunArgs assembles the cocoon vm run argv. Extracted for direct
+// unit-test coverage of the backend / OS flag fan-out.
+func buildRunArgs(opts RunOptions) []string {
 	args := []string{"vm", "run"}
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
@@ -59,11 +75,11 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	if strings.EqualFold(opts.OS, "windows") {
 		args = append(args, "--windows")
 	}
-	args = append(args, opts.Image)
-	if _, err := c.runJSON(ctx, args...); err != nil {
-		return nil, fmt.Errorf("cocoon vm run: %w", err)
+	if opts.Backend == backendFirecracker {
+		args = append(args, "--fc")
 	}
-	return c.Inspect(ctx, opts.Name)
+	args = append(args, opts.Image)
+	return args
 }
 
 // EnsureImage ensures the image is available locally and up to date.

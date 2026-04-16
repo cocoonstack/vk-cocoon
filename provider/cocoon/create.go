@@ -75,6 +75,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
 	cpu, memory := vmResourceOverrides(pod)
 	forcePull := spec.ForcePull
+	backend := spec.Backend
 	mode := strings.ToLower(spec.Mode)
 	switch {
 	case !spec.Managed:
@@ -96,6 +97,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Memory:  memory,
 			Network: spec.Network,
 			Storage: spec.Storage,
+			Backend: backend,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -112,6 +114,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Storage: spec.Storage,
 			OS:      spec.OS,
 			Force:   forcePull,
+			Backend: backend,
 		}
 		v, err := p.Runtime.Run(ctx, opts)
 		if err != nil {
@@ -128,6 +131,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, fmt.Errorf("ensure snapshot %s: %w", local, err)
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
+		if backendErr := assertSnapshotBackend(snapshot, backend); backendErr != nil {
+			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, backendErr)
+		}
 		if snapshot != nil && snapshot.Image != "" {
 			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image, forcePull); ensureErr != nil {
 				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
@@ -141,6 +147,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Memory:  memory,
 			Network: spec.Network,
 			Storage: spec.Storage,
+			Backend: backend,
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
@@ -148,6 +155,20 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		return v, nil
 	}
+}
+
+// assertSnapshotBackend rejects a clone when the target backend differs from
+// the backend that produced the snapshot. CH and FC store state incompatibly,
+// so letting this reach cocoon would fail with a harder-to-debug error.
+func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
+	if snapshot == nil || snapshot.Hypervisor == "" || targetBackend == "" {
+		return nil
+	}
+	if snapshot.Hypervisor == targetBackend {
+		return nil
+	}
+	return fmt.Errorf("snapshot %s was taken with %s but CocoonSet requests %s",
+		snapshot.Name, snapshot.Hypervisor, targetBackend)
 }
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.
