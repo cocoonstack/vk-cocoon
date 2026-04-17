@@ -74,5 +74,5 @@ func cowFileNames(dir string) []string {
 	if dir == runDirFC {
 		return []string{"cow.raw"}
 	}
-	return []string{"overlay.qcow2"}
+	return []string{"overlay.qcow2", "cow.raw"}
 }
