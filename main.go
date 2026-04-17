@@ -168,6 +168,8 @@ func main() {
 		logger.Fatalf(signalCtx, err, "create virtual-kubelet node: %v", err)
 	}
 
+	prometheus.DefaultRegisterer.MustRegister(metrics.NewVMCollector(p.CollectVMStats))
+
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
 	metricsServer := &http.Server{

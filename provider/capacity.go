@@ -196,6 +196,16 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 	return result, nil
 }
 
+// StorageBytes returns total and available bytes on the cocoon root filesystem.
+func StorageBytes() (total, available int64) {
+	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+	var stat syscallStatfs
+	if err := statfs(rootDir, &stat); err != nil {
+		return 0, 0
+	}
+	return statTotalBytes(stat), statAvailBytes(stat)
+}
+
 func parseQuantityEnv(key, fallback string) (resource.Quantity, error) {
 	raw := commonk8s.EnvOrDefault(key, fallback)
 	q, err := resource.ParseQuantity(raw)
