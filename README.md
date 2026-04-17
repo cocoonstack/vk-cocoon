@@ -64,6 +64,37 @@ On startup, vk-cocoon probes the host for real CPU, memory, hugepages, and disk 
 - Values are read **once at startup** and do not update while vk-cocoon is running; a restart refreshes them (idempotent)
 - Individual resources can be force-overridden via `VK_NODE_CPU`, `VK_NODE_MEM`, `VK_NODE_STORAGE`, `VK_NODE_HUGEPAGES`, `VK_NODE_PODS`
 
+### Metrics and monitoring
+
+vk-cocoon exposes three metrics surfaces:
+
+**`:10250/stats/summary`** — kubelet stats API consumed by metrics-server and `kubectl top`. Reports per-pod CPU (cumulative nanoseconds from `/proc/<pid>/stat`) and memory (RSS from `/proc/<pid>/status`), plus per-pod network I/O from the TAP device inside each VM's network namespace (`/proc/<pid>/net/dev`). Node-level CPU and memory are read from `/proc/stat` and `/proc/meminfo`.
+
+**`:10250/metrics/resource`** — Prometheus text format with the metric families metrics-server and HPA require: `node_cpu_usage_seconds_total`, `node_memory_working_set_bytes`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, `pod_cpu_usage_seconds_total`, `pod_memory_working_set_bytes`.
+
+**`:9091/metrics`** — Prometheus endpoint with vk-cocoon-specific metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `vk_cocoon_vm_cpu_seconds_total{vm,pod,namespace,backend}` | Counter | Per-VM cumulative CPU |
+| `vk_cocoon_vm_memory_rss_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM RSS |
+| `vk_cocoon_vm_disk_cow_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM COW overlay actual size |
+| `vk_cocoon_vm_network_rx_bytes_total` / `tx_bytes_total` | Counter | Per-VM TAP network I/O |
+| `vk_cocoon_node_cpu_seconds_total` | Counter | Node cumulative CPU |
+| `vk_cocoon_node_memory_used_bytes` | Gauge | Node used memory |
+| `vk_cocoon_node_storage_available_bytes` / `total_bytes` | Gauge | Cocoon root filesystem |
+| `vk_cocoon_vm_boot_duration_seconds{mode,backend}` | Histogram | VM creation time (run or clone) |
+| `vk_cocoon_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
+| `vk_cocoon_snapshot_push_duration_seconds` | Histogram | Epoch push time |
+| `vk_cocoon_snapshot_pull_duration_seconds` | Histogram | Epoch pull time |
+| `vk_cocoon_probe_duration_seconds` | Histogram | Per-probe ICMP ping time |
+| `vk_cocoon_pod_lifecycle_total{op,result}` | Counter | Pod lifecycle operations |
+| `vk_cocoon_snapshot_pull_total{result}` / `push_total` | Counter | Snapshot pull/push counts |
+| `vk_cocoon_vm_table_size` | Gauge | Tracked VM count |
+| `vk_cocoon_orphan_vm_total` | Counter | Orphan VMs at startup |
+
+All per-VM stats are read from `/proc` using the hypervisor PID tracked in memory — no shell-out to `cocoon` on each scrape. The tracking table is snapshot-copied under RLock and `/proc` reads happen outside the lock to avoid blocking CreatePod/DeletePod. When a VM is restarted in-place (event watcher → `cocoon vm start`), the PID is re-inspected and refreshed.
+
 ### Startup reconcile
 
 Cluster state is the source of truth. There is **no** persistent `pods.json` file. On every restart vk-cocoon:
