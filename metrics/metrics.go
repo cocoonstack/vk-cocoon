@@ -52,6 +52,52 @@ var (
 			Help:      "Number of orphan VMs detected during startup reconcile.",
 		},
 	)
+
+	VMBootDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "vm_boot_duration_seconds",
+			Help:      "Time to create a VM (run or clone), from start to Running.",
+			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+		},
+		[]string{"mode", "backend"}, // mode=run|clone, backend=cloud-hypervisor|firecracker
+	)
+
+	SnapshotSaveDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "snapshot_save_duration_seconds",
+			Help:      "Time to save a VM snapshot (cocoon snapshot save).",
+			Buckets:   []float64{1, 2, 5, 10, 30, 60, 120},
+		},
+	)
+
+	SnapshotPushDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "snapshot_push_duration_seconds",
+			Help:      "Time to push a snapshot to epoch.",
+			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
+		},
+	)
+
+	SnapshotPullDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "snapshot_pull_duration_seconds",
+			Help:      "Time to pull a snapshot from epoch.",
+			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
+		},
+	)
+
+	ProbeDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "probe_duration_seconds",
+			Help:      "Time taken by a single readiness probe (ICMP ping).",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+		},
+	)
 )
 
 // Register installs all collectors.
@@ -62,5 +108,10 @@ func Register(reg prometheus.Registerer) {
 		SnapshotPushTotal,
 		VMTableSize,
 		OrphanVMTotal,
+		VMBootDuration,
+		SnapshotSaveDuration,
+		SnapshotPushDuration,
+		SnapshotPullDuration,
+		ProbeDuration,
 	)
 }

@@ -43,11 +43,13 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 
+	bootStart := time.Now()
 	v, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("create", "failed").Inc()
 		return err
 	}
+	metrics.VMBootDuration.WithLabelValues(spec.Mode, spec.Backend).Observe(time.Since(bootStart).Seconds())
 
 	// Resolve IP from cocoon-net lease before returning.
 	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
@@ -185,9 +187,11 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	if p.Puller == nil {
 		return nil, nil
 	}
+	pullStart := time.Now()
 	if pullErr := p.Puller.PullSnapshot(ctx, repo, tag, local); pullErr != nil {
 		return nil, pullErr
 	}
+	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
 	snapshot, err = p.Runtime.Snapshot(ctx, local)
 	if err != nil {
 		return nil, fmt.Errorf("inspect imported snapshot %s: %w", local, err)

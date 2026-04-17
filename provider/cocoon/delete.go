@@ -27,15 +27,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 
 	if meta.ShouldSnapshotVM(spec) && p.Pusher != nil && v.Name != "" {
-		if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
-			logger.Warnf(ctx, "snapshot save %s: %v", v.Name, err)
-			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-		} else if _, err := p.Pusher.PushSnapshot(ctx, v.Name, "", meta.DefaultSnapshotTag, spec.Image); err != nil {
-			logger.Warnf(ctx, "push snapshot %s: %v", v.Name, err)
-			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-		} else {
-			metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
-		}
+		p.saveAndPushSnapshot(ctx, v.Name, v.ID, meta.DefaultSnapshotTag, spec.Image)
 	}
 
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {

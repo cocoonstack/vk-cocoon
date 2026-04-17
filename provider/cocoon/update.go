@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -55,13 +56,17 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // so the operator does not observe Hibernated while the VM is still running.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
+	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		return fmt.Errorf("snapshot save %s: %w", v.Name, err)
 	}
+	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
 	if p.Pusher != nil {
+		pushStart := time.Now()
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
 			return fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 		}
+		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {

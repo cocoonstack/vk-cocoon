@@ -8,6 +8,8 @@ import (
 	"maps"
 	"sync"
 	"time"
+
+	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
 const (
@@ -188,7 +190,10 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 func runProbe(ctx context.Context, probe Probe) (bool, string) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	return probe(probeCtx)
+	start := time.Now()
+	ok, msg := probe(probeCtx)
+	metrics.ProbeDuration.Observe(time.Since(start).Seconds())
+	return ok, msg
 }
 
 // applyResult writes one probe outcome into the result map.
