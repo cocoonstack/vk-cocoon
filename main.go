@@ -96,10 +96,9 @@ func main() {
 	}
 	logger.Infof(signalCtx, "kubelet TLS from %s", tlsSource)
 
-	// Fail early on malformed overrides.
-	nodeCapacity, err := provider.NodeCapacity()
+	nodeCapacity, nodeAllocatable, err := provider.NodeResources()
 	if err != nil {
-		logger.Fatalf(signalCtx, err, "node capacity: %v", err)
+		logger.Fatalf(signalCtx, err, "node resources: %v", err)
 	}
 
 	p := buildProvider(signalCtx, buildOpts{
@@ -133,7 +132,7 @@ func main() {
 				{Type: corev1.NodeHostName, Address: nodeName},
 			}
 			cfg.Node.Status.Capacity = nodeCapacity
-			cfg.Node.Status.Allocatable = nodeCapacity
+			cfg.Node.Status.Allocatable = nodeAllocatable
 			cfg.Node.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
 				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
 			}

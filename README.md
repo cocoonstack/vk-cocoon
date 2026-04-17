@@ -54,6 +54,16 @@ The only update vk-cocoon honors is a `HibernateState` transition. Anything else
 
 The operator's `CocoonHibernation` reconciler tracks the transition by polling `epoch.GetManifest(vmName, "hibernate")`.
 
+### Node resources
+
+On startup, vk-cocoon probes the host for real CPU, memory, hugepages, and disk capacity and registers them as the virtual node's `Capacity` and `Allocatable` in the Kubernetes API. This replaces the previous hardcoded defaults (128 CPU / 512Gi) with values the scheduler can trust.
+
+- **Capacity** = raw host resources (`runtime.NumCPU`, `/proc/meminfo` MemTotal, `statfs` total, hugepages-2Mi)
+- **Allocatable** = Capacity minus a reserve fraction (default 20%, override via `VK_RESERVE_PERCENT`)
+- **Storage allocatable** uses `statfs` available bytes (`Bavail`) instead of total — base images, existing COW overlays, and snapshots are naturally excluded from the budget
+- Values are read **once at startup** and do not update while vk-cocoon is running; a restart refreshes them (idempotent)
+- Individual resources can be force-overridden via `VK_NODE_CPU`, `VK_NODE_MEM`, `VK_NODE_STORAGE`, `VK_NODE_HUGEPAGES`, `VK_NODE_PODS`
+
 ### Startup reconcile
 
 Cluster state is the source of truth. There is **no** persistent `pods.json` file. On every restart vk-cocoon:
@@ -125,6 +135,12 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_TLS_CERT` | `/etc/cocoon/vk/tls/vk-kubelet.crt` | Path to the kubelet serving TLS certificate. |
 | `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |
 | `VK_METRICS_ADDR` | `:9091` | Plain-HTTP prometheus listener. |
+| `VK_RESERVE_PERCENT` | `20` | Percentage of host resources reserved for the host OS (0-100). Allocatable = Capacity × (100 - reserve) / 100. |
+| `VK_NODE_CPU` | auto-detected | Override CPU capacity (auto: `runtime.NumCPU()`). |
+| `VK_NODE_MEM` | auto-detected | Override memory capacity (auto: `/proc/meminfo` MemTotal). |
+| `VK_NODE_STORAGE` | auto-detected | Override storage capacity (auto: `statfs` on `COCOON_ROOT_DIR`). |
+| `VK_NODE_HUGEPAGES` | auto-detected | Override hugepages-2Mi capacity (auto: `/proc/meminfo`). |
+| `VK_NODE_PODS` | `256` | Maximum pod count. |
 
 ## Installation
 
