@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"os"
 	"runtime"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
 func TestReserveQuantity(t *testing.T) {
@@ -35,6 +38,10 @@ func TestReserveQuantity(t *testing.T) {
 func TestNodeResourcesDefaults(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("requires /proc")
+	}
+	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+	if _, err := os.Stat(rootDir); err != nil {
+		t.Skipf("requires %s for statfs", rootDir)
 	}
 	cap, alloc, err := NodeResources()
 	if err != nil {
