@@ -8,16 +8,20 @@ import (
 
 // inspectJSON is the wire format of `cocoon vm inspect --json`.
 type inspectJSON struct {
-	ID     string `json:"id"`
-	State  string `json:"state"`
-	Config struct {
+	ID         string `json:"id"`
+	Hypervisor string `json:"hypervisor"`
+	State      string `json:"state"`
+	PID        int    `json:"pid"`
+	Config     struct {
 		Name   string `json:"name"`
 		CPU    int    `json:"cpu"`
 		Memory int64  `json:"memory"`
 	} `json:"config"`
 	NetworkConfigs []struct {
-		Mac     string `json:"mac"`
-		Network *struct {
+		Tap       string `json:"tap"`
+		Mac       string `json:"mac"`
+		NetNSPath string `json:"netns_path"`
+		Network   *struct {
 			IP string `json:"ip"`
 		} `json:"network,omitempty"`
 	} `json:"network_configs,omitempty"`
@@ -79,19 +83,26 @@ func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
 
 func inspectJSONToVM(d inspectJSON) *VM {
 	v := &VM{
-		ID:    d.ID,
-		Name:  d.Config.Name,
-		State: d.State,
-		CPU:   d.Config.CPU,
-		Mem:   d.Config.Memory,
+		ID:         d.ID,
+		Hypervisor: d.Hypervisor,
+		Name:       d.Config.Name,
+		State:      d.State,
+		CPU:        d.Config.CPU,
+		Mem:        d.Config.Memory,
+		PID:        d.PID,
 	}
-	if len(d.NetworkConfigs) == 0 {
-		return v
+	for _, nc := range d.NetworkConfigs {
+		v.NetworkConfigs = append(v.NetworkConfigs, &NetworkConfig{
+			Tap:       nc.Tap,
+			MAC:       nc.Mac,
+			NetNSPath: nc.NetNSPath,
+		})
 	}
-
-	v.MAC = d.NetworkConfigs[0].Mac
-	if d.NetworkConfigs[0].Network != nil {
-		v.IP = d.NetworkConfigs[0].Network.IP
+	if len(d.NetworkConfigs) > 0 {
+		v.MAC = d.NetworkConfigs[0].Mac
+		if d.NetworkConfigs[0].Network != nil {
+			v.IP = d.NetworkConfigs[0].Network.IP
+		}
 	}
 	return v
 }

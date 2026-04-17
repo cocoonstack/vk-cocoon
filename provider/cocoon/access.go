@@ -8,9 +8,7 @@ import (
 	"io"
 	"strings"
 
-	dto "github.com/prometheus/client_model/go"
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
-	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 )
@@ -82,14 +80,4 @@ func (p *Provider) PortForward(_ context.Context, _, _ string, _ int32, _ io.Rea
 	return errPortForwardNotImplemented
 }
 
-// GetStatsSummary returns a minimal kubelet stats summary stub.
-func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
-	return &statsv1alpha1.Summary{
-		Node: statsv1alpha1.NodeStats{NodeName: p.NodeName},
-	}, nil
-}
-
-// GetMetricsResource returns nil; real collectors live on the metrics listener.
-func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
-	return nil, nil
-}
+// GetStatsSummary and GetMetricsResource are implemented in stats.go.

@@ -46,6 +46,7 @@ type Provider struct {
 	Probes       *probes.Manager
 	OrphanPolicy provider.OrphanPolicy
 
+	startTime   time.Time
 	mu          sync.RWMutex
 	pods        map[string]*corev1.Pod
 	vmsByPod    map[string]*vm.VM
@@ -58,6 +59,7 @@ type Provider struct {
 // Default Pinger is NopPinger so tests degrade gracefully.
 func NewProvider() *Provider {
 	return &Provider{
+		startTime:    time.Now(),
 		OrphanPolicy: provider.OrphanAlert,
 		Pinger:       network.NopPinger{},
 		pods:         map[string]*corev1.Pod{},

@@ -9,15 +9,25 @@ import (
 // StateRunning is the state string cocoon reports for a live VM.
 const StateRunning = "running"
 
+// NetworkConfig is a single NIC configuration from cocoon vm inspect.
+type NetworkConfig struct {
+	Tap       string `json:"tap"`
+	MAC       string `json:"mac"`
+	NetNSPath string `json:"netns_path"`
+}
+
 // VM is the runtime view of a cocoon VM.
 type VM struct {
-	ID    string
-	Name  string
-	State string
-	IP    string
-	MAC   string
-	CPU   int
-	Mem   int64
+	ID             string
+	Name           string
+	Hypervisor     string
+	State          string
+	IP             string
+	MAC            string
+	CPU            int
+	Mem            int64
+	PID            int
+	NetworkConfigs []*NetworkConfig
 }
 
 // Snapshot is the subset of `cocoon snapshot inspect` needed to restore
