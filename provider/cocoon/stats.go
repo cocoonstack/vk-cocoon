@@ -105,25 +105,40 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	}
 
 	snapshots := p.snapshotTrackedVMs()
-	var cpuMetrics, memMetrics []*dto.Metric
+	var containerCPU, containerMem, podCPU, podMem []*dto.Metric
 	for _, s := range snapshots {
-		labels := []*dto.LabelPair{
+		cpuSec := readProcessCPUSeconds(s.PID)
+		memBytes := float64(readProcessMemoryWorkingSet(s.PID))
+
+		containerLabels := []*dto.LabelPair{
 			{Name: proto.String("namespace"), Value: proto.String(s.Namespace)},
 			{Name: proto.String("pod"), Value: proto.String(s.PodName)},
 			{Name: proto.String("container"), Value: proto.String("agent")},
 		}
-		cpuMetrics = append(cpuMetrics, newCounter(readProcessCPUSeconds(s.PID), nowMs, labels))
-		memMetrics = append(memMetrics, newGauge(float64(readProcessMemoryWorkingSet(s.PID)), nowMs, labels))
+		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
+		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
+
+		podLabels := []*dto.LabelPair{
+			{Name: proto.String("namespace"), Value: proto.String(s.Namespace)},
+			{Name: proto.String("pod"), Value: proto.String(s.PodName)},
+		}
+		podCPU = append(podCPU, newCounter(cpuSec, nowMs, podLabels))
+		podMem = append(podMem, newGauge(memBytes, nowMs, podLabels))
 	}
 
-	if len(cpuMetrics) > 0 {
+	if len(containerCPU) > 0 {
 		families = append(families,
 			newCounterFamily("container_cpu_usage_seconds_total",
-				"Cumulative cpu time consumed by the container in core-seconds", cpuMetrics...),
+				"Cumulative cpu time consumed by the container in core-seconds", containerCPU...),
 			newGaugeFamily("container_memory_working_set_bytes",
-				"Current working set of the container in bytes", memMetrics...),
+				"Current working set of the container in bytes", containerMem...),
+			newCounterFamily("pod_cpu_usage_seconds_total",
+				"Cumulative cpu time consumed by the pod in core-seconds", podCPU...),
+			newGaugeFamily("pod_memory_working_set_bytes",
+				"Current working set of the pod in bytes", podMem...),
 		)
 	}
+
 	return families, nil
 }
 

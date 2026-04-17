@@ -311,8 +311,17 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, evicting pod", trackedID)
 			p.evictPod(ctx, affectedKey, affectedPod)
+			return
 		}
-		// Probe will re-ping and flip Ready once the VM is back.
+		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
+		if fresh, inspectErr := p.Runtime.Inspect(ctx, trackedID); inspectErr == nil {
+			p.mu.Lock()
+			if old := p.vmsByName[fresh.Name]; old != nil {
+				old.PID = fresh.PID
+				old.NetworkConfigs = fresh.NetworkConfigs
+			}
+			p.mu.Unlock()
+		}
 	}
 }
 

@@ -9,6 +9,12 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
+const (
+	hypervisorFirecracker = "firecracker"
+	runDirCH              = "cloudhypervisor"
+	runDirFC              = "firecracker"
+)
+
 // CollectVMStats returns per-VM and node-level stats for the Prometheus
 // collector. Called on every scrape from the metrics endpoint.
 func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
@@ -45,12 +51,8 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 // readCOWSize returns the actual disk usage of a VM's writable overlay.
 func readCOWSize(vmID, hypervisor string) int64 {
 	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
-	dir := hypervisor
-	if dir == "" {
-		dir = "cloudhypervisor" // default backend
-	}
-	cowNames := cowFileNames(dir)
-	for _, name := range cowNames {
+	dir := hypervisorRunDir(hypervisor)
+	for _, name := range cowFileNames(dir) {
 		path := fmt.Sprintf("%s/run/%s/%s/%s", rootDir, dir, vmID, name)
 		if fi, err := os.Stat(path); err == nil {
 			return fi.Size()
@@ -59,11 +61,18 @@ func readCOWSize(vmID, hypervisor string) int64 {
 	return 0
 }
 
-func cowFileNames(hypervisor string) []string {
-	switch hypervisor {
-	case "firecracker":
-		return []string{"cow.raw"}
-	default:
-		return []string{"overlay.qcow2"}
+// hypervisorRunDir maps the inspect "hypervisor" field to the actual
+// run directory name (cocoon uses "cloudhypervisor" without a hyphen).
+func hypervisorRunDir(hypervisor string) string {
+	if hypervisor == hypervisorFirecracker {
+		return runDirFC
 	}
+	return runDirCH
+}
+
+func cowFileNames(dir string) []string {
+	if dir == runDirFC {
+		return []string{"cow.raw"}
+	}
+	return []string{"overlay.qcow2"}
 }
