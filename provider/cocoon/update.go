@@ -103,6 +103,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Memory:  memory,
 		Network: spec.Network,
 		Storage: spec.Storage,
+		Backend: spec.Backend,
 	})
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
