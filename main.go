@@ -25,6 +25,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -218,7 +219,11 @@ type buildOpts struct {
 
 func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
 	logger := log.WithFunc("buildProvider")
-	registry := snapshots.New(opts.epochURL, opts.epochToken)
+	var registryOpts []registryclient.Option
+	if ca := os.Getenv("EPOCH_CA_CERT"); ca != "" {
+		registryOpts = append(registryOpts, registryclient.WithCACert(ca))
+	}
+	registry := snapshots.New(opts.epochURL, opts.epochToken, registryOpts...)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName

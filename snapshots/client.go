@@ -21,6 +21,6 @@ type RegistryClient interface {
 var _ RegistryClient = (*registryclient.Client)(nil)
 
 // New constructs a RegistryClient for the given epoch base URL and token.
-func New(baseURL, token string) RegistryClient {
-	return registryclient.New(baseURL, token)
+func New(baseURL, token string, opts ...registryclient.Option) RegistryClient {
+	return registryclient.New(baseURL, token, opts...)
 }
