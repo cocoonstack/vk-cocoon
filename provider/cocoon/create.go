@@ -248,10 +248,13 @@ func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) 
 
 // patchRuntimeAnnotations patches VMID/IP annotations back to the API server.
 func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
-	p.patchPodAnnotations(ctx, namespace, name, map[string]any{
+	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
+	if err := p.patchPodAnnotations(ctx, namespace, name, map[string]any{
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
-	})
+	}); err != nil {
+		logger.Errorf(ctx, err, "patch runtime annotations %s/%s", namespace, name)
+	}
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

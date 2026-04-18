@@ -28,6 +28,15 @@ var (
 		[]string{"result"},
 	)
 
+	SnapshotSaveTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "snapshot_save_total",
+			Help:      "Number of snapshot saves by result.",
+		},
+		[]string{"result"},
+	)
+
 	SnapshotPushTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -104,6 +113,7 @@ var (
 func Register(reg prometheus.Registerer) {
 	reg.MustRegister(
 		PodLifecycleTotal,
+		SnapshotSaveTotal,
 		SnapshotPullTotal,
 		SnapshotPushTotal,
 		VMTableSize,

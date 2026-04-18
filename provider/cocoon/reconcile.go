@@ -69,6 +69,13 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		idx, ok := vmByID[runtime.VMID]
 		if !ok {
+			// Hibernated pod with stale VMID — the VM was removed during
+			// hibernate but the annotation patch failed. Clear the stale
+			// annotations and track the pod without a VM so wake works.
+			if meta.ReadHibernateState(pod) {
+				p.reconcileStaleHibernate(ctx, pod)
+				continue
+			}
 			logger.Warnf(ctx, "pod %s/%s annotates VMID %s but no such VM exists locally; CreatePod will recreate",
 				pod.Namespace, pod.Name, runtime.VMID)
 			continue
@@ -97,6 +104,19 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 		return nil
 	}
 	return list.Items
+}
+
+// reconcileStaleHibernate clears stale VMID/IP annotations from a
+// hibernated pod whose VM was already removed. This happens when the
+// annotation patch in hibernate() failed — the pod kept stale runtime
+// annotations. We patch them away so wake can proceed normally.
+func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
+	logger := log.WithFunc("Provider.reconcileStaleHibernate")
+	logger.Infof(ctx, "pod %s/%s is hibernated with stale VMID, clearing annotations", pod.Namespace, pod.Name)
+	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		logger.Errorf(ctx, err, "clear stale hibernate annotations %s/%s", pod.Namespace, pod.Name)
+	}
+	p.trackPod(pod, nil)
 }
 
 // reconcileNoVMID handles a pod with no VMID during startup reconcile.

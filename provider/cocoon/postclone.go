@@ -40,7 +40,9 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 	encoded := base64.StdEncoding.EncodeToString([]byte(commands))
 	pod.Annotations[annotationPostCloneHint] = encoded
 
-	p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneHint: encoded})
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneHint: encoded}); err != nil {
+		logger.Errorf(ctx, err, "patch post-clone hint %s/%s", pod.Namespace, pod.Name)
+	}
 
 	logger.Warnf(ctx, "VM %s requires manual network setup via cocoon vm console; hint written to annotation %s",
 		spec.VMName, annotationPostCloneHint)

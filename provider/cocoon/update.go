@@ -58,15 +58,19 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	logger := log.WithFunc("Provider.hibernate")
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
+		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
 		return fmt.Errorf("snapshot save %s: %w", v.Name, err)
 	}
 	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
+	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 	if p.Pusher != nil {
 		pushStart := time.Now()
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
+			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			return fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 		}
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
+		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {
@@ -77,16 +81,12 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		}
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
-	// Clear runtime annotations so startup reconcile does not try to adopt
-	// a non-existent VM. The pod stays alive so wake knows what to restore.
-	if pod.Annotations != nil {
-		delete(pod.Annotations, meta.AnnotationVMID)
-		delete(pod.Annotations, meta.AnnotationIP)
+	// Best-effort: VM is already removed, so retrying the whole hibernate
+	// on patch failure would hit "VM not found". Log and continue.
+	// Startup reconcile detects the stale state via VMID + hibernate annotation.
+	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
 	}
-	p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
-		meta.AnnotationVMID: nil,
-		meta.AnnotationIP:   nil,
-	})
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	return nil
 }
@@ -103,9 +103,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	cpu, memory := vmResourceOverrides(pod)
 	importName := spec.VMName + hibernateImportSuffix
+	pullStart := time.Now()
 	if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
+		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
 		return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
 	}
+	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
+	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
+	cloneStart := time.Now()
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 		From:       importName,
 		To:         spec.VMName,
@@ -119,9 +124,11 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 	}
+	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.emitPostCloneHint(ctx, pod, spec, v, "") // wake has no snapshot source metadata
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
+	p.startProbeIfEnabled(pod)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil
 }

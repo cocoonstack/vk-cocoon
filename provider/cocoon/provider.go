@@ -17,6 +17,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
+	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -312,14 +313,28 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.mu.Unlock()
 		if !cooldownElapsed {
 			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
-			_ = p.Runtime.Remove(ctx, trackedID)
+			if err := p.Runtime.Remove(ctx, trackedID); err != nil {
+				// Remove failed — the VM still exists in an unknown state.
+				// Keep the pod so the user/operator can investigate; evicting
+				// would delete the pod while the orphan VM remains, causing
+				// name collisions when the operator recreates.
+				logger.Errorf(ctx, err, "remove vm %s during cooldown eviction, keeping pod for investigation", trackedID)
+				return
+			}
 			p.evictPod(ctx, affectedKey, affectedPod)
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
-			_ = p.Runtime.Remove(ctx, trackedID)
+			if removeErr := p.Runtime.Remove(ctx, trackedID); removeErr != nil {
+				// Remove failed — the VM still exists in an unknown state.
+				// Keep the pod so the user/operator can investigate; evicting
+				// would delete the pod while the orphan VM remains, causing
+				// name collisions when the operator recreates.
+				logger.Errorf(ctx, removeErr, "remove vm %s after failed restart, keeping pod for investigation", trackedID)
+				return
+			}
 			p.evictPod(ctx, affectedKey, affectedPod)
 			return
 		}
@@ -345,6 +360,7 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
 	p.dropVMLocked(key)
 	delete(p.pods, key)
 	p.mu.Unlock()
+	metrics.VMTableSize.Dec()
 
 	if p.Probes != nil {
 		p.Probes.Forget(key)
@@ -363,21 +379,34 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
 }
 
 // patchPodAnnotations patches the given annotations onto a pod via the API server.
-func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) {
+func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) error {
 	if p.Clientset == nil {
-		return
+		return nil
 	}
-	logger := log.WithFunc("Provider.patchPodAnnotations")
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	patch, err := commonk8s.AnnotationsMergePatch(annos)
 	if err != nil {
-		logger.Warnf(ctx, "marshal annotations %s/%s: %v", namespace, name, err)
-		return
+		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
 	}
 	if _, err := p.Clientset.CoreV1().Pods(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		logger.Warnf(ctx, "patch annotations %s/%s: %v", namespace, name, err)
+		return fmt.Errorf("patch annotations %s/%s: %w", namespace, name, err)
 	}
+	return nil
+}
+
+// clearRuntimeAnnotations removes VMID/IP from the pod's in-memory
+// annotations and patches the API server. Used by hibernate and startup
+// reconcile to clear stale runtime state.
+func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
+	if pod.Annotations != nil {
+		delete(pod.Annotations, meta.AnnotationVMID)
+		delete(pod.Annotations, meta.AnnotationIP)
+	}
+	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
+		meta.AnnotationVMID: nil,
+		meta.AnnotationIP:   nil,
+	})
 }
 
 // buildOnUpdate returns the callback invoked on readiness transitions.
