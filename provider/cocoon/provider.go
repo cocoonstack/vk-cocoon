@@ -311,13 +311,15 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		}
 		p.mu.Unlock()
 		if !cooldownElapsed {
-			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, evicting pod", trackedID, inspected.State)
+			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
+			_ = p.Runtime.Remove(ctx, trackedID)
 			p.evictPod(ctx, affectedKey, affectedPod)
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
-			logger.Errorf(ctx, startErr, "restart vm %s failed, evicting pod", trackedID)
+			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
+			_ = p.Runtime.Remove(ctx, trackedID)
 			p.evictPod(ctx, affectedKey, affectedPod)
 			return
 		}

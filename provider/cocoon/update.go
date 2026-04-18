@@ -77,11 +77,16 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		}
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
-	// Clear runtime annotations; the pod stays so wake knows what to restore.
+	// Clear runtime annotations so startup reconcile does not try to adopt
+	// a non-existent VM. The pod stays alive so wake knows what to restore.
 	if pod.Annotations != nil {
 		delete(pod.Annotations, meta.AnnotationVMID)
 		delete(pod.Annotations, meta.AnnotationIP)
 	}
+	p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
+		meta.AnnotationVMID: nil,
+		meta.AnnotationIP:   nil,
+	})
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	return nil
 }
