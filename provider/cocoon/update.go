@@ -102,13 +102,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
 	}
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-		From:    importName,
-		To:      spec.VMName,
-		CPU:     cpu,
-		Memory:  memory,
-		Network: spec.Network,
-		Storage: spec.Storage,
-		Backend: spec.Backend,
+		From:       importName,
+		To:         spec.VMName,
+		CPU:        cpu,
+		Memory:     memory,
+		Network:    spec.Network,
+		Storage:    spec.Storage,
+		Backend:    spec.Backend,
+		NoDirectIO: spec.NoDirectIO,
 	})
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)

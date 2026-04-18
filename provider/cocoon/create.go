@@ -78,6 +78,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	cpu, memory := vmResourceOverrides(pod)
 	forcePull := spec.ForcePull
 	backend := spec.Backend
+	noDirectIO := spec.NoDirectIO
 	mode := strings.ToLower(spec.Mode)
 	switch {
 	case !spec.Managed:
@@ -93,13 +94,14 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, err
 		}
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:    cloneFrom,
-			To:      spec.VMName,
-			CPU:     cpu,
-			Memory:  memory,
-			Network: spec.Network,
-			Storage: spec.Storage,
-			Backend: backend,
+			From:       cloneFrom,
+			To:         spec.VMName,
+			CPU:        cpu,
+			Memory:     memory,
+			Network:    spec.Network,
+			Storage:    spec.Storage,
+			Backend:    backend,
+			NoDirectIO: noDirectIO,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -108,15 +110,16 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 
 	case mode == string(cocoonv1.AgentModeRun):
 		opts := vm.RunOptions{
-			Image:   spec.Image,
-			Name:    spec.VMName,
-			CPU:     cpu,
-			Memory:  memory,
-			Network: spec.Network,
-			Storage: spec.Storage,
-			OS:      spec.OS,
-			Force:   forcePull,
-			Backend: backend,
+			Image:      spec.Image,
+			Name:       spec.VMName,
+			CPU:        cpu,
+			Memory:     memory,
+			Network:    spec.Network,
+			Storage:    spec.Storage,
+			OS:         spec.OS,
+			Force:      forcePull,
+			Backend:    backend,
+			NoDirectIO: noDirectIO,
 		}
 		v, err := p.Runtime.Run(ctx, opts)
 		if err != nil {
@@ -143,13 +146,14 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 
 		opts := vm.CloneOptions{
-			From:    local,
-			To:      spec.VMName,
-			CPU:     cpu,
-			Memory:  memory,
-			Network: spec.Network,
-			Storage: spec.Storage,
-			Backend: backend,
+			From:       local,
+			To:         spec.VMName,
+			CPU:        cpu,
+			Memory:     memory,
+			Network:    spec.Network,
+			Storage:    spec.Storage,
+			Backend:    backend,
+			NoDirectIO: noDirectIO,
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {

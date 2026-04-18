@@ -44,30 +44,32 @@ type Snapshot struct {
 
 // CloneOptions is the input to Runtime.Clone.
 type CloneOptions struct {
-	From    string
-	To      string
-	CPU     int
-	Memory  string
-	Network string
-	Storage string
-	NICs    int
-	DNS     []string
-	Backend string
+	From       string
+	To         string
+	CPU        int
+	Memory     string
+	Network    string
+	Storage    string
+	NICs       int
+	DNS        []string
+	Backend    string
+	NoDirectIO bool
 }
 
 // RunOptions is the input to Runtime.Run.
 type RunOptions struct {
-	Image   string
-	Name    string
-	CPU     int
-	Memory  string
-	Network string
-	Storage string
-	NICs    int
-	DNS     []string
-	OS      string
-	Force   bool
-	Backend string
+	Image      string
+	Name       string
+	CPU        int
+	Memory     string
+	Network    string
+	Storage    string
+	NICs       int
+	DNS        []string
+	OS         string
+	Force      bool
+	Backend    string
+	NoDirectIO bool
 }
 
 // ImportOptions is the input to Runtime.SnapshotImport.

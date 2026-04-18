@@ -60,6 +60,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 		cpu, memory = 0, ""
 	}
 	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	if opts.NoDirectIO {
+		args = append(args, "--no-direct-io")
+	}
 	args = append(args, opts.From)
 	return args
 }
@@ -90,6 +93,9 @@ func buildRunArgs(opts RunOptions) []string {
 	}
 	if opts.Backend == backendFirecracker {
 		args = append(args, "--fc")
+	}
+	if opts.NoDirectIO {
+		args = append(args, "--no-direct-io")
 	}
 	args = append(args, opts.Image)
 	return args

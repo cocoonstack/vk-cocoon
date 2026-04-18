@@ -57,6 +57,11 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 			opts: CloneOptions{From: "snap-a", To: "vm-c", CPU: 1, Memory: "1Gi"},
 			want: []string{"vm", "clone", "--name", "vm-c", "--cpu", "1", "--memory", "1073741824", "snap-a"},
 		},
+		{
+			name: "no-direct-io flag appended when set",
+			opts: CloneOptions{From: "snap-a", To: "vm-d", CPU: 1, Memory: "1Gi", NoDirectIO: true},
+			want: []string{"vm", "clone", "--name", "vm-d", "--cpu", "1", "--memory", "1073741824", "--no-direct-io", "snap-a"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,6 +100,11 @@ func TestBuildRunArgsAppendsBackendAndOSFlags(t *testing.T) {
 			name: "empty backend leaves --fc off",
 			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-d", OS: "linux"},
 			want: []string{"vm", "run", "--name", "vm-d", "ghcr.io/x/y:1"},
+		},
+		{
+			name: "no-direct-io flag appended when set",
+			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-e", NoDirectIO: true},
+			want: []string{"vm", "run", "--name", "vm-e", "--no-direct-io", "ghcr.io/x/y:1"},
 		},
 	}
 	for _, tc := range cases {
