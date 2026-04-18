@@ -41,7 +41,7 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 		},
 		ContainerStatuses: []corev1.ContainerStatus{
 			{
-				Name:  "agent",
+				Name:  containerName,
 				Ready: ready == corev1.ConditionTrue,
 				State: corev1.ContainerState{
 					Running: &corev1.ContainerStateRunning{StartedAt: now},

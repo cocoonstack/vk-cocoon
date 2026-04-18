@@ -140,7 +140,7 @@ func detectStorageOrOverride() (total, avail resource.Quantity, err error) {
 		}
 		return q, q, nil
 	}
-	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+	rootDir := CocoonRootDir()
 	var stat syscallStatfs
 	if err := statfs(rootDir, &stat); err != nil {
 		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf("statfs %s: %w", rootDir, err)
@@ -196,9 +196,14 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 	return result, nil
 }
 
+// CocoonRootDir returns the cocoon data directory, defaulting to /var/lib/cocoon.
+func CocoonRootDir() string {
+	return commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+}
+
 // StorageBytes returns total and available bytes on the cocoon root filesystem.
 func StorageBytes() (total, available int64) {
-	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+	rootDir := CocoonRootDir()
 	var stat syscallStatfs
 	if err := statfs(rootDir, &stat); err != nil {
 		return 0, 0

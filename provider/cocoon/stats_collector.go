@@ -4,15 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
-
 	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 const (
-	hypervisorFirecracker = "firecracker"
-	runDirCH              = "cloudhypervisor"
-	runDirFC              = "firecracker"
+	runDirCH = "cloudhypervisor"
+	runDirFC = "firecracker"
 )
 
 // CollectVMStats returns per-VM and node-level stats for the Prometheus
@@ -50,7 +48,7 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 
 // readCOWSize returns the actual disk usage of a VM's writable overlay.
 func readCOWSize(vmID, hypervisor string) int64 {
-	rootDir := commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+	rootDir := provider.CocoonRootDir()
 	dir := hypervisorRunDir(hypervisor)
 	for _, name := range cowFileNames(dir) {
 		path := fmt.Sprintf("%s/run/%s/%s/%s", rootDir, dir, vmID, name)
@@ -64,7 +62,7 @@ func readCOWSize(vmID, hypervisor string) int64 {
 // hypervisorRunDir maps the inspect "hypervisor" field to the actual
 // run directory name (cocoon uses "cloudhypervisor" without a hyphen).
 func hypervisorRunDir(hypervisor string) string {
-	if hypervisor == hypervisorFirecracker {
+	if hypervisor == vm.BackendFirecracker {
 		return runDirFC
 	}
 	return runDirCH

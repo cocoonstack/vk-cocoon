@@ -71,7 +71,7 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 			PodRef:    statsv1alpha1.PodReference{Name: s.PodName, Namespace: s.Namespace},
 			StartTime: now,
 			Containers: []statsv1alpha1.ContainerStats{{
-				Name: "agent", StartTime: now, CPU: cpu, Memory: mem,
+				Name: containerName, StartTime: now, CPU: cpu, Memory: mem,
 			}},
 		}
 		if net := buildNetworkStats(s.PID, s.Tap); net != nil {
@@ -113,7 +113,7 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 		containerLabels := []*dto.LabelPair{
 			{Name: proto.String("namespace"), Value: proto.String(s.Namespace)},
 			{Name: proto.String("pod"), Value: proto.String(s.PodName)},
-			{Name: proto.String("container"), Value: proto.String("agent")},
+			{Name: proto.String("container"), Value: proto.String(containerName)},
 		}
 		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
 		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))

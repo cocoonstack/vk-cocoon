@@ -15,10 +15,10 @@ import (
 
 const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
-	// backendFirecracker matches cocoonv1.BackendFirecracker; kept as a
-	// literal string here to avoid dragging the CRD types into the runtime
-	// package just for a single compare.
-	backendFirecracker = "firecracker"
+
+	// BackendFirecracker matches cocoonv1.BackendFirecracker. Exported so
+	// provider/cocoon can reuse it without importing CRD types.
+	BackendFirecracker = "firecracker"
 )
 
 var _ Runtime = (*CocoonCLI)(nil)
@@ -56,7 +56,7 @@ func buildCloneArgs(opts CloneOptions) []string {
 		args = append(args, "--name", opts.To)
 	}
 	cpu, memory := opts.CPU, opts.Memory
-	if opts.Backend == backendFirecracker {
+	if opts.Backend == BackendFirecracker {
 		cpu, memory = 0, ""
 	}
 	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
@@ -91,7 +91,7 @@ func buildRunArgs(opts RunOptions) []string {
 	if strings.EqualFold(opts.OS, "windows") {
 		args = append(args, "--windows")
 	}
-	if opts.Backend == backendFirecracker {
+	if opts.Backend == BackendFirecracker {
 		args = append(args, "--fc")
 	}
 	if opts.NoDirectIO {

@@ -1,0 +1,130 @@
+package cocoon
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"os"
+	"slices"
+	"strings"
+
+	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/vm"
+)
+
+const (
+	// annotationPostCloneHint holds base64-encoded shell commands the user
+	// must run inside the guest to fix networking after clone.
+	annotationPostCloneHint = "vm.cocoonstack.io/post-clone-hint"
+)
+
+// emitPostCloneHint checks whether the cloned VM needs manual network
+// setup and, if so, writes the required commands into a pod annotation
+// and logs a warning. The probe loop will flip the pod to Ready once
+// the user executes the commands and network becomes reachable.
+// sourceImage is the snapshot's original image (e.g. cloudimg URL).
+// Empty when the source metadata is unavailable (forkFrom, wake).
+func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
+	if !needsPostClone(spec.Backend, v.ID, sourceImage, v.NetworkConfigs) {
+		return
+	}
+	logger := log.WithFunc("Provider.emitPostCloneHint")
+	commands := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(commands))
+	pod.Annotations[annotationPostCloneHint] = encoded
+
+	p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneHint: encoded})
+
+	logger.Warnf(ctx, "VM %s requires manual network setup via cocoon vm console; hint written to annotation %s",
+		spec.VMName, annotationPostCloneHint)
+}
+
+// needsPostClone reports whether a cloned VM requires manual network
+// setup via console. The only automatic case is CH + OCI + all-DHCP
+// (NIC hot-swap triggers networkd to re-DHCP). Everything else needs
+// intervention: FC needs MAC fixup, cloudimg needs cloud-init re-run
+// (snapshot restore does not re-trigger cloud-init), and static IP
+// needs networkd config rewrite.
+//
+// sourceImage is the snapshot's original image URL when available
+// (normal clone path). When empty (forkFrom, wake), falls back to
+// checking the COW file type on disk.
+func needsPostClone(backend, vmID, sourceImage string, networkConfigs []*vm.NetworkConfig) bool {
+	if backend == vm.BackendFirecracker {
+		return true
+	}
+	if isCloudimg(sourceImage) || isCloudimgVM(vmID) {
+		return true // cloudimg: cloud-init must be re-triggered manually
+	}
+	// CH + OCI: only needs intervention if any NIC has a static IP
+	return slices.ContainsFunc(networkConfigs, func(nc *vm.NetworkConfig) bool {
+		return nc.Network != nil && nc.Network.IP != ""
+	})
+}
+
+// isCloudimg checks whether the image string is a cloudimg URL.
+func isCloudimg(image string) bool {
+	return strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://")
+}
+
+// isCloudimgVM checks whether the VM's writable disk is a qcow2 overlay
+// (cloudimg) rather than a raw COW (OCI).
+func isCloudimgVM(vmID string) bool {
+	rootDir := provider.CocoonRootDir()
+	path := fmt.Sprintf("%s/run/%s/%s/overlay.qcow2", rootDir, runDirCH, vmID)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// buildPostCloneCommands generates the shell commands a user must
+// execute inside the guest to fix networking after a clone.
+// cloudimg VMs use cloud-init to reconfigure; OCI VMs use direct
+// systemd-networkd file writes.
+func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkConfigs []*vm.NetworkConfig) string {
+	var cmds []string
+
+	cmds = append(cmds, "echo 3 > /proc/sys/vm/drop_caches")
+	cmds = append(cmds, "echo "+vmName+" > /etc/hostname")
+
+	if backend == vm.BackendFirecracker {
+		for i, nc := range networkConfigs {
+			cmds = append(cmds, fmt.Sprintf(
+				"ip link set dev eth%d down && ip link set dev eth%d address %s && ip link set dev eth%d up",
+				i, i, nc.MAC, i))
+		}
+	}
+
+	cmds = append(cmds, "rm -f /etc/systemd/network/10-*.network")
+
+	if isCloudimg(sourceImage) || isCloudimgVM(vmID) {
+		cmds = append(cmds, "cloud-init clean --logs --seed --configs network && cloud-init init --local && cloud-init init")
+		cmds = append(cmds, "cloud-init modules --mode=config && systemctl restart systemd-networkd")
+	} else {
+		for _, nc := range networkConfigs {
+			cmds = append(cmds, buildNetworkdFileCmd(nc))
+		}
+		cmds = append(cmds, "systemctl restart systemd-networkd")
+	}
+
+	return strings.Join(cmds, "\n")
+}
+
+func buildNetworkdFileCmd(nc *vm.NetworkConfig) string {
+	macSan := strings.ReplaceAll(nc.MAC, ":", "")
+	var cfg string
+	if nc.Network != nil && nc.Network.IP != "" {
+		cfg = fmt.Sprintf("[Match]\\nMACAddress=%s\\n\\n[Network]\\nAddress=%s/%d\\nGateway=%s\\n",
+			nc.MAC, nc.Network.IP, nc.Network.Prefix, nc.Network.Gateway)
+	} else {
+		cfg = fmt.Sprintf("[Match]\\nMACAddress=%s\\n\\n[Network]\\nDHCP=ipv4\\n\\n[DHCPv4]\\nClientIdentifier=mac\\n",
+			nc.MAC)
+	}
+	return fmt.Sprintf("printf '%s' > /etc/systemd/network/10-%s.network", cfg, macSan)
+}

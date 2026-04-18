@@ -11,10 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/epoch/utils"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -44,7 +42,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	bootStart := time.Now()
-	v, err := p.bringUpVM(ctx, pod, spec)
+	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("create", "failed").Inc()
 		return err
@@ -58,6 +56,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
+	if spec.Mode != string(cocoonv1.AgentModeRun) {
+		p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
+	}
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below
@@ -74,7 +75,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 }
 
 // bringUpVM dispatches on mode: unmanaged (adopt), clone, run, or fork.
-func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, error) {
+// The returned sourceImage is the snapshot's original image (cloudimg URL
+// or OCI ref) when available, used by post-clone classification.
+func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, string, error) {
 	cpu, memory := vmResourceOverrides(pod)
 	forcePull := spec.ForcePull
 	backend := spec.Backend
@@ -84,14 +87,14 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	case !spec.Managed:
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" || runtime.IP == "" {
-			return nil, fmt.Errorf("unmanaged vm %s missing pre-assigned IP/VMID", spec.VMName)
+			return nil, "", fmt.Errorf("unmanaged vm %s missing pre-assigned IP/VMID", spec.VMName)
 		}
-		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, nil
+		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, "", nil
 
 	case spec.ForkFrom != "":
 		cloneFrom, err := p.ensureForkSnapshot(ctx, spec.ForkFrom)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 			From:       cloneFrom,
@@ -104,9 +107,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			NoDirectIO: noDirectIO,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
+			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
 		}
-		return v, nil
+		return v, "", nil // forkFrom has no snapshot metadata
 
 	case mode == string(cocoonv1.AgentModeRun):
 		opts := vm.RunOptions{
@@ -123,9 +126,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		v, err := p.Runtime.Run(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("run vm %s: %w", spec.VMName, err)
+			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
 		}
-		return v, nil
+		return v, "", nil
 
 	default: // clone is the default
 		repo, tag := utils.ParseRef(spec.Image)
@@ -133,15 +136,18 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		snapshot, err := p.ensureSnapshot(ctx, repo, tag, local)
 		if err != nil {
 			metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-			return nil, fmt.Errorf("ensure snapshot %s: %w", local, err)
+			return nil, "", fmt.Errorf("ensure snapshot %s: %w", local, err)
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 		if backendErr := assertSnapshotBackend(snapshot, backend); backendErr != nil {
-			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, backendErr)
+			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, backendErr)
 		}
+
+		var srcImage string
 		if snapshot != nil && snapshot.Image != "" {
+			srcImage = snapshot.Image
 			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image, forcePull); ensureErr != nil {
-				return nil, fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
+				return nil, "", fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
 			}
 		}
 
@@ -157,9 +163,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
+			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
 		}
-		return v, nil
+		return v, srcImage, nil
 	}
 }
 
@@ -242,23 +248,10 @@ func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) 
 
 // patchRuntimeAnnotations patches VMID/IP annotations back to the API server.
 func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
-	if p.Clientset == nil {
-		return
-	}
-	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{
+	p.patchPodAnnotations(ctx, namespace, name, map[string]any{
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
 	})
-	if err != nil {
-		logger.Warnf(ctx, "marshal annotations %s/%s: %v", namespace, name, err)
-		return
-	}
-	if _, err := p.Clientset.CoreV1().Pods(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		logger.Warnf(ctx, "patch annotations %s/%s: %v", namespace, name, err)
-	}
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

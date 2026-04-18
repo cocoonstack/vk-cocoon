@@ -36,9 +36,6 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	p.forgetPod(pod.Namespace, pod.Name)
-	if p.Probes != nil {
-		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
-	}
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok").Inc()

@@ -11,8 +11,10 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -28,6 +30,9 @@ var _ provider.Provider = (*Provider)(nil)
 const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
+
+	// containerName is the synthetic container name used in pod status and metrics.
+	containerName = "agent"
 )
 
 // Provider maps Kubernetes pods to cocoon MicroVMs.
@@ -138,13 +143,16 @@ func (p *Provider) dropVMLocked(key string) {
 	delete(p.vmsByPod, key)
 }
 
-// forgetPod drops the pod and VM from the in-memory tables.
+// forgetPod drops the pod, VM, and probe from the in-memory tables.
 func (p *Provider) forgetPod(namespace, name string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	key := meta.PodKey(namespace, name)
+	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
+	p.mu.Unlock()
+	if p.Probes != nil {
+		p.Probes.Forget(key)
+	}
 }
 
 // vmForPod returns the VM associated with a pod, or nil.
@@ -350,6 +358,24 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
 
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
+}
+
+// patchPodAnnotations patches the given annotations onto a pod via the API server.
+func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) {
+	if p.Clientset == nil {
+		return
+	}
+	logger := log.WithFunc("Provider.patchPodAnnotations")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	patch, err := commonk8s.AnnotationsMergePatch(annos)
+	if err != nil {
+		logger.Warnf(ctx, "marshal annotations %s/%s: %v", namespace, name, err)
+		return
+	}
+	if _, err := p.Clientset.CoreV1().Pods(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		logger.Warnf(ctx, "patch annotations %s/%s: %v", namespace, name, err)
+	}
 }
 
 // buildOnUpdate returns the callback invoked on readiness transitions.
