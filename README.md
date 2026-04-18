@@ -29,9 +29,10 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from epoch via `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend` validates the snapshot's recorded hypervisor matches `spec.Backend` — a CH snapshot cannot be cloned onto a FC target and vice-versa. When the snapshot carries a base image, `EnsureImage` pulls it (always attempts `cocoon image pull`; with `spec.ForcePull` it passes `--force` to bypass the URL-level cache). Then `Runtime.Clone(from=<local>, to=spec.VMName)`. For firecracker clones, `--cpu` and `--memory` overrides are stripped because FC cannot resize after snapshot/load.
    - **Mode `run`** (`Managed=true`): `EnsureImage` pulls the image (always attempts `cocoon image pull`; `--force` when `spec.ForcePull` is true), then `Runtime.Run(image=spec.Image, name=spec.VMName)`. When `spec.Backend` is `firecracker`, `--fc` is passed to select the FC backend; when `spec.OS` is `windows`, `--windows` is passed. When `spec.NoDirectIO` is true, `--no-direct-io` disables O_DIRECT on writable disks (CH only, useful for dev/test).
-4. Resolve the IP from the cocoon-net JSON lease file by MAC.
-5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up. `VNCPort` is intentionally left unset here — cloud-hypervisor has no VNC server, so only the pre-seeded static-toolbox path ever carries a non-zero value.
-6. Launch a per-pod probe agent in `probes/` (see [Readiness probing](#readiness-probing) below). The agent's first probe runs synchronously so the initial `notify` push already reflects reachability; later probes run on a ticker and call back into the provider whenever readiness flips so the async notify hook re-fires.
+4. For clone/fork/wake paths, check whether the VM needs manual network setup (see [Post-clone hints](#post-clone-hints) below). If so, write the required commands as a base64-encoded annotation (`vm.cocoonstack.io/post-clone-hint`) and log a warning. The pod stays Running but Not Ready until the user executes the commands via `cocoon vm console` and the probe detects network connectivity.
+5. Resolve the IP from the cocoon-net JSON lease file by MAC.
+6. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up. `VNCPort` is intentionally left unset here — cloud-hypervisor has no VNC server, so only the pre-seeded static-toolbox path ever carries a non-zero value.
+7. Launch a per-pod probe agent in `probes/` (see [Readiness probing](#readiness-probing) below). The agent's first probe runs synchronously so the initial `notify` push already reflects reachability; later probes run on a ticker and call back into the provider whenever readiness flips so the async notify hook re-fires.
 
 ### DeletePod
 
@@ -94,6 +95,20 @@ vk-cocoon exposes three metrics surfaces:
 | `vk_cocoon_orphan_vm_total` | Counter | Orphan VMs at startup |
 
 All per-VM stats are read from `/proc` using the hypervisor PID tracked in memory — no shell-out to `cocoon` on each scrape. The tracking table is snapshot-copied under RLock and `/proc` reads happen outside the lock to avoid blocking CreatePod/DeletePod. When a VM is restarted in-place (event watcher → `cocoon vm start`), the PID is re-inspected and refreshed.
+
+### Post-clone hints
+
+After a clone (or hibernate wake / fork), vk-cocoon checks whether the VM needs manual guest-side network setup. The only fully automatic case is CH + OCI + all-DHCP (NIC hot-swap triggers systemd-networkd to re-DHCP). All other combinations require intervention:
+
+| Scenario | Reason | Hint commands |
+|---|---|---|
+| CH + cloudimg (any network) | snapshot restore does not re-trigger cloud-init | `cloud-init clean + init` |
+| CH + OCI + static IP | guest retains old IP config | write MAC-based networkd files |
+| FC (any) | guest MAC frozen in vmstate | `ip link set address` + networkd reconfig |
+
+When a hint is needed, vk-cocoon base64-encodes the required shell commands into `vm.cocoonstack.io/post-clone-hint` on the pod and logs a warning. The pod stays Running but Not Ready. To retrieve the commands: `kubectl get pod <name> -o jsonpath='{.metadata.annotations.vm\.cocoonstack\.io/post-clone-hint}' | base64 -d`. After executing via `cocoon vm console`, the probe detects connectivity and flips Ready automatically.
+
+Classification uses the snapshot's original image URL (normal clone) or the COW file type on disk (fork/wake) to distinguish cloudimg from OCI.
 
 ### Startup reconcile
 
