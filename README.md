@@ -171,6 +171,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
 | `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Epoch base URL. |
 | `EPOCH_TOKEN` | unset | Bearer token (only needed for `/v2/` pushes; `/dl/` is anonymous). |
+| `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against epoch. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_SSH_PASSWORD` | unset | SSH password for `kubectl logs / exec` against Linux guests. |
