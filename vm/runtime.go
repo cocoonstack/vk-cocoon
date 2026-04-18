@@ -9,11 +9,19 @@ import (
 // StateRunning is the state string cocoon reports for a live VM.
 const StateRunning = "running"
 
+// NetworkInfo holds CNI-assigned addressing for a NIC. Nil for DHCP networks.
+type NetworkInfo struct {
+	IP      string `json:"ip"`
+	Gateway string `json:"gateway"`
+	Prefix  int    `json:"prefix"`
+}
+
 // NetworkConfig is a single NIC configuration from cocoon vm inspect.
 type NetworkConfig struct {
-	Tap       string `json:"tap"`
-	MAC       string `json:"mac"`
-	NetNSPath string `json:"netns_path"`
+	Tap       string       `json:"tap"`
+	MAC       string       `json:"mac"`
+	NetNSPath string       `json:"netns_path"`
+	Network   *NetworkInfo `json:"network,omitempty"`
 }
 
 // VM is the runtime view of a cocoon VM.

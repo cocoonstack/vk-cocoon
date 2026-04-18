@@ -18,12 +18,10 @@ type inspectJSON struct {
 		Memory int64  `json:"memory"`
 	} `json:"config"`
 	NetworkConfigs []struct {
-		Tap       string `json:"tap"`
-		Mac       string `json:"mac"`
-		NetNSPath string `json:"netns_path"`
-		Network   *struct {
-			IP string `json:"ip"`
-		} `json:"network,omitempty"`
+		Tap       string       `json:"tap"`
+		Mac       string       `json:"mac"`
+		NetNSPath string       `json:"netns_path"`
+		Network   *NetworkInfo `json:"network,omitempty"`
 	} `json:"network_configs,omitempty"`
 }
 
@@ -96,6 +94,7 @@ func inspectJSONToVM(d inspectJSON) *VM {
 			Tap:       nc.Tap,
 			MAC:       nc.Mac,
 			NetNSPath: nc.NetNSPath,
+			Network:   nc.Network,
 		})
 	}
 	if len(d.NetworkConfigs) > 0 {
