@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+// cocoon CLI binary path and backend name constants.
 const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
 

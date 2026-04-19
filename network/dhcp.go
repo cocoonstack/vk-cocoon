@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// dhcp lease file location constants.
 const (
 	// DefaultLeasesPath is cocoon-net's default JSON lease file location.
 	DefaultLeasesPath = "/var/lib/cocoon/net/leases.json"

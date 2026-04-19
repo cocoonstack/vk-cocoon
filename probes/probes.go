@@ -12,6 +12,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
+// defaultInitialInterval and friends set probe timing defaults.
 const (
 	defaultInitialInterval  = 2 * time.Second
 	defaultSteadyInterval   = 5 * time.Second

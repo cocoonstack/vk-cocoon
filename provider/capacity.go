@@ -14,6 +14,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
+// defaultReservePercent and defaultMaxPods tune node capacity reporting.
 const (
 	defaultReservePercent = 20
 	defaultMaxPods        = 256

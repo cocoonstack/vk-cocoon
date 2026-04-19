@@ -26,9 +26,7 @@ import (
 )
 
 // compile-time interface check.
-var (
-	_ provider.Provider = (*Provider)(nil)
-)
+var _ provider.Provider = (*Provider)(nil)
 
 const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.

@@ -8,6 +8,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+// runDir constants map VMM backends to their runtime directory names.
 const (
 	runDirCH = "cloudhypervisor"
 	runDirFC = "firecracker"

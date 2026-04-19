@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -17,12 +18,8 @@ type Pusher struct {
 
 // PushSnapshot uploads a snapshot to epoch at the given repo/tag.
 func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) (*snapshot.PushResult, error) {
-	if repo == "" {
-		repo = vmName
-	}
-	if tag == "" {
-		tag = meta.DefaultSnapshotTag
-	}
+	repo = cmp.Or(repo, vmName)
+	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
 
 	pusher := &snapshot.Pusher{
 		Uploader: p.Registry,

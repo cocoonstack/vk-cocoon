@@ -13,6 +13,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+// hibernate constants.
 const (
 	// hibernateImportSuffix avoids name collision between the import target
 	// and the live VM that the subsequent Clone produces.

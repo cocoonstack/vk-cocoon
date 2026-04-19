@@ -14,6 +14,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
+// sentinel errors for unimplemented or misconfigured access operations.
 var (
 	errAttachNotImplemented      = errors.New("vk-cocoon: AttachToContainer is not implemented")
 	errPortForwardNotImplemented = errors.New("vk-cocoon: PortForward is not implemented")

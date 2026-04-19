@@ -18,6 +18,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/guest"
 )
 
+// SAC serial-console timing and buffer defaults.
 const (
 	defaultWaitReady  = 60 * time.Second
 	defaultRWTimeout  = 5 * time.Second
@@ -27,6 +28,7 @@ const (
 	sacPrompt         = "SAC>"
 )
 
+// compile-time interface checks and package-level helpers.
 var (
 	_ guest.Dialer  = (*Dialer)(nil)
 	_ guest.Session = (*Session)(nil)

@@ -1,6 +1,7 @@
 package snapshots
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -22,9 +23,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 	if err != nil {
 		return fmt.Errorf("get snapshot manifest %s:%s: %w", name, tag, err)
 	}
-	if localName == "" {
-		localName = name
-	}
+	localName = cmp.Or(localName, name)
 
 	importer, wait, err := p.Runtime.SnapshotImport(ctx, vm.ImportOptions{Name: localName})
 	if err != nil {

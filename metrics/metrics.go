@@ -5,10 +5,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// metricNamespace is the Prometheus namespace prefix for all vk-cocoon metrics.
 const (
 	metricNamespace = "vk_cocoon"
 )
 
+// Prometheus collectors exported for registration in the global registry.
 var (
 	PodLifecycleTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
