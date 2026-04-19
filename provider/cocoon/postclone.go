@@ -132,7 +132,9 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 		netNums = sac.ParseNetEntries(out.String())
 	}
 
-	// Set IP on each static NIC.
+	// Set IP on each static NIC with verify+retry. Windows may
+	// silently drop the set command if the network stack is still
+	// initializing even though the NIC is already enumerated.
 	for i, nc := range v.NetworkConfigs {
 		if !isStaticNIC(nc) {
 			continue
@@ -141,25 +143,33 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			"i", strconv.Itoa(netNums[i]),
 			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
 		}
-		if err := p.GuestSAC.Run(ctx, sockPath, cmd, nil, nil, nil); err != nil {
-			logger.Errorf(ctx, err, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
-			return
+		ok := false
+		for attempt := range 10 {
+			if err := p.GuestSAC.Run(ctx, sockPath, cmd, nil, nil, nil); err != nil {
+				logger.Errorf(ctx, err, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
+				return
+			}
+			// Verify the IP took effect.
+			out.Reset()
+			if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
+				logger.Debugf(ctx, "sac verify query: %v", err)
+			} else if sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
+				ok = true
+				break
+			}
+			if attempt == 9 {
+				logger.Warnf(ctx, "sac: net %d did not accept ip %s after retries for %s/%s",
+					netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
+				return
+			}
+			logger.Debugf(ctx, "sac: net %d ip not yet effective, retrying in 2s", netNums[i])
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 		}
-	}
-
-	// Verify.
-	out.Reset()
-	if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
-		logger.Errorf(ctx, err, "sac verify %s/%s", pod.Namespace, pod.Name)
-		return
-	}
-	for i, nc := range v.NetworkConfigs {
-		if !isStaticNIC(nc) {
-			continue
-		}
-		if !sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
-			logger.Warnf(ctx, "sac verify: net %d does not have ip %s for %s/%s",
-				netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
+		if !ok {
 			return
 		}
 	}
