@@ -59,6 +59,10 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if spec.Mode != string(cocoonv1.AgentModeRun) {
 		p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
 	}
+	// Windows VMs with static IP need SAC setup for both run and clone.
+	if spec.OS == "windows" {
+		p.applyWindowsStaticIP(ctx, pod, v)
+	}
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below

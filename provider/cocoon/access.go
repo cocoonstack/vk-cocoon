@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -44,11 +45,12 @@ func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ s
 	if tail <= 0 {
 		tail = 200
 	}
-	body, err := p.GuestSSH.FetchJournal(ctx, v.IP, tail)
-	if err != nil {
+	var out, errBuf bytes.Buffer
+	cmd := []string{"journalctl", "--no-pager", "-n", strconv.Itoa(tail)}
+	if err := p.GuestSSH.Run(ctx, v.IP, cmd, nil, &out, &errBuf); err != nil {
 		return nil, fmt.Errorf("fetch journal from %s: %w", v.IP, err)
 	}
-	return io.NopCloser(bytes.NewReader(body)), nil
+	return io.NopCloser(bytes.NewReader(out.Bytes())), nil
 }
 
 // RunInContainer is the kubectl exec entrypoint (SSH for Linux, RDP help for Windows).

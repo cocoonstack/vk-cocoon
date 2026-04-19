@@ -1,17 +1,20 @@
 package cocoon
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -66,9 +69,7 @@ func needsPostClone(backend, vmID, sourceImage string, networkConfigs []*vm.Netw
 		return true // cloudimg: cloud-init must be re-triggered manually
 	}
 	// CH + OCI: only needs intervention if any NIC has a static IP
-	return slices.ContainsFunc(networkConfigs, func(nc *vm.NetworkConfig) bool {
-		return nc.Network != nil && nc.Network.IP != ""
-	})
+	return slices.ContainsFunc(networkConfigs, isStaticNIC)
 }
 
 // isCloudimg checks whether the image string is a cloudimg URL.
@@ -83,6 +84,81 @@ func isCloudimgVM(vmID string) bool {
 	path := fmt.Sprintf("%s/run/%s/%s/overlay.qcow2", rootDir, runDirCH, vmID)
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// applyWindowsStaticIP uses SAC to set static IPs on Windows VMs.
+// Called for both run and clone when the network uses IPAM.
+// DHCP NICs (no assigned IP) are skipped.
+func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
+		return
+	}
+	// Skip if all NICs are DHCP.
+	if !slices.ContainsFunc(v.NetworkConfigs, isStaticNIC) {
+		return
+	}
+
+	logger := log.WithFunc("Provider.applyWindowsStaticIP")
+	sockPath := fmt.Sprintf("%s/run/%s/%s/console.sock", provider.CocoonRootDir(), runDirCH, v.ID)
+
+	// Query SAC for net numbers.
+	var out bytes.Buffer
+	if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
+		logger.Errorf(ctx, err, "sac query nets %s/%s", pod.Namespace, pod.Name)
+		return
+	}
+	netNums := sac.ParseNetEntries(out.String())
+	if len(netNums) < len(v.NetworkConfigs) {
+		logger.Warnf(ctx, "sac: found %d net entries but have %d NICs for %s/%s",
+			len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
+		return
+	}
+
+	// Set IP on each static NIC.
+	for i, nc := range v.NetworkConfigs {
+		if !isStaticNIC(nc) {
+			continue
+		}
+		cmd := []string{
+			"i", strconv.Itoa(netNums[i]),
+			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
+		}
+		if err := p.GuestSAC.Run(ctx, sockPath, cmd, nil, nil, nil); err != nil {
+			logger.Errorf(ctx, err, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
+			return
+		}
+	}
+
+	// Verify.
+	out.Reset()
+	if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
+		logger.Errorf(ctx, err, "sac verify %s/%s", pod.Namespace, pod.Name)
+		return
+	}
+	for i, nc := range v.NetworkConfigs {
+		if !isStaticNIC(nc) {
+			continue
+		}
+		if !sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
+			logger.Warnf(ctx, "sac verify: net %d does not have ip %s for %s/%s",
+				netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
+			return
+		}
+	}
+	logger.Infof(ctx, "sac configured static IPs for %s/%s", pod.Namespace, pod.Name)
+}
+
+func isStaticNIC(nc *vm.NetworkConfig) bool {
+	return nc.Network != nil && nc.Network.IP != ""
+}
+
+// prefixToSubnet converts a CIDR prefix length to a dotted-decimal subnet mask.
+func prefixToSubnet(prefix int) string {
+	if prefix <= 0 || prefix > 32 {
+		return "255.255.255.0"
+	}
+	mask := uint32(0xFFFFFFFF) << (32 - prefix)
+	return fmt.Sprintf("%d.%d.%d.%d", mask>>24, (mask>>16)&0xFF, (mask>>8)&0xFF, mask&0xFF)
 }
 
 // buildPostCloneCommands generates the shell commands a user must
@@ -121,7 +197,7 @@ func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkCo
 func buildNetworkdFileCmd(nc *vm.NetworkConfig) string {
 	macSan := strings.ReplaceAll(nc.MAC, ":", "")
 	var cfg string
-	if nc.Network != nil && nc.Network.IP != "" {
+	if isStaticNIC(nc) {
 		cfg = fmt.Sprintf("[Match]\\nMACAddress=%s\\n\\n[Network]\\nAddress=%s/%d\\nGateway=%s\\n",
 			nc.MAC, nc.Network.IP, nc.Network.Prefix, nc.Network.Gateway)
 	} else {

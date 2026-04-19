@@ -47,8 +47,9 @@ type Provider struct {
 	Registry     snapshots.RegistryClient
 	LeaseParser  *network.LeaseParser
 	Pinger       network.Pinger
-	GuestSSH     *guest.SSHExecutor
-	GuestRDP     guest.RDPExecutor
+	GuestSSH     guest.Executor
+	GuestRDP     guest.Executor
+	GuestSAC     guest.Executor
 	Probes       *probes.Manager
 	OrphanPolicy provider.OrphanPolicy
 

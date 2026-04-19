@@ -26,7 +26,9 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/epoch/registryclient"
-	"github.com/cocoonstack/vk-cocoon/guest"
+	"github.com/cocoonstack/vk-cocoon/guest/rdp"
+	"github.com/cocoonstack/vk-cocoon/guest/sac"
+	gossh "github.com/cocoonstack/vk-cocoon/guest/ssh"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
@@ -240,8 +242,9 @@ func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
 	} else {
 		p.Pinger = icmpPinger
 	}
-	p.GuestSSH = guest.NewSSHExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
-	p.GuestRDP = guest.RDPExecutor{}
+	p.GuestSSH = gossh.NewExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
+	p.GuestRDP = rdp.Executor{}
+	p.GuestSAC = &sac.Executor{}
 	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
 	return p
