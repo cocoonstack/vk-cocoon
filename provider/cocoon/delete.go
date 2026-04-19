@@ -39,6 +39,5 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok").Inc()
-	metrics.VMTableSize.Dec()
 	return nil
 }

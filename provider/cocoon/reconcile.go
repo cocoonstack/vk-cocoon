@@ -93,7 +93,6 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.handleOrphan(ctx, &vms[i])
 	}
 
-	metrics.VMTableSize.Set(float64(len(matched)))
 	logger.Infof(ctx, "startup reconcile: %d pods adopted, %d orphan VMs", len(matched), len(vms)-len(matched))
 	return nil
 }

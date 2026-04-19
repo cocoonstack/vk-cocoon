@@ -130,6 +130,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 			p.vmsByName[v.Name] = v
 		}
 	}
+	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
 
 // dropVMLocked removes the VM record for key. Caller must hold p.mu for writing.
@@ -143,6 +144,7 @@ func (p *Provider) dropVMLocked(key string) {
 		delete(p.vmsByName, v.Name)
 	}
 	delete(p.vmsByPod, key)
+	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
 
 // forgetPod drops the pod, VM, and probe from the in-memory tables.
@@ -361,7 +363,6 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
 	p.dropVMLocked(key)
 	delete(p.pods, key)
 	p.mu.Unlock()
-	metrics.VMTableSize.Dec()
 
 	if p.Probes != nil {
 		p.Probes.Forget(key)

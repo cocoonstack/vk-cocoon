@@ -77,7 +77,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
-	metrics.VMTableSize.Inc()
 	return nil
 }
 
