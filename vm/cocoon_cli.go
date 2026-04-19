@@ -46,27 +46,6 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.Inspect(ctx, opts.To)
 }
 
-// buildCloneArgs assembles the cocoon vm clone argv. Firecracker restores
-// the entire VM state from the snapshot and cannot resize CPU/memory on
-// load, so those overrides are stripped when targeting firecracker. Extracted
-// for direct unit-test coverage.
-func buildCloneArgs(opts CloneOptions) []string {
-	args := []string{"vm", "clone"}
-	if opts.To != "" {
-		args = append(args, "--name", opts.To)
-	}
-	cpu, memory := opts.CPU, opts.Memory
-	if opts.Backend == BackendFirecracker {
-		cpu, memory = 0, ""
-	}
-	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
-	if opts.NoDirectIO {
-		args = append(args, "--no-direct-io")
-	}
-	args = append(args, opts.From)
-	return args
-}
-
 // Run runs `cocoon vm run`.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	if err := c.EnsureImage(ctx, opts.Image, opts.Force); err != nil {
@@ -78,27 +57,6 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 		return nil, fmt.Errorf("cocoon vm run: %w", err)
 	}
 	return c.Inspect(ctx, opts.Name)
-}
-
-// buildRunArgs assembles the cocoon vm run argv. Extracted for direct
-// unit-test coverage of the backend / OS flag fan-out.
-func buildRunArgs(opts RunOptions) []string {
-	args := []string{"vm", "run"}
-	if opts.Name != "" {
-		args = append(args, "--name", opts.Name)
-	}
-	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
-	if strings.EqualFold(opts.OS, "windows") {
-		args = append(args, "--windows")
-	}
-	if opts.Backend == BackendFirecracker {
-		args = append(args, "--fc")
-	}
-	if opts.NoDirectIO {
-		args = append(args, "--no-direct-io")
-	}
-	args = append(args, opts.Image)
-	return args
 }
 
 // EnsureImage ensures the image is available locally and up to date.
@@ -278,6 +236,48 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 		}
 	}()
 	return ch, nil
+}
+
+// buildCloneArgs assembles the cocoon vm clone argv. Firecracker restores
+// the entire VM state from the snapshot and cannot resize CPU/memory on
+// load, so those overrides are stripped when targeting firecracker. Extracted
+// for direct unit-test coverage.
+func buildCloneArgs(opts CloneOptions) []string {
+	args := []string{"vm", "clone"}
+	if opts.To != "" {
+		args = append(args, "--name", opts.To)
+	}
+	cpu, memory := opts.CPU, opts.Memory
+	if opts.Backend == BackendFirecracker {
+		cpu, memory = 0, ""
+	}
+	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	if opts.NoDirectIO {
+		args = append(args, "--no-direct-io")
+	}
+	args = append(args, opts.From)
+	return args
+}
+
+// buildRunArgs assembles the cocoon vm run argv. Extracted for direct
+// unit-test coverage of the backend / OS flag fan-out.
+func buildRunArgs(opts RunOptions) []string {
+	args := []string{"vm", "run"}
+	if opts.Name != "" {
+		args = append(args, "--name", opts.Name)
+	}
+	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	if strings.EqualFold(opts.OS, "windows") {
+		args = append(args, "--windows")
+	}
+	if opts.Backend == BackendFirecracker {
+		args = append(args, "--fc")
+	}
+	if opts.NoDirectIO {
+		args = append(args, "--no-direct-io")
+	}
+	args = append(args, opts.Image)
+	return args
 }
 
 // command builds an exec.Cmd, optionally wrapped in sudo.

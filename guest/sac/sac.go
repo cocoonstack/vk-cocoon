@@ -1,5 +1,7 @@
-// Package sac implements the guest.Executor interface for Windows SAC
-// (Special Administration Console) over a serial console Unix socket.
+// Package sac implements the guest.Dialer/Session interfaces for
+// Windows SAC (Special Administration Console) over a serial console
+// Unix socket. A single Dial opens a persistent connection; multiple
+// Run calls reuse that connection so the serial port state is preserved.
 package sac
 
 import (
@@ -17,42 +19,49 @@ import (
 )
 
 const (
-	defaultWaitReady = 60 * time.Second
-	defaultRWTimeout = 5 * time.Second
-	retryInterval    = 2 * time.Second
-	readBufSize      = 4096
-	sacPrompt        = "SAC>"
+	defaultWaitReady  = 60 * time.Second
+	defaultRWTimeout  = 5 * time.Second
+	defaultCmdTimeout = 5 * time.Second
+	retryInterval     = 2 * time.Second
+	readBufSize       = 4096
+	sacPrompt         = "SAC>"
 )
 
 var (
-	// compile-time interface check.
-	_ guest.Executor = (*Executor)(nil)
+	_ guest.Dialer  = (*Dialer)(nil)
+	_ guest.Session = (*Session)(nil)
 
 	netLineRe = regexp.MustCompile(`Net:\s+(\d+),\s+Ip=(\S+)`)
 )
 
-// Executor sends commands to Windows SAC via a serial console Unix socket.
-// Each Run call opens a fresh connection, waits for the SAC> prompt,
-// sends the command, and streams the response to stdout.
-type Executor struct {
+// Dialer opens persistent SAC sessions over serial console sockets.
+type Dialer struct {
 	WaitReady time.Duration // max time waiting for SAC> prompt; 0 = 60s
 }
 
-// Run connects to the SAC console at target (a Unix socket path),
-// sends strings.Join(cmd, " ") as a single SAC command, and writes
-// the response to stdout. stdin and stderr are unused.
-func (e *Executor) Run(ctx context.Context, target string, cmd []string, _ io.Reader, stdout, _ io.Writer) error {
-	conn, err := e.dial(ctx, target)
+// Dial connects to the SAC console at target (a Unix socket path),
+// waits for the SAC> prompt, and returns a ready Session.
+func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error) {
+	conn, err := d.dial(ctx, target)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-
-	if promptErr := waitPrompt(conn, e.waitReady()); promptErr != nil {
-		return fmt.Errorf("sac wait prompt: %w", promptErr)
+	if promptErr := waitPrompt(conn, d.waitReady()); promptErr != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("sac wait prompt: %w", promptErr)
 	}
+	return &Session{conn: conn}, nil
+}
 
-	output, err := sacCommand(conn, strings.Join(cmd, " "), 3*time.Second)
+// Session is a persistent SAC console connection. Commands are sent
+// sequentially over the same serial socket.
+type Session struct {
+	conn net.Conn
+}
+
+// Run sends a SAC command and writes the response to stdout.
+func (s *Session) Run(_ context.Context, cmd []string, stdout io.Writer) error {
+	output, err := sacCommand(s.conn, strings.Join(cmd, " "), defaultCmdTimeout)
 	if err != nil {
 		return err
 	}
@@ -60,6 +69,11 @@ func (e *Executor) Run(ctx context.Context, target string, cmd []string, _ io.Re
 		_, _ = io.WriteString(stdout, output)
 	}
 	return nil
+}
+
+// Close releases the underlying socket.
+func (s *Session) Close() error {
+	return s.conn.Close()
 }
 
 // ParseNetEntries extracts deduplicated net numbers from SAC "i"
@@ -91,15 +105,15 @@ func NetHasIP(output string, netNum int, ip string) bool {
 	return false
 }
 
-func (e *Executor) waitReady() time.Duration {
-	if e.WaitReady > 0 {
-		return e.WaitReady
+func (d *Dialer) waitReady() time.Duration {
+	if d.WaitReady > 0 {
+		return d.WaitReady
 	}
 	return defaultWaitReady
 }
 
-func (e *Executor) dial(ctx context.Context, socketPath string) (net.Conn, error) {
-	deadline := time.Now().Add(e.waitReady())
+func (d *Dialer) dial(ctx context.Context, socketPath string) (net.Conn, error) {
+	deadline := time.Now().Add(d.waitReady())
 	var lastErr error
 	for {
 		if ctx.Err() != nil {

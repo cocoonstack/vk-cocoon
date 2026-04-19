@@ -94,7 +94,6 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
 		return
 	}
-	// Skip if all NICs are DHCP.
 	if !slices.ContainsFunc(v.NetworkConfigs, isStaticNIC) {
 		return
 	}
@@ -102,17 +101,26 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
 	sockPath := fmt.Sprintf("%s/run/%s/%s/console.sock", provider.CocoonRootDir(), runDirCH, v.ID)
 
-	var out bytes.Buffer
-	if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
-		logger.Errorf(ctx, err, "sac initial query %s/%s", pod.Namespace, pod.Name)
+	// Open a persistent SAC session — all commands share one connection.
+	sess, err := p.GuestSAC.Dial(ctx, sockPath)
+	if err != nil {
+		logger.Errorf(ctx, err, "sac dial %s/%s", pod.Namespace, pod.Name)
 		return
 	}
-	netNums := sac.ParseNetEntries(out.String())
+	defer func() { _ = sess.Close() }()
 
-	// If NICs not yet enumerated, retry in a polling loop.
+	// Query net numbers; retry until all NICs are enumerated.
+	var out bytes.Buffer
+	var netNums []int
 	for attempt := range 60 {
-		if len(netNums) >= len(v.NetworkConfigs) {
-			break
+		out.Reset()
+		if queryErr := sess.Run(ctx, []string{"i"}, &out); queryErr != nil {
+			logger.Debugf(ctx, "sac query: %v", queryErr)
+		} else {
+			netNums = sac.ParseNetEntries(out.String())
+			if len(netNums) >= len(v.NetworkConfigs) {
+				break
+			}
 		}
 		if attempt == 59 {
 			logger.Warnf(ctx, "sac: found %d net entries but need %d for %s/%s after retries",
@@ -124,17 +132,9 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			return
 		case <-time.After(2 * time.Second):
 		}
-		out.Reset()
-		if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
-			logger.Debugf(ctx, "sac retry query: %v", err)
-			continue
-		}
-		netNums = sac.ParseNetEntries(out.String())
 	}
 
-	// Set IP on each static NIC with verify+retry. Windows may
-	// silently drop the set command if the network stack is still
-	// initializing even though the NIC is already enumerated.
+	// Set IP on each static NIC with verify+retry.
 	for i, nc := range v.NetworkConfigs {
 		if !isStaticNIC(nc) {
 			continue
@@ -143,18 +143,15 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			"i", strconv.Itoa(netNums[i]),
 			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
 		}
-		ok := false
 		for attempt := range 10 {
-			if err := p.GuestSAC.Run(ctx, sockPath, cmd, nil, nil, nil); err != nil {
-				logger.Errorf(ctx, err, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
+			if setErr := sess.Run(ctx, cmd, nil); setErr != nil {
+				logger.Errorf(ctx, setErr, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
 				return
 			}
-			// Verify the IP took effect.
 			out.Reset()
-			if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
-				logger.Debugf(ctx, "sac verify query: %v", err)
+			if verifyErr := sess.Run(ctx, []string{"i"}, &out); verifyErr != nil {
+				logger.Debugf(ctx, "sac verify: %v", verifyErr)
 			} else if sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
-				ok = true
 				break
 			}
 			if attempt == 9 {
@@ -168,9 +165,6 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 				return
 			case <-time.After(2 * time.Second):
 			}
-		}
-		if !ok {
-			return
 		}
 	}
 	logger.Infof(ctx, "sac configured static IPs for %s/%s", pod.Namespace, pod.Name)

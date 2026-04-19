@@ -22,7 +22,9 @@ const (
 )
 
 // compile-time interface check.
-var _ guest.Executor = (*Executor)(nil)
+var (
+	_ guest.Executor = (*Executor)(nil)
+)
 
 // Executor runs commands on guests via golang.org/x/crypto/ssh.
 // Host-key verification is disabled because VMs rotate keys on every clone.

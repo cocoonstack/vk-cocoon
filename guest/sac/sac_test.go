@@ -63,7 +63,6 @@ func (f *fakeSAC) handle(conn net.Conn) {
 		if line == "i" {
 			var sb strings.Builder
 			sb.WriteString("\r\nSAC is retrieving IP Addresses...\r\n")
-			// Sort keys to ensure deterministic NIC enumeration order.
 			keys := slices.Sorted(func(yield func(int) bool) {
 				for k := range f.ips {
 					if !yield(k) {
@@ -95,15 +94,21 @@ func (f *fakeSAC) handle(conn net.Conn) {
 	}
 }
 
-func TestRunQueryNets(t *testing.T) {
+func TestDialAndQuery(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "console.sock")
 	fake := newFakeSAC(t, sock, []int{7})
 	defer fake.close()
 
-	e := &Executor{WaitReady: 5 * time.Second}
+	d := &Dialer{WaitReady: 5 * time.Second}
+	sess, err := d.Dial(t.Context(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
 	var out bytes.Buffer
-	if err := e.Run(t.Context(), sock, []string{"i"}, nil, &out, nil); err != nil {
+	if err := sess.Run(t.Context(), []string{"i"}, &out); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	nums := ParseNetEntries(out.String())
@@ -112,43 +117,53 @@ func TestRunQueryNets(t *testing.T) {
 	}
 }
 
-func TestRunSetIPSingleNIC(t *testing.T) {
+func TestSessionSetAndVerify(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "console.sock")
 	fake := newFakeSAC(t, sock, []int{7})
 	defer fake.close()
 
-	e := &Executor{WaitReady: 5 * time.Second}
+	d := &Dialer{WaitReady: 5 * time.Second}
+	sess, err := d.Dial(t.Context(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
 
 	// Set IP.
-	if err := e.Run(t.Context(), sock, []string{"i", "7", "10.88.0.60", "255.255.255.0", "10.88.0.1"}, nil, nil, nil); err != nil {
+	if err := sess.Run(t.Context(), []string{"i", "7", "10.88.0.60", "255.255.255.0", "10.88.0.1"}, nil); err != nil {
 		t.Fatalf("Run set: %v", err)
 	}
 	if fake.ips[7] != "10.88.0.60" {
 		t.Errorf("net 7 ip = %q, want 10.88.0.60", fake.ips[7])
 	}
 
-	// Verify via query.
+	// Verify via query on the same session.
 	var out bytes.Buffer
-	if err := e.Run(t.Context(), sock, []string{"i"}, nil, &out, nil); err != nil {
+	if err := sess.Run(t.Context(), []string{"i"}, &out); err != nil {
 		t.Fatalf("Run verify: %v", err)
 	}
 	if !NetHasIP(out.String(), 7, "10.88.0.60") {
-		t.Errorf("NetHasIP = false for net 7 / 10.88.0.60 in %q", out.String())
+		t.Errorf("NetHasIP = false in %q", out.String())
 	}
 }
 
-func TestRunMultiNICAllStatic(t *testing.T) {
+func TestSessionMultiNICAllStatic(t *testing.T) {
 	dir := t.TempDir()
-	sock := filepath.Join(dir, "console.sock")
+	sock := filepath.Join(dir, "s.sock")
 	fake := newFakeSAC(t, sock, []int{2, 4, 6})
 	defer fake.close()
 
-	e := &Executor{WaitReady: 5 * time.Second}
+	d := &Dialer{WaitReady: 5 * time.Second}
+	sess, err := d.Dial(t.Context(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
 
-	// Query net numbers.
+	// Query.
 	var out bytes.Buffer
-	if err := e.Run(t.Context(), sock, []string{"i"}, nil, &out, nil); err != nil {
+	if err := sess.Run(t.Context(), []string{"i"}, &out); err != nil {
 		t.Fatalf("Run query: %v", err)
 	}
 	nums := ParseNetEntries(out.String())
@@ -156,15 +171,15 @@ func TestRunMultiNICAllStatic(t *testing.T) {
 		t.Fatalf("ParseNetEntries = %v, want 3 entries", nums)
 	}
 
-	// Set each NIC.
+	// Set all.
 	ips := []string{"10.0.0.10", "10.0.1.10", "10.0.2.10"}
 	for i, ip := range ips {
-		if err := e.Run(t.Context(), sock, []string{"i", fmt.Sprintf("%d", nums[i]), ip, "255.255.255.0", "10.0.0.1"}, nil, nil, nil); err != nil {
+		if err := sess.Run(t.Context(), []string{"i", fmt.Sprintf("%d", nums[i]), ip, "255.255.255.0", "10.0.0.1"}, nil); err != nil {
 			t.Fatalf("Run set net %d: %v", nums[i], err)
 		}
 	}
 
-	// Verify all.
+	// Verify.
 	for num, want := range map[int]string{2: "10.0.0.10", 4: "10.0.1.10", 6: "10.0.2.10"} {
 		if fake.ips[num] != want {
 			t.Errorf("net %d ip = %q, want %q", num, fake.ips[num], want)
@@ -172,14 +187,13 @@ func TestRunMultiNICAllStatic(t *testing.T) {
 	}
 }
 
-func TestRunDialTimeout(t *testing.T) {
+func TestDialTimeout(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "console.sock")
-	// Socket doesn't exist — should timeout.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	e := &Executor{WaitReady: 2 * time.Second}
-	err := e.Run(ctx, sock, []string{"i"}, nil, nil, nil)
+	d := &Dialer{WaitReady: 2 * time.Second}
+	_, err := d.Dial(ctx, sock)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}

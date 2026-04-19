@@ -10,10 +10,23 @@ import (
 )
 
 // Executor runs a command inside a guest VM. The target parameter is
-// executor-specific: an IP address for SSH/RDP, a Unix socket path for
-// SAC. The caller decides what to run; the executor decides how.
+// executor-specific: an IP address for SSH/RDP. The caller decides
+// what to run; the executor decides how.
 type Executor interface {
 	Run(ctx context.Context, target string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error
+}
+
+// Session holds a persistent connection to a guest console.
+// Commands are sent sequentially over the same underlying channel,
+// preserving state between calls (e.g. SAC serial port state).
+type Session interface {
+	Run(ctx context.Context, cmd []string, stdout io.Writer) error
+	Close() error
+}
+
+// Dialer opens a persistent Session to a guest.
+type Dialer interface {
+	Dial(ctx context.Context, target string) (Session, error)
 }
 
 // JoinShell joins argv into a POSIX-sh-safe command string for ssh.Session.Run.

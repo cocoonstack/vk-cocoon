@@ -26,7 +26,9 @@ import (
 )
 
 // compile-time interface check.
-var _ provider.Provider = (*Provider)(nil)
+var (
+	_ provider.Provider = (*Provider)(nil)
+)
 
 const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
@@ -49,7 +51,7 @@ type Provider struct {
 	Pinger       network.Pinger
 	GuestSSH     guest.Executor
 	GuestRDP     guest.Executor
-	GuestSAC     guest.Executor
+	GuestSAC     guest.Dialer
 	Probes       *probes.Manager
 	OrphanPolicy provider.OrphanPolicy
 

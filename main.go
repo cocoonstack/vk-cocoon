@@ -244,7 +244,7 @@ func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
 	}
 	p.GuestSSH = gossh.NewExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
 	p.GuestRDP = rdp.Executor{}
-	p.GuestSAC = &sac.Executor{}
+	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
 	return p

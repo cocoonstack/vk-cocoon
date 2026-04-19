@@ -18,7 +18,9 @@ const (
 )
 
 // ErrNoLease means no lease matches the lookup.
-var ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
+var (
+	ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
+)
 
 // Lease is one cocoon-net DHCP entry.
 type Lease struct {
