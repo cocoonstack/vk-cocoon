@@ -14,6 +14,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -127,10 +128,8 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 				len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
 			return
 		}
-		select {
-		case <-ctx.Done():
+		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 
@@ -160,10 +159,8 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 				return
 			}
 			logger.Debugf(ctx, "sac: net %d ip not yet effective, retrying in 2s", netNums[i])
-			select {
-			case <-ctx.Done():
+			if !commonk8s.SleepCtx(ctx, 2*time.Second) {
 				return
-			case <-time.After(2 * time.Second):
 			}
 		}
 	}

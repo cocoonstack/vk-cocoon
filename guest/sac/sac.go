@@ -156,7 +156,8 @@ func waitPrompt(conn net.Conn, timeout time.Duration) error {
 			return nil
 		}
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
 			return fmt.Errorf("read prompt: %w", err)
@@ -189,7 +190,8 @@ func sacCommand(conn net.Conn, cmd string, timeout time.Duration) (string, error
 			}
 		}
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
 			return sb.String(), fmt.Errorf("read response: %w", err)
