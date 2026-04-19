@@ -60,8 +60,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
 	}
 	// Windows VMs with static IP need SAC setup for both run and clone.
+	// Run asynchronously because SAC may take 30-60s to become ready
+	// and CreatePod must return promptly. The probe loop will detect
+	// readiness once the IP is set.
 	if spec.OS == "windows" {
-		p.applyWindowsStaticIP(ctx, pod, v)
+		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
 	}
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
