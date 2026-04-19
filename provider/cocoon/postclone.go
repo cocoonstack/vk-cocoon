@@ -34,6 +34,11 @@ const (
 // sourceImage is the snapshot's original image (e.g. cloudimg URL).
 // Empty when the source metadata is unavailable (forkFrom, wake).
 func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
+	// Windows networking is handled by SAC (applyWindowsStaticIP) or
+	// auto-DHCP; the Linux shell/cloud-init hint would be misleading.
+	if spec.OS == "windows" {
+		return
+	}
 	if !needsPostClone(spec.Backend, v.ID, sourceImage, v.NetworkConfigs) {
 		return
 	}
