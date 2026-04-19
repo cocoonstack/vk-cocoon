@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -101,17 +102,34 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
 	sockPath := fmt.Sprintf("%s/run/%s/%s/console.sock", provider.CocoonRootDir(), runDirCH, v.ID)
 
-	// Query SAC for net numbers.
 	var out bytes.Buffer
 	if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
-		logger.Errorf(ctx, err, "sac query nets %s/%s", pod.Namespace, pod.Name)
+		logger.Errorf(ctx, err, "sac initial query %s/%s", pod.Namespace, pod.Name)
 		return
 	}
 	netNums := sac.ParseNetEntries(out.String())
-	if len(netNums) < len(v.NetworkConfigs) {
-		logger.Warnf(ctx, "sac: found %d net entries but have %d NICs for %s/%s",
-			len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
-		return
+
+	// If NICs not yet enumerated, retry in a polling loop.
+	for attempt := range 60 {
+		if len(netNums) >= len(v.NetworkConfigs) {
+			break
+		}
+		if attempt == 59 {
+			logger.Warnf(ctx, "sac: found %d net entries but need %d for %s/%s after retries",
+				len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		out.Reset()
+		if err := p.GuestSAC.Run(ctx, sockPath, []string{"i"}, nil, &out, nil); err != nil {
+			logger.Debugf(ctx, "sac retry query: %v", err)
+			continue
+		}
+		netNums = sac.ParseNetEntries(out.String())
 	}
 
 	// Set IP on each static NIC.
