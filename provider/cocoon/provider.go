@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"sync"
 	"time"
@@ -221,11 +222,32 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 		if ip == "" {
 			return false, "waiting for dhcp lease"
 		}
+		if port := p.probePort(namespace, name); port != "" {
+			return p.probeTCP(ctx, ip, port)
+		}
 		if err := p.Pinger.Ping(ctx, ip); err != nil {
 			return false, "ping failed: " + err.Error()
 		}
 		return true, "ping ok"
 	}
+}
+
+func (p *Provider) probePort(namespace, name string) string {
+	pod, _ := p.GetPod(context.Background(), namespace, name)
+	if pod == nil {
+		return ""
+	}
+	return pod.Annotations[meta.AnnotationProbePort]
+}
+
+func (p *Provider) probeTCP(ctx context.Context, ip, port string) (bool, string) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, port))
+	if err != nil {
+		return false, "tcp probe " + port + ": " + err.Error()
+	}
+	_ = conn.Close()
+	return true, "tcp ok"
 }
 
 // StartVMWatcher launches a background goroutine that subscribes to cocoon's
