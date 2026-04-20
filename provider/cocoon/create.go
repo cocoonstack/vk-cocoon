@@ -32,9 +32,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
-		if err := p.applyRuntime(ctx, pod, existing); err != nil {
-			return err
-		}
+		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
 		p.startProbeIfEnabled(pod)
 		p.refreshStatus(ctx, pod)
@@ -68,11 +66,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if spec.OS == "windows" {
 		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
 	}
-	if err := p.applyRuntime(ctx, pod, v); err != nil {
-		logger.Errorf(ctx, err, "apply runtime failed, rolling back VM %s", v.ID)
-		_ = p.Runtime.Remove(ctx, v.ID)
-		return err
-	}
+	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below
 	// already reflects the initial reachability.
@@ -252,27 +246,25 @@ func (p *Provider) vmByName(name string) *vm.VM {
 
 // applyRuntime writes VMID/IP annotations onto the in-memory pod and
 // patches them back to the API server so they survive provider restarts.
-func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
-	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
-	runtime.Apply(pod)
-	return p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
+func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+	rt := meta.VMRuntime{VMID: v.ID, IP: v.IP}
+	rt.Apply(pod)
+	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
 }
 
-func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) error {
+func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
+	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
 	annos := map[string]any{
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
 	}
-	var lastErr error
 	for range 3 {
 		if err := p.patchPodAnnotations(ctx, namespace, name, annos); err == nil {
-			return nil
-		} else {
-			lastErr = err
+			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("patch runtime annotations %s/%s: %w", namespace, name, lastErr)
+	logger.Warnf(ctx, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
