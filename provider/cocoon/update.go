@@ -94,6 +94,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 
 // wake restores the VM from the hibernation snapshot.
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.WithFunc("Provider.wake")
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
 		return nil
@@ -127,7 +128,11 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.emitPostCloneHint(ctx, pod, spec, v, "") // wake has no snapshot source metadata
-	p.applyRuntime(ctx, pod, v)
+	if err := p.applyRuntime(ctx, pod, v); err != nil {
+		logger.Errorf(ctx, err, "apply runtime failed, rolling back VM %s", v.ID)
+		_ = p.Runtime.Remove(ctx, v.ID)
+		return err
+	}
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).

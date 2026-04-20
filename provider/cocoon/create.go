@@ -32,7 +32,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
-		p.applyRuntime(ctx, pod, existing)
+		if err := p.applyRuntime(ctx, pod, existing); err != nil {
+			return err
+		}
 		p.trackPod(pod, existing)
 		p.startProbeIfEnabled(pod)
 		p.refreshStatus(ctx, pod)
@@ -66,7 +68,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if spec.OS == "windows" {
 		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
 	}
-	p.applyRuntime(ctx, pod, v)
+	if err := p.applyRuntime(ctx, pod, v); err != nil {
+		logger.Errorf(ctx, err, "apply runtime failed, rolling back VM %s", v.ID)
+		_ = p.Runtime.Remove(ctx, v.ID)
+		return err
+	}
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below
 	// already reflects the initial reachability.
@@ -246,21 +252,27 @@ func (p *Provider) vmByName(name string) *vm.VM {
 
 // applyRuntime writes VMID/IP annotations onto the in-memory pod and
 // patches them back to the API server so they survive provider restarts.
-func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	runtime := meta.VMRuntime{VMID: v.ID, IP: v.IP}
 	runtime.Apply(pod)
-	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
+	return p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
 }
 
-// patchRuntimeAnnotations patches VMID/IP annotations back to the API server.
-func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
-	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
-	if err := p.patchPodAnnotations(ctx, namespace, name, map[string]any{
+func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) error {
+	annos := map[string]any{
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
-	}); err != nil {
-		logger.Errorf(ctx, err, "patch runtime annotations %s/%s", namespace, name)
 	}
+	var lastErr error
+	for range 3 {
+		if err := p.patchPodAnnotations(ctx, namespace, name, annos); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("patch runtime annotations %s/%s: %w", namespace, name, lastErr)
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
