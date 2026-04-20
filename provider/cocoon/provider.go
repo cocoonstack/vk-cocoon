@@ -409,7 +409,9 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 		if err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
 			ctx, pod.Name, metav1.DeleteOptions{},
 		); err != nil {
-			logger.Warnf(ctx, "delete pod %s/%s: %v", pod.Namespace, pod.Name, err)
+			logger.Warnf(ctx, "delete pod %s/%s: %v (phase kept as-is)", pod.Namespace, pod.Name, err)
+			p.notify(pod)
+			return
 		}
 	}
 
