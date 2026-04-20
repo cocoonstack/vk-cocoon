@@ -237,20 +237,23 @@ func (p *Provider) StartVMWatcher(ctx context.Context) {
 // vmWatchLoop runs the cocoon event stream with automatic restart on failure.
 func (p *Provider) vmWatchLoop(ctx context.Context) {
 	logger := log.WithFunc("Provider.vmWatchLoop")
+	backoff := time.Second
 	for {
 		events, err := p.Runtime.WatchEvents(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			logger.Warnf(ctx, "vm watcher start failed: %v, retrying in 5s", err)
+			logger.Warnf(ctx, "vm watcher start failed: %v, retrying in %s", err, backoff)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(backoff):
+				backoff = min(backoff*2, 60*time.Second)
 				continue
 			}
 		}
+		backoff = time.Second
 		logger.Info(ctx, "vm event watcher started")
 		for ev := range events {
 			switch ev.Event {
