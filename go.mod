@@ -3,7 +3,7 @@ module github.com/cocoonstack/vk-cocoon
 go 1.25.0
 
 require (
-	github.com/cocoonstack/cocoon-common v0.1.9
+	github.com/cocoonstack/cocoon-common v0.1.10-0.20260420082925-c9faf86068fa
 	github.com/cocoonstack/epoch v0.2.0
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	github.com/prometheus/client_golang v1.23.2

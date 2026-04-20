@@ -88,7 +88,7 @@ vk-cocoon exposes three metrics surfaces:
 | `vk_cocoon_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
 | `vk_cocoon_snapshot_push_duration_seconds` | Histogram | Epoch push time |
 | `vk_cocoon_snapshot_pull_duration_seconds` | Histogram | Epoch pull time |
-| `vk_cocoon_probe_duration_seconds` | Histogram | Per-probe ICMP ping time |
+| `vk_cocoon_probe_duration_seconds` | Histogram | Per-probe health check time (ICMP or TCP) |
 | `vk_cocoon_pod_lifecycle_total{op,result}` | Counter | Pod lifecycle operations |
 | `vk_cocoon_snapshot_pull_total{result}` / `push_total` | Counter | Snapshot pull/push counts |
 | `vk_cocoon_vm_table_size` | Gauge | Tracked VM count |
@@ -133,7 +133,7 @@ The `probes/` package owns that loop:
 1. `CreatePod` (and startup reconcile) call `Manager.Start(key, probe, onUpdate)`. The probe closure the provider supplies performs three checks in order:
     1. The tracked VM still exists.
     2. If the in-memory VM record has no IP, re-try the cocoon-net lease file by MAC and write it back via `setVMIP`.
-    3. `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the cocoon Windows golden image contract (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables all firewall profiles), and it decouples readiness from specific services so the same probe works for Linux and Windows guests alike.
+    3. If the pod carries a `vm.cocoonstack.io/probe-port` annotation, dial TCP on that port instead of ICMP. Otherwise fall back to `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the cocoon Windows golden image contract (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables all firewall profiles), and it decouples readiness from specific services so the same probe works for Linux and Windows guests alike.
 2. The first probe runs **synchronously inside `Start`** so the refreshStatus/notify pass that `CreatePod` does before returning already reflects the initial reachability decision.
 3. A background goroutine re-runs the probe on a ticker (2 s cold-start, 5 s once Ready) and invokes `onUpdate` after 3 consecutive failures flip readiness back to false. `onUpdate` re-reads the pod, rebuilds the status, and calls `notify` so the kubelet observes the change.
 4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod goroutine; `Manager.Close` is called once at shutdown to tear every remaining agent down.
@@ -142,15 +142,15 @@ The `probes/` package owns that loop:
 
 In addition to the periodic probe, vk-cocoon subscribes to cocoon's real-time VM event stream via `cocoon vm status --event --format json`. This provides sub-second detection of VM state changes (DELETED, stopped, error) without waiting for the next probe tick.
 
-The watcher goroutine (`vmWatchLoop`) runs for the lifetime of the process with automatic restart on subprocess failure (2 s backoff). When an event arrives:
+The watcher goroutine (`vmWatchLoop`) runs for the lifetime of the process with automatic restart on subprocess failure (exponential backoff from 1 s to 60 s, reset on successful connect). Normal stream closes (cocoon restart) use a fixed 2 s reconnect delay. When an event arrives:
 
 | Event | Inspect result | Action |
 |---|---|---|
-| `DELETED` | VM not found | `evictPod`: delete pod from API server → operator recreates |
+| `DELETED` | VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
 | `MODIFIED` (state ≠ running) | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
 | `MODIFIED` (state ≠ running) | state = running | False alarm — ignore |
 
-A 30-second **restart cooldown** (`restartCooldown`) prevents tight restart loops when a VM keeps crashing. If the cooldown has not elapsed since the last restart, the pod is evicted instead so the operator can do a clean recreation.
+A 30-second **restart cooldown** (`restartCooldown`) prevents tight restart loops when a VM keeps crashing. If the cooldown has not elapsed since the last restart, the pod is evicted (phase=`Failed`, reason=`RestartCooldown`) so the operator can do a clean recreation. Stale cooldown entries are garbage-collected on each event stream reconnect.
 
 Detection latency comparison:
 
