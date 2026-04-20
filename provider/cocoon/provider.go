@@ -147,6 +147,17 @@ func (p *Provider) dropVMLocked(key string) {
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
 
+func (p *Provider) gcStaleRestarts() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cutoff := time.Now().Add(-restartCooldown * 2)
+	for id, t := range p.lastRestart {
+		if t.Before(cutoff) {
+			delete(p.lastRestart, id)
+		}
+	}
+}
+
 // forgetPod drops the pod, VM, and probe from the in-memory tables.
 func (p *Provider) forgetPod(namespace, name string) {
 	key := meta.PodKey(namespace, name)
@@ -255,6 +266,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 			return
 		}
 		logger.Warn(ctx, "vm event watcher exited, restarting in 2s")
+		p.gcStaleRestarts()
 		select {
 		case <-ctx.Done():
 			return
