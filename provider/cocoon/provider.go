@@ -344,7 +344,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
 		if fresh, inspectErr := p.Runtime.Inspect(ctx, trackedID); inspectErr == nil {
 			p.mu.Lock()
-			if old := p.vmsByName[fresh.Name]; old != nil {
+			if old := p.vmsByPod[affectedKey]; old != nil {
 				old.PID = fresh.PID
 				old.NetworkConfigs = fresh.NetworkConfigs
 			}
