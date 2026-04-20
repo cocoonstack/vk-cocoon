@@ -314,7 +314,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		// VM not found → truly gone. Delete pod so operator recreates.
 		logger.Infof(ctx, "vm %s confirmed gone (inspect: %v), deleting pod %s/%s",
 			trackedID, err, affectedPod.Namespace, affectedPod.Name)
-		p.evictPod(ctx, affectedKey, affectedPod)
+		p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "VMGone", "vm no longer exists")
 
 	case inspected.State == vm.StateRunning:
 		// Still running → false alarm.
@@ -339,7 +339,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				logger.Errorf(ctx, err, "remove vm %s during cooldown eviction, keeping pod for investigation", trackedID)
 				return
 			}
-			p.evictPod(ctx, affectedKey, affectedPod)
+			p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "RestartCooldown", "restart cooldown not elapsed")
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
@@ -353,7 +353,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				logger.Errorf(ctx, removeErr, "remove vm %s after failed restart, keeping pod for investigation", trackedID)
 				return
 			}
-			p.evictPod(ctx, affectedKey, affectedPod)
+			p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "RestartFailed", startErr.Error())
 			return
 		}
 		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
@@ -370,7 +370,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 
 // evictPod removes the VM record, deletes the pod from the API server,
 // and notifies the framework so the operator can recreate the pod.
-func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
+func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, phase corev1.PodPhase, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
 	// Detach before mutating status to avoid a data race with concurrent readers.
@@ -391,7 +391,21 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod) {
 		}
 	}
 
-	pod.Status.Phase = corev1.PodSucceeded
+	pod.Status.Phase = phase
+	if phase == corev1.PodFailed && reason != "" {
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+			{
+				Name: containerName,
+				State: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 1,
+						Reason:   reason,
+						Message:  message,
+					},
+				},
+			},
+		}
+	}
 	p.notify(pod)
 }
 
