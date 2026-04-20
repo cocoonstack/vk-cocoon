@@ -109,6 +109,12 @@ func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.notifyHook = notifier
 }
 
+// StartVMWatcher launches a background goroutine that subscribes to cocoon's
+// VM event stream and reacts to VM state changes in near-real-time.
+func (p *Provider) StartVMWatcher(ctx context.Context) {
+	go p.vmWatchLoop(ctx)
+}
+
 // notify pushes a pod status update through the kubelet callback.
 func (p *Provider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
@@ -222,7 +228,7 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 		if ip == "" {
 			return false, "waiting for dhcp lease"
 		}
-		if port := p.probePort(namespace, name); port != "" {
+		if port := p.probePort(ctx, namespace, name); port != "" {
 			return p.probeTCP(ctx, ip, port)
 		}
 		if err := p.Pinger.Ping(ctx, ip); err != nil {
@@ -232,8 +238,8 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 	}
 }
 
-func (p *Provider) probePort(namespace, name string) string {
-	pod, _ := p.GetPod(context.Background(), namespace, name)
+func (p *Provider) probePort(ctx context.Context, namespace, name string) string {
+	pod, _ := p.GetPod(ctx, namespace, name)
 	if pod == nil {
 		return ""
 	}
@@ -248,12 +254,6 @@ func (p *Provider) probeTCP(ctx context.Context, ip, port string) (bool, string)
 	}
 	_ = conn.Close()
 	return true, "tcp ok"
-}
-
-// StartVMWatcher launches a background goroutine that subscribes to cocoon's
-// VM event stream and reacts to VM state changes in near-real-time.
-func (p *Provider) StartVMWatcher(ctx context.Context) {
-	go p.vmWatchLoop(ctx)
 }
 
 // vmWatchLoop runs the cocoon event stream with automatic restart on failure.
