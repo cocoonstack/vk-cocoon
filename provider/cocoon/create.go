@@ -152,7 +152,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		var srcImage string
 		if snapshot != nil && snapshot.Image != "" {
 			srcImage = snapshot.Image
-			if ensureErr := p.Runtime.EnsureImage(ctx, snapshot.Image, forcePull); ensureErr != nil {
+			if ensureErr := p.ensureBaseImage(ctx, snapshot, forcePull); ensureErr != nil {
 				return nil, "", fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
 			}
 		}
@@ -284,6 +284,27 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	pod.Status = *status
+}
+
+// ensureBaseImage makes sure the base image referenced by a snapshot exists
+// locally. It checks via image inspect first, then tries the original image
+// reference (which may pull from the upstream or epoch registry).
+func (p *Provider) ensureBaseImage(ctx context.Context, snapshot *vm.Snapshot, force bool) error {
+	logger := log.WithFunc("Provider.ensureBaseImage")
+
+	// Fast path: image already pulled locally.
+	if info, _ := p.Runtime.ImageInspect(ctx, snapshot.Image); info != nil {
+		logger.Debugf(ctx, "base image %s already local (digest %s)", snapshot.Image, info.ID)
+		return nil
+	}
+
+	// Try pulling the image. EnsureImage calls `cocoon image pull` which
+	// handles both OCI registries and cloudimg URLs.
+	if err := p.Runtime.EnsureImage(ctx, snapshot.Image, force); err != nil {
+		logger.Warnf(ctx, "pull base image %s: %v", snapshot.Image, err)
+		return err
+	}
+	return nil
 }
 
 // localSnapshotName builds the cocoon-local snapshot name from a repo and tag.

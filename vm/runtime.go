@@ -44,10 +44,12 @@ type VM struct {
 // produced the snapshot, so vk-cocoon can reject backend-mismatched clones
 // before shelling out to cocoon.
 type Snapshot struct {
-	ID         string
-	Name       string
-	Image      string
-	Hypervisor string
+	ID          string
+	Name        string
+	Image       string
+	ImageDigest string // resolved image digest (e.g. "sha256:abc...")
+	ImageType   string // "oci" or "cloudimg"
+	Hypervisor  string
 }
 
 // CloneOptions is the input to Runtime.Clone.
@@ -105,5 +107,13 @@ type Runtime interface {
 	SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string, force bool) error
+	ImageInspect(ctx context.Context, image string) (*ImageInfo, error)
+	ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
+}
+
+// ImageInfo holds digest and type from `cocoon image inspect`.
+type ImageInfo struct {
+	ID   string `json:"id"`   // image digest (e.g. "sha256:abc...")
+	Type string `json:"type"` // "oci" or "cloudimg"
 }
