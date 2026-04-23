@@ -580,6 +580,44 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
+	// Simulate the post-crash state: CreatePod succeeded but the runtime
+	// annotation patch failed, so the pod has no VMID yet the VM is live.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod.Spec.NodeName = "cocoon-pool"
+	// No VMRuntime applied.
+
+	rt := &fakeRuntime{
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+	}
+	p := NewProvider()
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	// Under OrphanDestroy, a bug would delete the live VM. The fix must prevent that.
+	p.OrphanPolicy = provider.OrphanDestroy
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+		t.Fatalf("VM should be re-adopted by name, got %#v", got)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("live VM must not be removed as orphan, removedID=%q", rt.removedID)
+	}
+	// Annotation patch is best-effort — verify it was at least attempted via the
+	// patched pod's state when the fake clientset re-reads it.
+	updated, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if meta.ParseVMRuntime(updated).VMID != "live-vmid" {
+		t.Errorf("annotation should be repaired, got %q", meta.ParseVMRuntime(updated).VMID)
+	}
+}
+
 func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", Managed: true})
 	pod.Spec.NodeName = "cocoon-pool"

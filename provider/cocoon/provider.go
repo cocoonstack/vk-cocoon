@@ -454,7 +454,7 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 // calls for the same pod are idempotent.
 func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) error {
 	var lastErr error
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
 			ctx, pod.Name, metav1.DeleteOptions{},
 		)

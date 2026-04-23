@@ -55,8 +55,12 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	}
 
 	vmByID := make(map[string]int, len(vms))
+	vmByName := make(map[string]int, len(vms))
 	for i := range vms {
 		vmByID[vms[i].ID] = i
+		if vms[i].Name != "" {
+			vmByName[vms[i].Name] = i
+		}
 	}
 	matched := make(map[string]bool, len(vms))
 
@@ -64,6 +68,10 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		pod := &pods.Items[i]
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" {
+			if v := p.adoptByVMName(ctx, pod, vms, vmByName); v != nil {
+				matched[v.ID] = true
+				continue
+			}
 			p.reconcileNoVMID(ctx, pod)
 			continue
 		}
@@ -116,6 +124,35 @@ func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod)
 		logger.Errorf(ctx, err, "clear stale hibernate annotations %s/%s", pod.Namespace, pod.Name)
 	}
 	p.trackPod(pod, nil)
+}
+
+// adoptByVMName rescues a pod whose runtime annotation never landed.
+// When CreatePod succeeded but the follow-up annotation patch failed,
+// the pod has no VMID while a live VM with the matching spec.VMName
+// still exists. Without this fallback the VMID-keyed orphan scan would
+// destroy or alert on the live VM, and the operator may recreate it
+// under the same name. We re-adopt it and re-patch the annotations so
+// the next restart has a clean trail.
+func (p *Provider) adoptByVMName(
+	ctx context.Context, pod *corev1.Pod, vms []vm.VM, idx map[string]int,
+) *vm.VM {
+	logger := log.WithFunc("Provider.adoptByVMName")
+	spec := meta.ParseVMSpec(pod)
+	if spec.VMName == "" {
+		return nil
+	}
+	i, ok := idx[spec.VMName]
+	if !ok {
+		return nil
+	}
+	v := vms[i]
+	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing, patch had failed)",
+		v.Name, pod.Namespace, pod.Name)
+	p.trackPod(pod, &v)
+	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, &v)
+	p.startProbeIfEnabled(pod)
+	metrics.ReconcileNameAdoptTotal.Inc()
+	return &v
 }
 
 // reconcileNoVMID handles a pod with no VMID during startup reconcile.
