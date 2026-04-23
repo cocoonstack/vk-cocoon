@@ -13,12 +13,9 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// hibernate constants.
-const (
-	// hibernateImportSuffix avoids name collision between the import target
-	// and the live VM that the subsequent Clone produces.
-	hibernateImportSuffix = "-hibernate-import"
-)
+// hibernateImportSuffix avoids name collision between the import target
+// and the live VM that the subsequent Clone produces.
+const hibernateImportSuffix = "-hibernate-import"
 
 // UpdatePod handles hibernate/wake transitions. Other spec changes are ignored.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {

@@ -11,9 +11,7 @@ import (
 )
 
 // compile-time interface check.
-var (
-	_ guest.Executor = Executor{}
-)
+var _ guest.Executor = Executor{}
 
 // Executor is a Windows guest stand-in that returns "use RDP" help text.
 type Executor struct{}

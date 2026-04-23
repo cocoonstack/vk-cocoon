@@ -12,16 +12,11 @@ import (
 	"time"
 )
 
-// dhcp lease file location constants.
-const (
-	// DefaultLeasesPath is cocoon-net's default JSON lease file location.
-	DefaultLeasesPath = "/var/lib/cocoon/net/leases.json"
-)
+// DefaultLeasesPath is cocoon-net's default JSON lease file location.
+const DefaultLeasesPath = "/var/lib/cocoon/net/leases.json"
 
 // ErrNoLease means no lease matches the lookup.
-var (
-	ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
-)
+var ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
 
 // Lease is one cocoon-net DHCP entry.
 type Lease struct {

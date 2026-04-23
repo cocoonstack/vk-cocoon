@@ -6,9 +6,7 @@ import (
 )
 
 // metricNamespace is the Prometheus namespace prefix for all vk-cocoon metrics.
-const (
-	metricNamespace = "vk_cocoon"
-)
+const metricNamespace = "vk_cocoon"
 
 // Prometheus collectors exported for registration in the global registry.
 var (

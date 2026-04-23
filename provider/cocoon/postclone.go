@@ -21,12 +21,9 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// post-clone annotation constants.
-const (
-	// annotationPostCloneHint holds base64-encoded shell commands the user
-	// must run inside the guest to fix networking after clone.
-	annotationPostCloneHint = "vm.cocoonstack.io/post-clone-hint"
-)
+// annotationPostCloneHint holds base64-encoded shell commands the user
+// must run inside the guest to fix networking after clone.
+const annotationPostCloneHint = "vm.cocoonstack.io/post-clone-hint"
 
 // emitPostCloneHint checks whether the cloned VM needs manual network
 // setup and, if so, writes the required commands into a pod annotation
