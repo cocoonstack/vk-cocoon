@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -45,6 +47,18 @@ type fakeRuntime struct {
 		image string
 		force bool
 	}
+
+	// inspectSeq, when non-empty, is consumed in order by Inspect before
+	// falling back to inspectErr/inspectVM. Lets tests script a sequence
+	// of transient failures followed by a definitive result.
+	inspectMu  sync.Mutex
+	inspectSeq []fakeInspectStep
+	inspectN   int
+}
+
+type fakeInspectStep struct {
+	vm  *vm.VM
+	err error
 }
 
 func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, error) {
@@ -72,6 +86,14 @@ func (f *fakeRuntime) Run(_ context.Context, opts vm.RunOptions) (*vm.VM, error)
 }
 
 func (f *fakeRuntime) Inspect(_ context.Context, _ string) (*vm.VM, error) {
+	f.inspectMu.Lock()
+	if f.inspectN < len(f.inspectSeq) {
+		step := f.inspectSeq[f.inspectN]
+		f.inspectN++
+		f.inspectMu.Unlock()
+		return step.vm, step.err
+	}
+	f.inspectMu.Unlock()
 	if f.inspectErr != nil {
 		return nil, f.inspectErr
 	}
@@ -688,7 +710,7 @@ func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.evictPod(t.Context(), key, pod, corev1.PodFailed, "VMGone", "vm no longer exists")
+	p.evictPod(t.Context(), key, pod, "VMGone", "vm no longer exists")
 
 	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-evict" {
 		t.Fatalf("VM should still be tracked after failed delete, got %#v", got)
@@ -710,7 +732,7 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.evictPod(t.Context(), key, pod, corev1.PodFailed, "VMGone", "vm no longer exists")
+	p.evictPod(t.Context(), key, pod, "VMGone", "vm no longer exists")
 
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("VM should be untracked after NotFound delete, got %#v", got)
@@ -718,6 +740,110 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Fatalf("pod should be untracked after NotFound delete")
 	}
+}
+
+func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
+	// First two inspects fail transiently, third returns a running VM.
+	// Pod must not be evicted; no deferred recheck needed.
+	rt := &fakeRuntime{
+		inspectSeq: []fakeInspectStep{
+			{err: errors.New("exec: broken pipe")},
+			{err: errors.New("exec: broken pipe")},
+			{vm: &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0", State: vm.StateRunning}},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+	p.inlineInspectBaseDelay = 1 * time.Millisecond
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0"})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0"})
+
+	if got := p.vmForPod("ns", "demo-0"); got == nil {
+		t.Fatalf("running VM should still be tracked after inline retry recovery")
+	}
+	if rt.inspectN != 3 {
+		t.Fatalf("expected 3 inspect calls, got %d", rt.inspectN)
+	}
+}
+
+func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
+	// All inline retries transient; deferred recheck eventually sees NotFound.
+	rt := &fakeRuntime{
+		inspectSeq: []fakeInspectStep{
+			{err: errors.New("exec: broken pipe")},             // inline 1
+			{err: errors.New("exec: broken pipe")},             // inline 2
+			{err: errors.New("exec: broken pipe")},             // inline 3
+			{err: errors.New("exec: broken pipe")},             // deferred 1 — still transient
+			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}, // deferred 2 — definitive
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	p.inlineInspectBaseDelay = 1 * time.Millisecond
+	p.deferredRecheckInitialDelay = 5 * time.Millisecond
+	p.deferredRecheckMaxDelay = 20 * time.Millisecond
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.vmForPod("ns", "demo-0"); got == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
+	}
+}
+
+func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
+	// Two schedule calls for the same VM should yield a single pending entry.
+	// We keep the first goroutine alive (slow delay) while the second attempts
+	// to schedule, then drop the pod to let the goroutine exit before the test
+	// returns so its view of the Provider fields does not race with cleanup.
+	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-x", Name: "vk-ns-demo-0"})
+	p.deferredRecheckInitialDelay = 20 * time.Millisecond
+	p.deferredRecheckMaxDelay = 50 * time.Millisecond
+
+	p.scheduleDeferredRecheck("vmid-x")
+	p.scheduleDeferredRecheck("vmid-x")
+
+	p.mu.RLock()
+	n := len(p.pendingRecheck)
+	p.mu.RUnlock()
+	if n != 1 {
+		t.Fatalf("pendingRecheck should dedup, len=%d", n)
+	}
+
+	// Drop the pod so the goroutine exits on its next iteration, and wait for it.
+	p.forgetPod("ns", "demo-0")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.RLock()
+		done := len(p.pendingRecheck) == 0
+		p.mu.RUnlock()
+		if done {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("deferred recheck goroutine did not exit after pod was forgotten")
 }
 
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {

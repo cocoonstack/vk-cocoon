@@ -1,6 +1,7 @@
 package cocoon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -42,6 +43,16 @@ const (
 	// to stall all VM events on a flaky API server.
 	evictDeleteAttempts  = 2
 	evictDeleteBaseDelay = 200 * time.Millisecond
+
+	// inlineInspectAttempts bounds the synchronous retry in handleVMGone.
+	// Quick retry catches a hiccuping CLI before spawning a deferred goroutine.
+	inlineInspectAttempts = 3
+
+	// Default tunables for the recheck path. Overridable via Provider
+	// fields so tests can shrink them without racing on package globals.
+	defaultInlineInspectBaseDelay      = 200 * time.Millisecond
+	defaultDeferredRecheckInitialDelay = 1 * time.Second
+	defaultDeferredRecheckMaxDelay     = 30 * time.Second
 )
 
 var _ provider.Provider = (*Provider)(nil)
@@ -68,26 +79,35 @@ type Provider struct {
 	Probes      *probes.Manager
 
 	// runtime state
-	startTime   time.Time
-	mu          sync.RWMutex
-	pods        map[string]*corev1.Pod
-	vmsByPod    map[string]*vm.VM
-	vmsByName   map[string]*vm.VM
-	lastRestart map[string]time.Time // key=vmID, cooldown for restart loops
-	notifyHook  func(*corev1.Pod)
+	startTime      time.Time
+	mu             sync.RWMutex
+	pods           map[string]*corev1.Pod
+	vmsByPod       map[string]*vm.VM
+	vmsByName      map[string]*vm.VM
+	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
+	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
+	notifyHook     func(*corev1.Pod)
+
+	// Recheck tunables. Zero values fall back to the defaultXxx
+	// constants, so production code never sets them; tests shrink them
+	// before exercising handleVMGone.
+	inlineInspectBaseDelay      time.Duration
+	deferredRecheckInitialDelay time.Duration
+	deferredRecheckMaxDelay     time.Duration
 }
 
 // NewProvider constructs a Provider with empty tables.
 // Default Pinger is NopPinger so tests degrade gracefully.
 func NewProvider() *Provider {
 	return &Provider{
-		startTime:    time.Now(),
-		OrphanPolicy: provider.OrphanAlert,
-		Pinger:       network.NopPinger{},
-		pods:         map[string]*corev1.Pod{},
-		vmsByPod:     map[string]*vm.VM{},
-		vmsByName:    map[string]*vm.VM{},
-		lastRestart:  map[string]time.Time{},
+		startTime:      time.Now(),
+		OrphanPolicy:   provider.OrphanAlert,
+		Pinger:         network.NopPinger{},
+		pods:           map[string]*corev1.Pod{},
+		vmsByPod:       map[string]*vm.VM{},
+		vmsByName:      map[string]*vm.VM{},
+		lastRestart:    map[string]time.Time{},
+		pendingRecheck: map[string]struct{}{},
 	}
 }
 
@@ -343,21 +363,23 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		return
 	}
 
-	// Double-check: inspect the VM via cocoon CLI.
-	inspected, err := p.Runtime.Inspect(ctx, trackedID)
+	// Double-check: inspect the VM via cocoon CLI with a short inline retry.
+	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):
 		// Authoritatively gone → delete pod so operator recreates.
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "VMGone", "vm no longer exists")
+		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
 
 	case err != nil:
-		// Transient inspect failure (CLI exec error, timeout, parse failure).
-		// Keep the pod; the next event or a later probe will re-check.
-		logger.Warnf(ctx, "inspect vm %s failed transiently, not evicting pod %s/%s: %v",
+		// Still transient after inline retries. Spawn a deferred recheck so
+		// a genuinely gone VM does not leave the pod stuck indefinitely —
+		// cocoon does not re-emit DELETED, and probes only ping IPs.
+		logger.Warnf(ctx, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s: %v",
 			trackedID, affectedPod.Namespace, affectedPod.Name, err)
 		metrics.VMInspectTransientFailTotal.Inc()
+		p.scheduleDeferredRecheck(trackedID)
 
 	case inspected.State == vm.StateRunning:
 		// Still running → false alarm.
@@ -382,7 +404,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				logger.Errorf(ctx, err, "remove vm %s during cooldown eviction, keeping pod for investigation", trackedID)
 				return
 			}
-			p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "RestartCooldown", "restart cooldown not elapsed")
+			p.evictPod(ctx, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
@@ -396,7 +418,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				logger.Errorf(ctx, removeErr, "remove vm %s after failed restart, keeping pod for investigation", trackedID)
 				return
 			}
-			p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "RestartFailed", startErr.Error())
+			p.evictPod(ctx, affectedKey, affectedPod, "RestartFailed", startErr.Error())
 			return
 		}
 		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
@@ -411,12 +433,116 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	}
 }
 
+// inspectWithRetry calls Runtime.Inspect up to inlineInspectAttempts
+// times, returning early on a definitive result (success or
+// ErrVMNotFound). Other errors are treated as transient and retried
+// with a linearly growing delay.
+func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, error) {
+	base := cmp.Or(p.inlineInspectBaseDelay, defaultInlineInspectBaseDelay)
+	var lastErr error
+	for i := range inlineInspectAttempts {
+		v, err := p.Runtime.Inspect(ctx, vmID)
+		if err == nil || errors.Is(err, vm.ErrVMNotFound) {
+			return v, err
+		}
+		lastErr = err
+		if i == inlineInspectAttempts-1 {
+			break
+		}
+		if !commonk8s.SleepCtx(ctx, time.Duration(i+1)*base) {
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// scheduleDeferredRecheck spawns a background goroutine that keeps
+// re-inspecting a VM whose event classification was inconclusive, until
+// cocoon returns a definitive answer or the pod is no longer tracked.
+// Dedup'd via pendingRecheck so repeated transient events for the same
+// VM don't multiply goroutines.
+func (p *Provider) scheduleDeferredRecheck(vmID string) {
+	p.mu.Lock()
+	if _, running := p.pendingRecheck[vmID]; running {
+		p.mu.Unlock()
+		return
+	}
+	p.pendingRecheck[vmID] = struct{}{}
+	p.mu.Unlock()
+
+	// Recheck must survive a watcher reconnect (which cancels the event
+	// ctx) so we use Background. The loop self-terminates on definitive
+	// answer or when the pod is no longer tracked.
+	go p.runDeferredRecheck(context.Background(), vmID)
+}
+
+// runDeferredRecheck is the deferred-recheck loop started by
+// scheduleDeferredRecheck. Exits when the VM resolves or the pod
+// stops being tracked.
+func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
+	logger := log.WithFunc("Provider.runDeferredRecheck")
+	defer func() {
+		p.mu.Lock()
+		delete(p.pendingRecheck, vmID)
+		p.mu.Unlock()
+	}()
+
+	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
+	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
+	for {
+		if !commonk8s.SleepCtx(ctx, delay) {
+			return
+		}
+		key, pod := p.podForVMID(vmID)
+		if key == "" || pod == nil {
+			return
+		}
+		v, err := p.Runtime.Inspect(ctx, vmID)
+		switch {
+		case errors.Is(err, vm.ErrVMNotFound):
+			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
+				vmID, pod.Namespace, pod.Name)
+			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
+			return
+		case err != nil:
+			// Still transient — back off and try again.
+			if delay < maxDelay {
+				delay = min(delay*2, maxDelay)
+			}
+		case v.State != vm.StateRunning:
+			// Stopped/error — let the normal event path handle restart.
+			// Feeding a synthetic event keeps restart-cooldown bookkeeping
+			// in one place instead of duplicating it here.
+			logger.Infof(ctx, "deferred recheck: vm %s non-running (state=%s), replaying event",
+				vmID, v.State)
+			p.handleVMGone(ctx, v)
+			return
+		default:
+			// Running — false alarm, stop recheck.
+			return
+		}
+	}
+}
+
+// podForVMID returns the pod and key that currently track vmID, or
+// ("", nil) if no pod tracks it.
+func (p *Provider) podForVMID(vmID string) (string, *corev1.Pod) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for key, tracked := range p.vmsByPod {
+		if tracked.ID == vmID {
+			return key, p.pods[key]
+		}
+	}
+	return "", nil
+}
+
 // evictPod deletes the pod from the API server first, then clears the
 // in-memory tables only on success. Keeping K8s as the authoritative
 // step means a transient API failure leaves memory intact so the next
 // VM event or probe can retry, rather than leaving a live K8s pod with
-// no provider record.
-func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, phase corev1.PodPhase, reason, message string) {
+// no provider record. The pod is always marked PodFailed on success.
+func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
 	if p.Clientset != nil {
@@ -437,8 +563,8 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 		p.Probes.Forget(key)
 	}
 
-	pod.Status.Phase = phase
-	if phase == corev1.PodFailed && reason != "" {
+	pod.Status.Phase = corev1.PodFailed
+	if reason != "" {
 		pod.Status.ContainerStatuses = []corev1.ContainerStatus{
 			{
 				Name: containerName,
