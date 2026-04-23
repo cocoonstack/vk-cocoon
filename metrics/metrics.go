@@ -78,10 +78,10 @@ var (
 		},
 	)
 
-	ReconcileNameAdoptTotal = prometheus.NewCounter(
+	ReconcileAdoptByNameTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
-			Name:      "reconcile_name_adopt_total",
+			Name:      "reconcile_adopt_by_name_total",
 			Help:      "Number of pods re-adopted during startup reconcile by VMName fallback (annotation patch had failed).",
 		},
 	)
@@ -144,7 +144,7 @@ func Register(reg prometheus.Registerer) {
 		OrphanVMTotal,
 		VMInspectTransientFailTotal,
 		PodEvictFailureTotal,
-		ReconcileNameAdoptTotal,
+		ReconcileAdoptByNameTotal,
 		VMBootDuration,
 		SnapshotSaveDuration,
 		SnapshotPushDuration,

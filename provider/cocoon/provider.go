@@ -35,6 +35,13 @@ const (
 
 	// containerName is the synthetic container name used in pod status and metrics.
 	containerName = "agent"
+
+	// evictDeleteAttempts / evictDeleteBaseDelay bound the K8s-side retry in
+	// evictPod. Kept small because the event loop is serialized per provider —
+	// better to return quickly and let the next event re-enter evictPod than
+	// to stall all VM events on a flaky API server.
+	evictDeleteAttempts  = 2
+	evictDeleteBaseDelay = 200 * time.Millisecond
 )
 
 var _ provider.Provider = (*Provider)(nil)
@@ -414,7 +421,6 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 
 	if p.Clientset != nil {
 		if err := p.deletePodWithRetry(ctx, pod); err != nil {
-			// Keep memory state so the next event re-enters evictPod.
 			logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
 				pod.Namespace, pod.Name)
 			metrics.PodEvictFailureTotal.Inc()
@@ -449,12 +455,11 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 	p.notify(pod)
 }
 
-// deletePodWithRetry deletes the pod from the API server with a short
-// bounded retry. IsNotFound is treated as success so repeated evict
-// calls for the same pod are idempotent.
+// deletePodWithRetry deletes the pod with a short bounded retry.
+// IsNotFound is success so repeated evict calls are idempotent.
 func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) error {
 	var lastErr error
-	for i := range 3 {
+	for i := range evictDeleteAttempts {
 		err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
 			ctx, pod.Name, metav1.DeleteOptions{},
 		)
@@ -462,7 +467,7 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 			return nil
 		}
 		lastErr = err
-		if !commonk8s.SleepCtx(ctx, time.Duration(300*(i+1))*time.Millisecond) {
+		if !commonk8s.SleepCtx(ctx, time.Duration(i+1)*evictDeleteBaseDelay) {
 			return ctx.Err()
 		}
 	}

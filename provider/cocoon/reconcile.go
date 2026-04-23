@@ -126,13 +126,9 @@ func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod)
 	p.trackPod(pod, nil)
 }
 
-// adoptByVMName rescues a pod whose runtime annotation never landed.
-// When CreatePod succeeded but the follow-up annotation patch failed,
-// the pod has no VMID while a live VM with the matching spec.VMName
-// still exists. Without this fallback the VMID-keyed orphan scan would
-// destroy or alert on the live VM, and the operator may recreate it
-// under the same name. We re-adopt it and re-patch the annotations so
-// the next restart has a clean trail.
+// adoptByVMName re-adopts a live VM whose matching pod has no VMID
+// annotation, re-runs the runtime-annotation write, and starts probes —
+// the same sequence CreatePod runs on its adopt branch.
 func (p *Provider) adoptByVMName(
 	ctx context.Context, pod *corev1.Pod, vms []vm.VM, idx map[string]int,
 ) *vm.VM {
@@ -146,12 +142,12 @@ func (p *Provider) adoptByVMName(
 		return nil
 	}
 	v := vms[i]
-	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing, patch had failed)",
+	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing)",
 		v.Name, pod.Namespace, pod.Name)
+	p.applyRuntime(ctx, pod, &v)
 	p.trackPod(pod, &v)
-	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, &v)
 	p.startProbeIfEnabled(pod)
-	metrics.ReconcileNameAdoptTotal.Inc()
+	metrics.ReconcileAdoptByNameTotal.Inc()
 	return &v
 }
 

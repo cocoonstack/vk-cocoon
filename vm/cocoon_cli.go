@@ -372,18 +372,17 @@ func cocoonCmdError(op, ref string, err error, output []byte) error {
 	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
 }
 
-// isCocoonNotFound detects the cocoon CLI's "not found" signal in a wrapped
-// error. runJSON embeds stderr in the error string, which is where cocoon
-// prints the message. Kept permissive so minor wording tweaks in cocoon
-// ("vm not found", "no such vm", "does not exist") are all treated the same.
+// isCocoonNotFound detects cocoon's VM-not-found signal inside the
+// stderr-embedded wrapped error produced by runJSON. Restricted to
+// VM-specific phrases so an unrelated binary/config "not found" stderr
+// cannot be promoted to an authoritative VMGone.
 func isCocoonNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "not found") ||
-		strings.Contains(s, "no such vm") ||
-		strings.Contains(s, "does not exist")
+	return strings.Contains(s, "vm not found") ||
+		strings.Contains(s, "no such vm")
 }
 
 // appendCreateArgs adds resource/network flags shared by clone and run.
