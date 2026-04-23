@@ -40,29 +40,23 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 }
 
 // MirrorBaseImage mirrors the source VM's base image to epoch for cross-node clone.
-// Non-fatal: logs and returns nil on failure so snapshot push is not blocked.
-func (p *Pusher) MirrorBaseImage(ctx context.Context, image, imageRepo string) {
+// Non-fatal: logs warnings on failure so snapshot push is not blocked.
+func (p *Pusher) MirrorBaseImage(ctx context.Context, image, imageType, imageDigest, imageRepo string) {
 	logger := log.WithFunc("snapshots.MirrorBaseImage")
-	if image == "" {
+	if image == "" || imageType == "" {
 		return
 	}
 
-	info, err := p.Runtime.ImageInspect(ctx, image)
-	if err != nil || info == nil {
-		logger.Warnf(ctx, "inspect image %s: %v", image, err)
-		return
-	}
-
-	switch info.Type {
+	switch imageType {
 	case "oci":
 		if _, mirrorErr := p.MirrorOCIImage(ctx, image, imageRepo); mirrorErr != nil {
 			logger.Warnf(ctx, "mirror OCI image %s: %v", image, mirrorErr)
 		}
 	case "cloudimg":
-		if mirrorErr := p.MirrorCloudimg(ctx, image, imageRepo, info.ID); mirrorErr != nil {
+		if mirrorErr := p.MirrorCloudimg(ctx, image, imageRepo, imageDigest); mirrorErr != nil {
 			logger.Warnf(ctx, "mirror cloudimg %s: %v", image, mirrorErr)
 		}
 	default:
-		logger.Warnf(ctx, "unknown image type %q for %s, skip mirror", info.Type, image)
+		logger.Warnf(ctx, "unknown image type %q for %s, skip mirror", imageType, image)
 	}
 }

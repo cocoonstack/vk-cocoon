@@ -3,7 +3,6 @@ package cocoon
 import (
 	"context"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -153,9 +152,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		var srcImage string
 		if snapshot != nil && snapshot.Image != "" {
 			srcImage = snapshot.Image
-			if ensureErr := p.ensureBaseImage(ctx, snapshot, forcePull); ensureErr != nil {
-				return nil, "", fmt.Errorf("ensure base image for snapshot %s: %w", local, ensureErr)
-			}
 		}
 
 		opts := vm.CloneOptions{
@@ -167,6 +163,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Storage:    spec.Storage,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
+			Pull:       srcImage != "",
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
@@ -285,72 +282,6 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	pod.Status = *status
-}
-
-// ensureBaseImage makes sure the base image referenced by a snapshot exists
-// locally. Checks local cache first, then tries the original registry,
-// then falls back to pulling from epoch if the image was mirrored there.
-func (p *Provider) ensureBaseImage(ctx context.Context, snapshot *vm.Snapshot, force bool) error {
-	logger := log.WithFunc("Provider.ensureBaseImage")
-
-	// Fast path: image already pulled locally.
-	if info, _ := p.Runtime.ImageInspect(ctx, snapshot.Image); info != nil {
-		logger.Debugf(ctx, "base image %s already local (digest %s)", snapshot.Image, info.ID)
-		return nil
-	}
-
-	// Try pulling from the original registry first.
-	if err := p.Runtime.EnsureImage(ctx, snapshot.Image, force); err == nil {
-		return nil
-	}
-	logger.Debugf(ctx, "original registry pull failed for %s, trying epoch", snapshot.Image)
-
-	// Fallback: pull from epoch if image was mirrored there.
-	if snapshot.ImageType == "cloudimg" && p.Puller != nil {
-		return p.pullCloudimgFromEpoch(ctx, snapshot)
-	}
-	// OCI images mirrored to epoch can be pulled via cocoon image pull
-	// if the epoch registry URL is accessible. This requires the operator
-	// to configure cocoon with epoch as a registry mirror.
-	return fmt.Errorf("base image %s not available locally or from original registry", snapshot.Image)
-}
-
-// pullCloudimgFromEpoch streams a cloud image from epoch and imports it locally.
-func (p *Provider) pullCloudimgFromEpoch(ctx context.Context, snapshot *vm.Snapshot) error {
-	logger := log.WithFunc("Provider.pullCloudimgFromEpoch")
-
-	imageRepo := snapshot.Name + "-image"
-	if snapshot.ImageDigest == "" {
-		return fmt.Errorf("no image digest for cloudimg %s", snapshot.Image)
-	}
-
-	pr, pw := io.Pipe()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- p.Puller.PullCloudImage(ctx, imageRepo, snapshot.ImageDigest, pw)
-		pw.Close() //nolint:errcheck
-	}()
-
-	w, wait, err := p.Runtime.ImageImport(ctx, snapshot.Image)
-	if err != nil {
-		pr.Close() //nolint:errcheck
-		return fmt.Errorf("open image import: %w", err)
-	}
-	if _, cpErr := io.Copy(w, pr); cpErr != nil {
-		w.Close() //nolint:errcheck
-		wait()    //nolint:errcheck
-		return fmt.Errorf("stream cloudimg: %w", cpErr)
-	}
-	w.Close() //nolint:errcheck
-	if waitErr := wait(); waitErr != nil {
-		return fmt.Errorf("image import: %w", waitErr)
-	}
-	if pullErr := <-errCh; pullErr != nil {
-		return fmt.Errorf("pull cloudimg from epoch: %w", pullErr)
-	}
-
-	logger.Infof(ctx, "imported cloudimg %s from epoch/%s", snapshot.Image, imageRepo)
-	return nil
 }
 
 // localSnapshotName builds the cocoon-local snapshot name from a repo and tag.

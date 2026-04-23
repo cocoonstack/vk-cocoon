@@ -82,45 +82,6 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 	return nil
 }
 
-// ImageInspect runs `cocoon image inspect` and returns digest info.
-func (c *CocoonCLI) ImageInspect(ctx context.Context, image string) (*ImageInfo, error) {
-	if image == "" {
-		return nil, nil
-	}
-	out, err := c.runJSON(ctx, "image", "inspect", image)
-	if err != nil {
-		return nil, nil //nolint:nilerr // image not found is not an error
-	}
-	var info ImageInfo
-	if jsonErr := json.Unmarshal(out, &info); jsonErr != nil {
-		return nil, nil //nolint:nilerr // unparseable is not an error
-	}
-	if info.ID == "" {
-		return nil, nil
-	}
-	return &info, nil
-}
-
-// ImageImport spawns `cocoon image import` and returns its stdin pipe.
-func (c *CocoonCLI) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
-	cmd := c.command(ctx, "image", "import", name)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		return nil, nil, fmt.Errorf("start cocoon image import: %w", err)
-	}
-	wait := func() error {
-		if err := cmd.Wait(); err != nil {
-			return fmt.Errorf("cocoon image import: %w", err)
-		}
-		return nil
-	}
-	return stdin, wait, nil
-}
-
 // Inspect runs `cocoon vm inspect`.
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
@@ -294,6 +255,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
+	}
+	if opts.Pull {
+		args = append(args, "--pull")
 	}
 	args = append(args, opts.From)
 	return args

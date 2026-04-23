@@ -118,13 +118,6 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 	return nil
 }
 
-func (f *fakeRuntime) ImageInspect(_ context.Context, _ string) (*vm.ImageInfo, error) {
-	return nil, nil
-}
-
-func (f *fakeRuntime) ImageImport(_ context.Context, _ string) (io.WriteCloser, func() error, error) {
-	return nopWriteCloser{}, func() error { return nil }, nil
-}
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
 
@@ -187,11 +180,8 @@ func TestCreatePodCloneMode(t *testing.T) {
 	if rt.cloned.From != "snapshot-repo" {
 		t.Errorf("clone source: %q, want snapshot-repo", rt.cloned.From)
 	}
-	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != rt.snapshots["snapshot-repo"].Image {
-		t.Fatalf("EnsureImage calls = %#v, want [%q]", rt.ensuredImages, rt.snapshots["snapshot-repo"].Image)
-	}
-	if rt.ensuredImages[0].force {
-		t.Errorf("EnsureImage force = true, want false (default policy)")
+	if !rt.cloned.Pull {
+		t.Errorf("clone Pull = false, want true (base image should be auto-pulled)")
 	}
 
 	runtime := meta.ParseVMRuntime(pod)
