@@ -31,12 +31,4 @@ func (p *Provider) saveAndPushSnapshot(ctx context.Context, vmName, vmID, tag, i
 	}
 	metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 	metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
-
-	// Mirror base image to epoch for cross-node clone.
-	// Get image type and digest from the saved snapshot.
-	snap, snapErr := p.Runtime.Snapshot(ctx, vmName)
-	if snapErr != nil || snap == nil {
-		return
-	}
-	p.Pusher.MirrorBaseImage(ctx, snap.Image, snap.ImageType, snap.ImageDigest, vmName+"-image")
 }

@@ -118,7 +118,6 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 	return nil
 }
 
-
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
 
 func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {

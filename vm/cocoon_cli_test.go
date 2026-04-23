@@ -62,6 +62,11 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 			opts: CloneOptions{From: "snap-a", To: "vm-d", CPU: 1, Memory: "1Gi", NoDirectIO: true},
 			want: []string{"vm", "clone", "--name", "vm-d", "--cpu", "1", "--memory", "1073741824", "--no-direct-io", "snap-a"},
 		},
+		{
+			name: "pull flag appended when set",
+			opts: CloneOptions{From: "snap-a", To: "vm-e", CPU: 1, Memory: "1Gi", Pull: true},
+			want: []string{"vm", "clone", "--name", "vm-e", "--cpu", "1", "--memory", "1073741824", "--pull", "snap-a"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
