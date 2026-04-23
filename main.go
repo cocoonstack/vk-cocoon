@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	commonhttpx "github.com/cocoonstack/cocoon-common/httpx"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -54,6 +54,7 @@ const (
 	kubeletAPIPort     = 10250
 	endpointPatchWait  = 5 * time.Second
 	endpointPatchRetry = 2 * time.Second
+	shutdownTimeout    = 10 * time.Second
 )
 
 func main() {
@@ -81,11 +82,7 @@ func main() {
 	certPath := commonk8s.EnvOrDefault("VK_TLS_CERT", defaultTLSCert)
 	keyPath := commonk8s.EnvOrDefault("VK_TLS_KEY", defaultTLSKey)
 
-	cfg, err := commonk8s.LoadConfig()
-	if err != nil {
-		logger.Fatalf(ctx, err, "load kubeconfig: %v", err)
-	}
-	clientset, err := kubernetes.NewForConfig(cfg)
+	clientset, err := commonk8s.NewClientset()
 	if err != nil {
 		logger.Fatalf(ctx, err, "build clientset: %v", err)
 	}
@@ -180,17 +177,7 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
-	metricsServer := &http.Server{
-		Addr:              metricsAddr,
-		Handler:           metricsMux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	go func() {
-		logger.Infof(signalCtx, "vk-cocoon metrics listening on %s", metricsAddr)
-		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error(signalCtx, err, "metrics listen and serve")
-		}
-	}()
+	metricsServer := commonhttpx.NewServer(metricsAddr, metricsMux)
 
 	go func() {
 		logger.Infof(signalCtx, "vk-cocoon node %s kubelet API on :%d", nodeName, kubeletAPIPort)
@@ -202,15 +189,12 @@ func main() {
 	// NaiveNodeProvider doesn't propagate DaemonEndpoints; patch directly.
 	go patchKubeletEndpoint(signalCtx, clientset, nodeName)
 
-	<-signalCtx.Done()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-		logger.Warnf(shutdownCtx, "shutdown metrics: %v", err)
+	logger.Infof(signalCtx, "vk-cocoon metrics listening on %s", metricsAddr)
+	if err := commonhttpx.Run(signalCtx, shutdownTimeout, commonhttpx.HTTPServerSpec(metricsServer)); err != nil {
+		logger.Error(signalCtx, err, "metrics server exited with error")
 	}
 	p.Close()
-	logger.Info(shutdownCtx, "vk-cocoon exiting")
+	logger.Info(signalCtx, "vk-cocoon exiting")
 }
 
 type buildOpts struct {
@@ -226,11 +210,7 @@ type buildOpts struct {
 
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
 	logger := log.WithFunc("buildProvider")
-	var registryOpts []registryclient.Option
-	if ca := os.Getenv("EPOCH_CA_CERT"); ca != "" {
-		registryOpts = append(registryOpts, registryclient.WithCACert(ca))
-	}
-	registry, err := snapshots.New(opts.epochURL, opts.epochToken, registryOpts...)
+	registry, err := registryclient.NewFromEnv(opts.epochURL, opts.epochToken)
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
 	}

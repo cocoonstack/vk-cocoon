@@ -6,13 +6,14 @@ import (
 	"fmt"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/epoch/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // Pusher streams a local snapshot up into epoch.
 type Pusher struct {
-	Registry RegistryClient
+	Registry *registryclient.Client
 	Runtime  vm.Runtime
 }
 

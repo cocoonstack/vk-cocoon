@@ -1,3 +1,4 @@
+// Package snapshots wraps the epoch SDK for pulling and pushing cocoon VM snapshots.
 package snapshots
 
 import (
@@ -7,13 +8,14 @@ import (
 	"io"
 
 	"github.com/cocoonstack/epoch/manifest"
+	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/epoch/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // Puller streams a snapshot or cloud image from epoch into the local cocoon runtime.
 type Puller struct {
-	Registry RegistryClient
+	Registry *registryclient.Client
 	Runtime  vm.Runtime
 }
 

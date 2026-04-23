@@ -5,13 +5,14 @@ import (
 	"io"
 
 	"github.com/cocoonstack/epoch/cloudimg"
+	"github.com/cocoonstack/epoch/registryclient"
 )
 
 var _ cloudimg.BlobReader = blobReader{}
 
-// blobReader adapts RegistryClient to cloudimg.BlobReader.
+// blobReader adapts *registryclient.Client to cloudimg.BlobReader.
 type blobReader struct {
-	client RegistryClient
+	client *registryclient.Client
 	name   string
 }
 

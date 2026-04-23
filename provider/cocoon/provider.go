@@ -17,6 +17,7 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -49,7 +50,7 @@ type Provider struct {
 	Runtime     vm.Runtime
 	Puller      *snapshots.Puller
 	Pusher      *snapshots.Pusher
-	Registry    snapshots.RegistryClient
+	Registry    *registryclient.Client
 	LeaseParser *network.LeaseParser
 	Pinger      network.Pinger
 	GuestSSH    guest.Executor
