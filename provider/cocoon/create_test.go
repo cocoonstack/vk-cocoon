@@ -743,11 +743,10 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 }
 
 func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
-	// First two inspects fail transiently, third returns a running VM.
+	// First inspect fails transiently, second returns a running VM.
 	// Pod must not be evicted; no deferred recheck needed.
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{
-			{err: errors.New("exec: broken pipe")},
 			{err: errors.New("exec: broken pipe")},
 			{vm: &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0", State: vm.StateRunning}},
 		},
@@ -766,18 +765,18 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got == nil {
 		t.Fatalf("running VM should still be tracked after inline retry recovery")
 	}
-	if rt.inspectN != 3 {
-		t.Fatalf("expected 3 inspect calls, got %d", rt.inspectN)
+	if rt.inspectN != 2 {
+		t.Fatalf("expected 2 inspect calls, got %d", rt.inspectN)
 	}
 }
 
 func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	// All inline retries transient; deferred recheck eventually sees NotFound.
+	// notifyHook closes a channel once eviction fires — deterministic signal.
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{
 			{err: errors.New("exec: broken pipe")},             // inline 1
 			{err: errors.New("exec: broken pipe")},             // inline 2
-			{err: errors.New("exec: broken pipe")},             // inline 3
 			{err: errors.New("exec: broken pipe")},             // deferred 1 — still transient
 			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}, // deferred 2 — definitive
 		},
@@ -792,17 +791,67 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 20 * time.Millisecond
 
+	evicted := make(chan struct{}, 1)
+	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
+		if np.Status.Phase == corev1.PodFailed {
+			select {
+			case evicted <- struct{}{}:
+			default:
+			}
+		}
+	})
+
 	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if got := p.vmForPod("ns", "demo-0"); got == nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-evicted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deferred recheck did not evict pod within 2s")
 	}
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
+	}
+}
+
+func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
+	// cocoon stays broken forever — budget expiration must evict so the pod
+	// does not sit Running/NotReady indefinitely.
+	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.inlineInspectBaseDelay = 1 * time.Millisecond
+	p.deferredRecheckInitialDelay = 5 * time.Millisecond
+	p.deferredRecheckMaxDelay = 10 * time.Millisecond
+	p.deferredRecheckBudget = 30 * time.Millisecond
+
+	reasons := make(chan string, 4)
+	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
+		if np.Status.Phase != corev1.PodFailed || len(np.Status.ContainerStatuses) == 0 {
+			return
+		}
+		term := np.Status.ContainerStatuses[0].State.Terminated
+		if term == nil {
+			return
+		}
+		select {
+		case reasons <- term.Reason:
+		default:
+		}
+	})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+
+	select {
+	case got := <-reasons:
+		if got != "VMInspectTimeout" {
+			t.Fatalf("eviction reason = %q, want VMInspectTimeout", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("budget-timeout eviction did not fire within 2s")
 	}
 }
 

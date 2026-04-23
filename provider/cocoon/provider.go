@@ -45,14 +45,23 @@ const (
 	evictDeleteBaseDelay = 200 * time.Millisecond
 
 	// inlineInspectAttempts bounds the synchronous retry in handleVMGone.
-	// Quick retry catches a hiccuping CLI before spawning a deferred goroutine.
-	inlineInspectAttempts = 3
+	// Two attempts catch the common single-CLI-hiccup case; anything
+	// longer hands off to the deferred recheck so the event loop keeps
+	// moving. Symmetric with evictDeleteAttempts.
+	inlineInspectAttempts = 2
 
 	// Default tunables for the recheck path. Overridable via Provider
 	// fields so tests can shrink them without racing on package globals.
 	defaultInlineInspectBaseDelay      = 200 * time.Millisecond
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
+
+	// defaultDeferredRecheckBudget caps how long a single recheck loop
+	// will keep asking cocoon about a VM. On timeout we evict the pod
+	// with reason VMInspectTimeout so a permanently broken cocoon does
+	// not leave the pod tracked forever — the whole point of the
+	// deferred path was to avoid that outcome.
+	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
 var _ provider.Provider = (*Provider)(nil)
@@ -79,8 +88,9 @@ type Provider struct {
 	Probes      *probes.Manager
 
 	// runtime state
-	startTime      time.Time
-	lifecycleCtx   context.Context    //nolint:containedctx // anchors background goroutines to Provider lifetime
+	startTime time.Time
+	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
+	lifecycleCtx   context.Context
 	lifecycleStop  context.CancelFunc // canceled from Close to stop deferred goroutines
 	mu             sync.RWMutex
 	pods           map[string]*corev1.Pod
@@ -97,6 +107,7 @@ type Provider struct {
 	inlineInspectBaseDelay      time.Duration
 	deferredRecheckInitialDelay time.Duration
 	deferredRecheckMaxDelay     time.Duration
+	deferredRecheckBudget       time.Duration
 }
 
 // NewProvider constructs a Provider with empty tables.
@@ -118,10 +129,15 @@ func NewProvider() *Provider {
 }
 
 // Close cancels background goroutines and waits for them to exit.
+// The lifecycle cancel is issued under p.mu to serialize against
+// scheduleDeferredRecheck's Add-under-lock — otherwise a new goroutine
+// could add to recheckWG after Wait had already returned.
 func (p *Provider) Close() {
+	p.mu.Lock()
 	if p.lifecycleStop != nil {
 		p.lifecycleStop()
 	}
+	p.mu.Unlock()
 	p.recheckWG.Wait()
 	if p.Probes != nil {
 		p.Probes.Close()
@@ -354,21 +370,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	logger := log.WithFunc("Provider.handleVMGone")
 
-	// Find the pod tracking this VM.
-	p.mu.RLock()
-	var affectedKey string
-	var affectedPod *corev1.Pod
-	var trackedID string
-	for key, tracked := range p.vmsByPod {
-		if tracked.ID == eventVM.ID || (tracked.Name != "" && tracked.Name == eventVM.Name) {
-			affectedKey = key
-			affectedPod = p.pods[key]
-			trackedID = tracked.ID
-			break
-		}
-	}
-	p.mu.RUnlock()
-
+	affectedKey, affectedPod, trackedID := p.podForVMMatch(eventVM.ID, eventVM.Name)
 	if affectedKey == "" || affectedPod == nil {
 		return
 	}
@@ -471,23 +473,24 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 // cocoon returns a definitive answer or the pod is no longer tracked.
 // Dedup'd via pendingRecheck so repeated transient events for the same
 // VM don't multiply goroutines.
+//
+// The lifecycle-ctx check and recheckWG.Add happen under p.mu to pair
+// with Close's cancel-under-lock, so every goroutine this function
+// starts is visible to Close's Wait.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
-	// Refuse once shutdown has begun so Close can drain recheckWG
-	// without new goroutines appearing after the cancel.
+	p.mu.Lock()
 	if p.lifecycleCtx.Err() != nil {
+		p.mu.Unlock()
 		return
 	}
-	p.mu.Lock()
 	if _, running := p.pendingRecheck[vmID]; running {
 		p.mu.Unlock()
 		return
 	}
 	p.pendingRecheck[vmID] = struct{}{}
+	p.recheckWG.Add(1)
 	p.mu.Unlock()
 
-	// Anchored to lifecycleCtx so Close stops the loop; independent of
-	// the watcher ctx, which cycles on every cocoon event-stream reconnect.
-	p.recheckWG.Add(1)
 	go p.runDeferredRecheck(p.lifecycleCtx, vmID)
 }
 
@@ -505,11 +508,13 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 
 	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
 	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
+	budget := cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
+	deadline := time.Now().Add(budget)
 	for {
 		if !commonk8s.SleepCtx(ctx, delay) {
 			return
 		}
-		key, pod := p.podForVMID(vmID)
+		key, pod, _ := p.podForVMMatch(vmID, "")
 		if key == "" || pod == nil {
 			return
 		}
@@ -521,7 +526,13 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
 			return
 		case err != nil:
-			// Still transient — back off and try again.
+			// Still transient — back off and try again until the budget expires.
+			if time.Now().After(deadline) {
+				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, evicting pod %s/%s to avoid stuck state",
+					vmID, budget, pod.Namespace, pod.Name)
+				p.evictPod(ctx, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget")
+				return
+			}
 			if delay < maxDelay {
 				delay = min(delay*2, maxDelay)
 			}
@@ -540,17 +551,19 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	}
 }
 
-// podForVMID returns the pod and key that currently track vmID, or
-// ("", nil) if no pod tracks it.
-func (p *Provider) podForVMID(vmID string) (string, *corev1.Pod) {
+// podForVMMatch returns the pod and tracked-VM ID for a pod that matches
+// the given id or (optionally) name. name may be empty to restrict the
+// match to id only. Used by handleVMGone (match on id OR name from a
+// potentially sparse event) and by runDeferredRecheck (id only).
+func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
-		if tracked.ID == vmID {
-			return key, p.pods[key]
+		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
+			return key, p.pods[key], tracked.ID
 		}
 	}
-	return "", nil
+	return "", nil, ""
 }
 
 // evictPod deletes the pod from the API server first, then clears the
@@ -563,6 +576,8 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 
 	if p.Clientset != nil {
 		if err := p.deletePodWithRetry(ctx, pod); err != nil {
+			// Leave in-memory state intact so the next VM event re-enters
+			// evictPod instead of stranding the pod half-detached.
 			logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
 				pod.Namespace, pod.Name)
 			metrics.PodEvictFailureTotal.Inc()
