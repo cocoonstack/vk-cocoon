@@ -214,13 +214,14 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	return snapshot, nil
 }
 
-// ensureForkSnapshot creates a cloneable local snapshot for sub-agents,
-// since cocoon's clone requires a snapshot ref, not a live VM name.
+// ensureForkSnapshot produces a cloneable snapshot of the current source
+// VM state for sub-agent fork. cocoon's clone requires a snapshot ref,
+// not a live VM name, so we always save a fresh snapshot — SnapshotSave
+// is idempotent (rm-and-retry under the hood) and refreshing each time
+// means a fork reflects the source VM's current state, not the state it
+// had the first time anyone forked from it.
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
-	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
-		return snapshotName, nil
-	}
 
 	sourceVM := p.vmByName(sourceVMName)
 	if sourceVM == nil {

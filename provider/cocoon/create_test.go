@@ -227,6 +227,36 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	}
 }
 
+func TestCreatePodForkFromRefreshesSnapshotEachTime(t *testing.T) {
+	// A stale snapshot from a previous fork must not short-circuit the save;
+	// otherwise sub-agents perpetually fork from the source VM's first state.
+	rt := &fakeRuntime{
+		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},
+		snapshots: map[string]*vm.Snapshot{
+			"fork-vk-ns-demo-0": {Name: "fork-vk-ns-demo-0"},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:   "vk-ns-demo-1",
+		Image:    "snapshot-repo:latest",
+		Mode:     "clone",
+		ForkFrom: "vk-ns-demo-0",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.snapshotSaveCount != 1 {
+		t.Fatalf("SnapshotSave should run even when snapshot exists, got count=%d", rt.snapshotSaveCount)
+	}
+	if rt.savedSnapshot.vmID != "source-vm-id" {
+		t.Fatalf("SnapshotSave source = %q, want source-vm-id", rt.savedSnapshot.vmID)
+	}
+}
+
 func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
 	p := NewProvider()
