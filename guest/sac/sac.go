@@ -33,6 +33,7 @@ var (
 	_ guest.Dialer  = (*Dialer)(nil)
 	_ guest.Session = (*Session)(nil)
 
+	// netLineRe matches a SAC "i" output line announcing a NIC IP.
 	netLineRe = regexp.MustCompile(`Net:\s+(\d+),\s+Ip=(\S+)`)
 )
 

@@ -82,8 +82,8 @@ func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 	for {
 		n, peer, err := conn.ReadFrom(reply)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
 			return fmt.Errorf("read icmp reply: %w", err)
 		}

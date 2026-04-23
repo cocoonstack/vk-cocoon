@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/epoch/utils"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -260,7 +261,9 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 		if err := p.patchPodAnnotations(ctx, namespace, name, annos); err == nil {
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		if !commonk8s.SleepCtx(ctx, 500*time.Millisecond) {
+			return
+		}
 	}
 	logger.Warnf(ctx, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 }

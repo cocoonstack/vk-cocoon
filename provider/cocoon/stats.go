@@ -163,8 +163,8 @@ func splitPodKey(key string) (string, string) {
 }
 
 func readNodeUsage() (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	cpuNano := uint64(readNodeCPUSeconds() * 1e9)          //nolint:gosec
-	memBytes := uint64(max(readNodeMemoryWorkingSet(), 0)) //nolint:gosec
+	cpuNano := uint64(readNodeCPUSeconds() * 1e9)          //nolint:gosec // cpu seconds read from /proc are always non-negative
+	memBytes := uint64(max(readNodeMemoryWorkingSet(), 0)) //nolint:gosec // clamped to non-negative via max
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &memBytes}
 }
@@ -211,8 +211,8 @@ func readNodeMemoryWorkingSet() int64 {
 }
 
 func readProcessUsage(pid int) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	cpuNano := uint64(readProcessCPUSeconds(pid) * 1e9)          //nolint:gosec
-	memBytes := uint64(max(readProcessMemoryWorkingSet(pid), 0)) //nolint:gosec
+	cpuNano := uint64(readProcessCPUSeconds(pid) * 1e9)          //nolint:gosec // cpu seconds read from /proc are always non-negative
+	memBytes := uint64(max(readProcessMemoryWorkingSet(pid), 0)) //nolint:gosec // clamped to non-negative via max
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &memBytes}
 }

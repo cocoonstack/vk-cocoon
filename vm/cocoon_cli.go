@@ -1,3 +1,9 @@
+// Package vm wraps the cocoon CLI for VM lifecycle operations.
+//
+// This package is the cocoon CLI bridge; subprocess calls are architectural,
+// not tech debt. cocoon is the authoritative VM controller and exposes its
+// contract through the CLI, so vk-cocoon shells out rather than linking
+// against cocoon's internals.
 package vm
 
 import (
@@ -10,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/projecteru2/core/log"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -214,7 +221,7 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	ch := make(chan VMEvent, 16)
 	go func() {
 		defer close(ch)
-		defer cmd.Wait() //nolint:errcheck
+		defer cmd.Wait() //nolint:errcheck // wait error ignored on goroutine cleanup path
 		dec := json.NewDecoder(stdout)
 		for {
 			var raw struct {
@@ -285,7 +292,11 @@ func buildRunArgs(opts RunOptions) []string {
 }
 
 // command builds an exec.Cmd, optionally wrapped in sudo.
+// Every invocation is logged at debug so operators can see the external
+// binary surface — see the package doc for why the subprocess boundary
+// exists.
 func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
+	log.WithFunc("vm.CocoonCLI.command").Debugf(ctx, "exec cocoon: %v", args)
 	if c.sudo {
 		full := append([]string{c.binary}, args...)
 		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input

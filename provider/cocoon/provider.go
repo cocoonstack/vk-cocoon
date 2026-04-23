@@ -26,9 +26,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// compile-time interface check.
-var _ provider.Provider = (*Provider)(nil)
-
 const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
@@ -37,23 +34,30 @@ const (
 	containerName = "agent"
 )
 
+var _ provider.Provider = (*Provider)(nil)
+
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
+	// identification
 	NodeName string
 
-	Clientset    kubernetes.Interface
-	Runtime      vm.Runtime
-	Puller       *snapshots.Puller
-	Pusher       *snapshots.Pusher
-	Registry     snapshots.RegistryClient
-	LeaseParser  *network.LeaseParser
-	Pinger       network.Pinger
-	GuestSSH     guest.Executor
-	GuestRDP     guest.Executor
-	GuestSAC     guest.Dialer
-	Probes       *probes.Manager
+	// config / tunables
 	OrphanPolicy provider.OrphanPolicy
 
+	// collaborators / resources
+	Clientset   kubernetes.Interface
+	Runtime     vm.Runtime
+	Puller      *snapshots.Puller
+	Pusher      *snapshots.Pusher
+	Registry    snapshots.RegistryClient
+	LeaseParser *network.LeaseParser
+	Pinger      network.Pinger
+	GuestSSH    guest.Executor
+	GuestRDP    guest.Executor
+	GuestSAC    guest.Dialer
+	Probes      *probes.Manager
+
+	// runtime state
 	startTime   time.Time
 	mu          sync.RWMutex
 	pods        map[string]*corev1.Pod

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -105,7 +106,7 @@ func main() {
 		logger.Fatalf(signalCtx, err, "node resources: %v", err)
 	}
 
-	p := buildProvider(signalCtx, buildOpts{
+	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
 		epochToken:   epochToken,
@@ -115,6 +116,9 @@ func main() {
 		orphanPolicy: orphanPolicy,
 		clientset:    clientset,
 	})
+	if err != nil {
+		logger.Fatalf(signalCtx, err, "build provider: %v", err)
+	}
 
 	if reconcileErr := p.StartupReconcile(signalCtx); reconcileErr != nil {
 		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node: %v", reconcileErr)
@@ -220,13 +224,16 @@ type buildOpts struct {
 	clientset    kubernetes.Interface
 }
 
-func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
+func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
 	logger := log.WithFunc("buildProvider")
 	var registryOpts []registryclient.Option
 	if ca := os.Getenv("EPOCH_CA_CERT"); ca != "" {
 		registryOpts = append(registryOpts, registryclient.WithCACert(ca))
 	}
-	registry := snapshots.New(opts.epochURL, opts.epochToken, registryOpts...)
+	registry, err := snapshots.New(opts.epochURL, opts.epochToken, registryOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("construct registry client: %w", err)
+	}
 	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName
@@ -248,7 +255,7 @@ func buildProvider(ctx context.Context, opts buildOpts) *cocoon.Provider {
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
-	return p
+	return p, nil
 }
 
 func withHandler(h http.Handler) nodeutil.NodeOpt {
