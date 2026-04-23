@@ -846,6 +846,43 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 	t.Fatal("deferred recheck goroutine did not exit after pod was forgotten")
 }
 
+func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
+	// A recheck goroutine running when Close is called must exit so the
+	// provider drains cleanly instead of leaking.
+	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns-demo-0"})
+	// Long enough that the goroutine is sleeping when we call Close.
+	p.deferredRecheckInitialDelay = 5 * time.Second
+	p.deferredRecheckMaxDelay = 10 * time.Second
+
+	p.scheduleDeferredRecheck("vmid-close")
+
+	done := make(chan struct{})
+	go func() {
+		p.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not drain deferred recheck goroutine within 2s")
+	}
+
+	// After Close, further schedule attempts must no-op.
+	p.scheduleDeferredRecheck("vmid-close")
+	p.mu.RLock()
+	n := len(p.pendingRecheck)
+	p.mu.RUnlock()
+	if n != 0 {
+		t.Fatalf("scheduleDeferredRecheck after Close should no-op, pendingRecheck=%d", n)
+	}
+}
+
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p := NewProvider()
 	p.Probes = probes.NewManager(t.Context())

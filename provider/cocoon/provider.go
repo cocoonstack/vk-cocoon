@@ -80,12 +80,15 @@ type Provider struct {
 
 	// runtime state
 	startTime      time.Time
+	lifecycleCtx   context.Context    //nolint:containedctx // anchors background goroutines to Provider lifetime
+	lifecycleStop  context.CancelFunc // canceled from Close to stop deferred goroutines
 	mu             sync.RWMutex
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
 	vmsByName      map[string]*vm.VM
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
+	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
 	notifyHook     func(*corev1.Pod)
 
 	// Recheck tunables. Zero values fall back to the defaultXxx
@@ -99,8 +102,11 @@ type Provider struct {
 // NewProvider constructs a Provider with empty tables.
 // Default Pinger is NopPinger so tests degrade gracefully.
 func NewProvider() *Provider {
+	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
 	return &Provider{
 		startTime:      time.Now(),
+		lifecycleCtx:   lifecycleCtx,
+		lifecycleStop:  lifecycleStop,
 		OrphanPolicy:   provider.OrphanAlert,
 		Pinger:         network.NopPinger{},
 		pods:           map[string]*corev1.Pod{},
@@ -111,8 +117,12 @@ func NewProvider() *Provider {
 	}
 }
 
-// Close releases resources held by the provider.
+// Close cancels background goroutines and waits for them to exit.
 func (p *Provider) Close() {
+	if p.lifecycleStop != nil {
+		p.lifecycleStop()
+	}
+	p.recheckWG.Wait()
 	if p.Probes != nil {
 		p.Probes.Close()
 	}
@@ -462,6 +472,11 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 // Dedup'd via pendingRecheck so repeated transient events for the same
 // VM don't multiply goroutines.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
+	// Refuse once shutdown has begun so Close can drain recheckWG
+	// without new goroutines appearing after the cancel.
+	if p.lifecycleCtx.Err() != nil {
+		return
+	}
 	p.mu.Lock()
 	if _, running := p.pendingRecheck[vmID]; running {
 		p.mu.Unlock()
@@ -470,10 +485,10 @@ func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.pendingRecheck[vmID] = struct{}{}
 	p.mu.Unlock()
 
-	// Recheck must survive a watcher reconnect (which cancels the event
-	// ctx) so we use Background. The loop self-terminates on definitive
-	// answer or when the pod is no longer tracked.
-	go p.runDeferredRecheck(context.Background(), vmID)
+	// Anchored to lifecycleCtx so Close stops the loop; independent of
+	// the watcher ctx, which cycles on every cocoon event-stream reconnect.
+	p.recheckWG.Add(1)
+	go p.runDeferredRecheck(p.lifecycleCtx, vmID)
 }
 
 // runDeferredRecheck is the deferred-recheck loop started by
@@ -481,6 +496,7 @@ func (p *Provider) scheduleDeferredRecheck(vmID string) {
 // stops being tracked.
 func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	logger := log.WithFunc("Provider.runDeferredRecheck")
+	defer p.recheckWG.Done()
 	defer func() {
 		p.mu.Lock()
 		delete(p.pendingRecheck, vmID)
