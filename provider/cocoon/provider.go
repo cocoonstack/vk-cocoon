@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -337,11 +338,18 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	// Double-check: inspect the VM via cocoon CLI.
 	inspected, err := p.Runtime.Inspect(ctx, trackedID)
 	switch {
-	case err != nil:
-		// VM not found → truly gone. Delete pod so operator recreates.
-		logger.Infof(ctx, "vm %s confirmed gone (inspect: %v), deleting pod %s/%s",
-			trackedID, err, affectedPod.Namespace, affectedPod.Name)
+	case errors.Is(err, vm.ErrVMNotFound):
+		// Authoritatively gone → delete pod so operator recreates.
+		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
 		p.evictPod(ctx, affectedKey, affectedPod, corev1.PodFailed, "VMGone", "vm no longer exists")
+
+	case err != nil:
+		// Transient inspect failure (CLI exec error, timeout, parse failure).
+		// Keep the pod; the next event or a later probe will re-check.
+		logger.Warnf(ctx, "inspect vm %s failed transiently, not evicting pod %s/%s: %v",
+			trackedID, affectedPod.Namespace, affectedPod.Name, err)
+		metrics.VMInspectTransientFailTotal.Inc()
 
 	case inspected.State == vm.StateRunning:
 		// Still running → false alarm.

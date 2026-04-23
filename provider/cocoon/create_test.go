@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,15 +29,17 @@ type fakeRuntime struct {
 		name string
 		vmID string
 	}
-	cloneErr      error
-	runErr        error
-	snapshotErr   error
-	cloneVM       *vm.VM
-	inspectVM     *vm.VM
-	runVM         *vm.VM
-	snapshots     map[string]*vm.Snapshot
-	listVMs       []vm.VM
-	ensuredImages []struct {
+	snapshotSaveCount int
+	cloneErr          error
+	runErr            error
+	snapshotErr       error
+	inspectErr        error
+	cloneVM           *vm.VM
+	inspectVM         *vm.VM
+	runVM             *vm.VM
+	snapshots         map[string]*vm.Snapshot
+	listVMs           []vm.VM
+	ensuredImages     []struct {
 		image string
 		force bool
 	}
@@ -67,10 +70,13 @@ func (f *fakeRuntime) Run(_ context.Context, opts vm.RunOptions) (*vm.VM, error)
 }
 
 func (f *fakeRuntime) Inspect(_ context.Context, _ string) (*vm.VM, error) {
+	if f.inspectErr != nil {
+		return nil, f.inspectErr
+	}
 	if f.inspectVM != nil {
 		return f.inspectVM, nil
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("inspect: %w", vm.ErrVMNotFound)
 }
 
 func (f *fakeRuntime) List(_ context.Context) ([]vm.VM, error) { return f.listVMs, nil }
@@ -83,6 +89,7 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
 	f.savedSnapshot.name = name
 	f.savedSnapshot.vmID = vmID
+	f.snapshotSaveCount++
 	if f.snapshots == nil {
 		f.snapshots = map[string]*vm.Snapshot{}
 	}

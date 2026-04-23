@@ -90,9 +90,16 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 }
 
 // Inspect runs `cocoon vm inspect`.
+//
+// A cocoon reply of "not found" is translated to ErrVMNotFound so callers can
+// tell a gone VM apart from a transient CLI failure; any other error is
+// returned as-is and must be treated as inconclusive.
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
 	if err != nil {
+		if isCocoonNotFound(err) {
+			return nil, fmt.Errorf("cocoon vm inspect %s: %w", vmID, ErrVMNotFound)
+		}
 		return nil, fmt.Errorf("cocoon vm inspect %s: %w", vmID, err)
 	}
 	return parseInspectJSON(out)
@@ -363,6 +370,20 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 // cocoonCmdError formats a consistent error message for cocoon subprocess failures.
 func cocoonCmdError(op, ref string, err error, output []byte) error {
 	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
+}
+
+// isCocoonNotFound detects the cocoon CLI's "not found" signal in a wrapped
+// error. runJSON embeds stderr in the error string, which is where cocoon
+// prints the message. Kept permissive so minor wording tweaks in cocoon
+// ("vm not found", "no such vm", "does not exist") are all treated the same.
+func isCocoonNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "not found") ||
+		strings.Contains(s, "no such vm") ||
+		strings.Contains(s, "does not exist")
 }
 
 // appendCreateArgs adds resource/network flags shared by clone and run.

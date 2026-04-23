@@ -1,9 +1,35 @@
 package vm
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestIsCocoonNotFound(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil is not not-found", err: nil, want: false},
+		{name: "vm not found", err: errors.New("exit status 1 (stderr: vm not found)"), want: true},
+		{name: "no such vm", err: errors.New("exit status 2 (stderr: no such vm)"), want: true},
+		{name: "does not exist", err: errors.New("exit status 1 (stderr: vm does not exist)"), want: true},
+		{name: "case-insensitive Not Found", err: errors.New("VM Not Found"), want: true},
+		{name: "transient sudo failure", err: errors.New("exec: sudo: broken pipe"), want: false},
+		{name: "permission denied", err: errors.New("permission denied"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCocoonNotFound(tc.err); got != tc.want {
+				t.Fatalf("isCocoonNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestAppendCreateArgsNormalizesResourceQuantities(t *testing.T) {
 	t.Parallel()

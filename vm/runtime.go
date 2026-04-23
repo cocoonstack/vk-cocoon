@@ -3,11 +3,18 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"io"
 )
 
 // StateRunning is the state string cocoon reports for a live VM.
 const StateRunning = "running"
+
+// ErrVMNotFound signals the cocoon CLI has authoritatively reported the VM
+// does not exist. Callers use this to distinguish a gone VM from a transient
+// CLI failure (sudo hiccup, timeout, parse error) where the VM may still be
+// alive. Returned wrapped; unwrap with errors.Is.
+var ErrVMNotFound = errors.New("vm not found")
 
 // NetworkInfo holds CNI-assigned addressing for a NIC. Nil for DHCP networks.
 type NetworkInfo struct {

@@ -62,6 +62,30 @@ var (
 		},
 	)
 
+	VMInspectTransientFailTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "vm_inspect_transient_fail_total",
+			Help:      "Number of inspect failures after a VM event that were treated as inconclusive rather than VMGone.",
+		},
+	)
+
+	PodEvictFailureTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "pod_evict_failure_total",
+			Help:      "Number of pod evictions that failed to delete the K8s pod after retries.",
+		},
+	)
+
+	ReconcileNameAdoptTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "reconcile_name_adopt_total",
+			Help:      "Number of pods re-adopted during startup reconcile by VMName fallback (annotation patch had failed).",
+		},
+	)
+
 	VMBootDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
@@ -118,6 +142,9 @@ func Register(reg prometheus.Registerer) {
 		SnapshotPushTotal,
 		VMTableSize,
 		OrphanVMTotal,
+		VMInspectTransientFailTotal,
+		PodEvictFailureTotal,
+		ReconcileNameAdoptTotal,
 		VMBootDuration,
 		SnapshotSaveDuration,
 		SnapshotPushDuration,
