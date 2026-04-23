@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -403,12 +404,24 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	}
 }
 
-// evictPod removes the VM record, deletes the pod from the API server,
-// and notifies the framework so the operator can recreate the pod.
+// evictPod deletes the pod from the API server first, then clears the
+// in-memory tables only on success. Keeping K8s as the authoritative
+// step means a transient API failure leaves memory intact so the next
+// VM event or probe can retry, rather than leaving a live K8s pod with
+// no provider record.
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, phase corev1.PodPhase, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
-	// Detach before mutating status to avoid a data race with concurrent readers.
+	if p.Clientset != nil {
+		if err := p.deletePodWithRetry(ctx, pod); err != nil {
+			// Keep memory state so the next event re-enters evictPod.
+			logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
+				pod.Namespace, pod.Name)
+			metrics.PodEvictFailureTotal.Inc()
+			return
+		}
+	}
+
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
@@ -416,16 +429,6 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 
 	if p.Probes != nil {
 		p.Probes.Forget(key)
-	}
-
-	if p.Clientset != nil {
-		if err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
-			ctx, pod.Name, metav1.DeleteOptions{},
-		); err != nil {
-			logger.Warnf(ctx, "delete pod %s/%s: %v (phase kept as-is)", pod.Namespace, pod.Name, err)
-			p.notify(pod)
-			return
-		}
 	}
 
 	pod.Status.Phase = phase
@@ -444,6 +447,26 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, ph
 		}
 	}
 	p.notify(pod)
+}
+
+// deletePodWithRetry deletes the pod from the API server with a short
+// bounded retry. IsNotFound is treated as success so repeated evict
+// calls for the same pod are idempotent.
+func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
+			ctx, pod.Name, metav1.DeleteOptions{},
+		)
+		if err == nil || apierrors.IsNotFound(err) {
+			return nil
+		}
+		lastErr = err
+		if !commonk8s.SleepCtx(ctx, time.Duration(300*(i+1))*time.Millisecond) {
+			return ctx.Err()
+		}
+	}
+	return lastErr
 }
 
 // patchPodAnnotations patches the given annotations onto a pod via the API server.

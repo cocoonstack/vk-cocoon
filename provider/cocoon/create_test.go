@@ -11,8 +11,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -601,6 +603,52 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	// No VM should be associated.
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Errorf("hibernated pod should have no VM, got %+v", got)
+	}
+}
+
+func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	cs := fake.NewSimpleClientset(pod)
+	cs.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("api server unreachable")
+	})
+
+	p := NewProvider()
+	p.Runtime = &fakeRuntime{}
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = cs
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.evictPod(t.Context(), key, pod, corev1.PodFailed, "VMGone", "vm no longer exists")
+
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-evict" {
+		t.Fatalf("VM should still be tracked after failed delete, got %#v", got)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
+		t.Fatalf("pod should still be tracked after failed delete: %v", err)
+	}
+}
+
+func TestEvictPodIdempotentOnNotFound(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	// Clientset has no pods — deletion returns NotFound, which evictPod must treat as success.
+	cs := fake.NewSimpleClientset()
+
+	p := NewProvider()
+	p.Runtime = &fakeRuntime{}
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = cs
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.evictPod(t.Context(), key, pod, corev1.PodFailed, "VMGone", "vm no longer exists")
+
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Fatalf("VM should be untracked after NotFound delete, got %#v", got)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
+		t.Fatalf("pod should be untracked after NotFound delete")
 	}
 }
 
