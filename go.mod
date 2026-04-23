@@ -4,7 +4,7 @@ go 1.25.6
 
 require (
 	github.com/cocoonstack/cocoon-common v0.1.10-0.20260423175920-c8cd308978cb
-	github.com/cocoonstack/epoch v0.2.1-0.20260423180208-f9da6a80997a
+	github.com/cocoonstack/epoch v0.2.1-0.20260423235109-fcafc2d850ed
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
