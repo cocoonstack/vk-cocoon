@@ -16,7 +16,7 @@ func readProcNetDev(pid int, iface string) (rxBytes, txBytes uint64) {
 	if err != nil {
 		return 0, 0
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 
 	prefix := iface + ":"
 	scanner := bufio.NewScanner(f)

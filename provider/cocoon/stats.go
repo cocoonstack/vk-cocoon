@@ -174,7 +174,7 @@ func readNodeCPUSeconds() float64 {
 	if err != nil {
 		return 0
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -196,7 +196,7 @@ func readNodeMemoryWorkingSet() int64 {
 	if err != nil {
 		return 0
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 	var total, avail int64
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -240,7 +240,7 @@ func readProcessMemoryWorkingSet(pid int) int64 {
 	if err != nil {
 		return 0
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		if strings.HasPrefix(scanner.Text(), "VmRSS:") {

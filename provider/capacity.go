@@ -158,7 +158,7 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open /proc/meminfo: %w", err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 
 	want := make(map[string]bool, len(names))
 	for _, n := range names {
