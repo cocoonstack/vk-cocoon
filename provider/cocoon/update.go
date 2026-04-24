@@ -18,6 +18,10 @@ import (
 const hibernateImportSuffix = "-hibernate-import"
 
 // UpdatePod handles hibernate/wake transitions. Other spec changes are ignored.
+// A K8s-side pod update that does not represent a hibernate/wake toggle is a
+// no-op: refreshing status and re-notifying on every tick just feeds a loop
+// where the patched pod comes back as another UpdatePod, pinning CPU and
+// tripling the reconcile work the operator has to do.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
@@ -42,7 +46,10 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "woken").Inc()
 	default:
+		// No lifecycle transition; skip the refresh+notify round trip so we
+		// don't echo the incoming pod back to the apiserver.
 		metrics.PodLifecycleTotal.WithLabelValues("update", "noop").Inc()
+		return nil
 	}
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
