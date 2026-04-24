@@ -33,7 +33,8 @@ type fakeRuntime struct {
 		name string
 		vmID string
 	}
-	snapshotSaveCount int
+	snapshotSaveCount   int
+	snapshotRemoveCalls []string
 	cloneErr          error
 	runErr            error
 	snapshotErr       error
@@ -118,6 +119,12 @@ func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
 		f.snapshots = map[string]*vm.Snapshot{}
 	}
 	f.snapshots[name] = &vm.Snapshot{Name: name}
+	return nil
+}
+
+func (f *fakeRuntime) SnapshotRemoveIfExists(_ context.Context, name string) error {
+	f.snapshotRemoveCalls = append(f.snapshotRemoveCalls, name)
+	delete(f.snapshots, name)
 	return nil
 }
 
@@ -249,9 +256,34 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	}
 }
 
-func TestCreatePodForkFromRefreshesSnapshotEachTime(t *testing.T) {
-	// A stale snapshot from a previous fork must not short-circuit the save;
-	// otherwise sub-agents perpetually fork from the source VM's first state.
+func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
+	// A fresh main VM must drop the old fork snapshot so sub-agents cloned
+	// after a main recreate pick up current state, not the stale checkpoint.
+	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "epoch.example/cocoon/ubuntu:24.04",
+		Mode:   "run",
+		OS:     "linux",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(rt.snapshotRemoveCalls) != 1 || rt.snapshotRemoveCalls[0] != "fork-vk-ns-demo-0" {
+		t.Fatalf("SnapshotRemoveIfExists calls = %v, want [fork-vk-ns-demo-0]", rt.snapshotRemoveCalls)
+	}
+}
+
+func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
+	// A cached fork snapshot from a previous sub-agent creation must
+	// short-circuit the save; `snapshot save` pauses the source VM
+	// and costs ~2s for a 1GiB guest, so hot-scale would be 4-5× slower
+	// if we resnapshotted for every sub-agent. Fork invalidation is the
+	// main VM's responsibility (see bringUpVM for mode=run).
 	rt := &fakeRuntime{
 		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},
 		snapshots: map[string]*vm.Snapshot{
@@ -271,11 +303,11 @@ func TestCreatePodForkFromRefreshesSnapshotEachTime(t *testing.T) {
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if rt.snapshotSaveCount != 1 {
-		t.Fatalf("SnapshotSave should run even when snapshot exists, got count=%d", rt.snapshotSaveCount)
+	if rt.snapshotSaveCount != 0 {
+		t.Fatalf("SnapshotSave should be skipped when snapshot exists, got count=%d", rt.snapshotSaveCount)
 	}
-	if rt.savedSnapshot.vmID != "source-vm-id" {
-		t.Fatalf("SnapshotSave source = %q, want source-vm-id", rt.savedSnapshot.vmID)
+	if rt.cloned == nil || rt.cloned.From != "fork-vk-ns-demo-0" {
+		t.Fatalf("clone source = %q, want fork-vk-ns-demo-0", rt.cloned.From)
 	}
 }
 

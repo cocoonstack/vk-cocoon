@@ -159,7 +159,7 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 // Stale snapshots at the same name are removed up-front for idempotency
 // (same retry-loop reasoning as SnapshotSave).
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error) {
-	if err := c.snapshotRemoveIfExists(ctx, opts.Name); err != nil {
+	if err := c.SnapshotRemoveIfExists(ctx, opts.Name); err != nil {
 		return nil, nil, err
 	}
 	args := []string{"snapshot", "import", "--name", opts.Name}
@@ -348,8 +348,10 @@ func parseVMFromStatusJSON(data []byte) VM {
 	return v
 }
 
-// snapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.
-func (c *CocoonCLI) snapshotRemoveIfExists(ctx context.Context, name string) error {
+// SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
+// success. Exposed so callers can invalidate cached fork snapshots when a
+// main VM is recreated.
+func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) error {
 	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
 	if err == nil {
 		return nil

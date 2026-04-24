@@ -117,6 +117,7 @@ type Runtime interface {
 	Remove(ctx context.Context, vmID string) error
 	Start(ctx context.Context, vmID string) error
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
+	SnapshotRemoveIfExists(ctx context.Context, name string) error
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)
 	SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)

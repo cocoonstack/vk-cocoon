@@ -136,6 +136,13 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
 		}
+		// A fresh main VM must invalidate any fork snapshot cached from a
+		// previous incarnation (e.g. VM kill + recreate, operator recreate),
+		// so sub-agents that scale later clone from current state.
+		forkName := forkSnapshotName(spec.VMName)
+		if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
+			log.WithFunc("Provider.bringUpVM").Warnf(ctx, "invalidate fork snapshot %s: %v", forkName, err)
+		}
 		return v, "", nil
 
 	default: // clone is the default
@@ -216,12 +223,19 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	return snapshot, nil
 }
 
-// ensureForkSnapshot saves a fresh snapshot of the source VM before
-// every fork so sub-agents clone from current state rather than a
-// stale first-fork checkpoint. SnapshotSave handles rm-and-retry when
-// the target name already exists.
+// ensureForkSnapshot returns the fork snapshot name for a source VM,
+// creating it if missing and reusing it otherwise. Reuse matters because
+// `snapshot save` pauses the source VM, dumps guest memory, and costs
+// ~2s for a 1GiB Linux guest — paying that on every sub-agent creation
+// multiplied the hot-scale path by 4–5×. Sub-agents of a CocoonSet are
+// identical replicas, so the first checkpoint is the one that matters;
+// to refresh the fork state, scale the set to zero and back up.
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
+
+	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
+		return snapshotName, nil
+	}
 
 	sourceVM := p.vmByName(sourceVMName)
 	if sourceVM == nil {
