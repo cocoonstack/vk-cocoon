@@ -72,6 +72,12 @@ type CloneOptions struct {
 	Backend    string
 	NoDirectIO bool
 	Pull       bool
+	// OnDemand maps to `cocoon vm clone --on-demand`: CH loads guest
+	// memory lazily via userfaultfd instead of copying it upfront.
+	// Cuts clone wall time from ~500ms to ~50-100ms at the cost of
+	// per-page faults during the first seconds of guest execution.
+	// CH only; firecracker ignores the flag.
+	OnDemand bool
 }
 
 // RunOptions is the input to Runtime.Run.

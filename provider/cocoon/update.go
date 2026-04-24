@@ -118,6 +118,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Storage:    spec.Storage,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
+		OnDemand:   true,
 	})
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)

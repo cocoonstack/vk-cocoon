@@ -273,6 +273,11 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.Pull {
 		args = append(args, "--pull")
 	}
+	if opts.OnDemand && opts.Backend != BackendFirecracker {
+		// UFFD lazy memory restore is CH-only; skipping on FC keeps the
+		// same CloneOptions usable for both backends.
+		args = append(args, "--on-demand")
+	}
 	args = append(args, opts.From)
 	return args
 }

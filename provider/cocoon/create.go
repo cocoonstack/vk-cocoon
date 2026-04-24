@@ -112,6 +112,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Storage:    spec.Storage,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
+			OnDemand:   true,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -165,6 +166,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			Pull:       srcImage != "",
+			OnDemand:   true,
 		}
 		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {

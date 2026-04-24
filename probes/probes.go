@@ -12,9 +12,19 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
-// defaultInitialInterval and friends set probe timing defaults.
+// Probe timing defaults.
+//
+// The initial (pre-Ready) phase uses exponential backoff so a fast-booting
+// guest flips to Ready within ~100ms of being reachable instead of waiting
+// the full 2s that a fixed interval costs. The cap bounds the worst case
+// for a slow guest so we still poll frequently enough to catch the edge.
+// Once Ready, we switch to a coarse steady interval since sampling a
+// healthy VM every 5s is plenty.
 const (
-	defaultInitialInterval  = 2 * time.Second
+	defaultInitialInterval    = 100 * time.Millisecond
+	defaultInitialBackoffMax  = 1 * time.Second
+	defaultInitialBackoffStep = 1.5
+
 	defaultSteadyInterval   = 5 * time.Second
 	defaultFailureThreshold = 3
 )
@@ -143,6 +153,8 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 }
 
 // run is the per-pod agent loop. Starts fast, slows to steady state once Ready.
+// Pre-Ready polling uses exponential backoff so a guest that boots in 200ms
+// flips immediately without paying a fixed 2s wait for the first retry.
 func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
 	interval := defaultInitialInterval
 	if lastReady {
@@ -173,6 +185,9 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 			}
 		case ready:
 			failures = 0
+		case !lastReady:
+			// Still waiting for the VM to come up: back off.
+			interval = nextInitialInterval(interval)
 		case lastReady:
 			// Only flip back after the failure budget is exhausted.
 			failures++
@@ -185,6 +200,12 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 			}
 		}
 	}
+}
+
+// nextInitialInterval grows the pre-Ready poll interval exponentially until
+// it hits the cap, so slow guests still see a probe roughly once per second.
+func nextInitialInterval(d time.Duration) time.Duration {
+	return min(time.Duration(float64(d)*defaultInitialBackoffStep), defaultInitialBackoffMax)
 }
 
 // runProbe runs probe with a bounded 3s timeout.
