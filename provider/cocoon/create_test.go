@@ -35,16 +35,16 @@ type fakeRuntime struct {
 	}
 	snapshotSaveCount   int
 	snapshotRemoveCalls []string
-	cloneErr          error
-	runErr            error
-	snapshotErr       error
-	inspectErr        error
-	cloneVM           *vm.VM
-	inspectVM         *vm.VM
-	runVM             *vm.VM
-	snapshots         map[string]*vm.Snapshot
-	listVMs           []vm.VM
-	ensuredImages     []struct {
+	cloneErr            error
+	runErr              error
+	snapshotErr         error
+	inspectErr          error
+	cloneVM             *vm.VM
+	inspectVM           *vm.VM
+	runVM               *vm.VM
+	snapshots           map[string]*vm.Snapshot
+	listVMs             []vm.VM
+	ensuredImages       []struct {
 		image string
 		force bool
 	}

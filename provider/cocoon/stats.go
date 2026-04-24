@@ -222,11 +222,12 @@ func readProcessCPUSeconds(pid int) float64 {
 	if err != nil {
 		return 0
 	}
-	idx := strings.LastIndex(string(data), ")")
-	if idx < 0 || idx+2 >= len(data) {
+	s := string(data)
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 || idx+2 >= len(s) {
 		return 0
 	}
-	fields := strings.Fields(string(data)[idx+2:])
+	fields := strings.Fields(s[idx+2:])
 	if len(fields) < 13 {
 		return 0
 	}
