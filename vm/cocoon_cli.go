@@ -45,26 +45,47 @@ func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
 	return &CocoonCLI{binary: binary, sudo: sudo}
 }
 
-// Clone runs `cocoon vm clone`.
+// Clone runs `cocoon vm clone --output json` and parses the emitted VM
+// record directly, avoiding a second inspect round trip.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
-	args := buildCloneArgs(opts)
-	if _, err := c.runJSON(ctx, args...); err != nil {
+	out, err := c.runJSON(ctx, buildCloneArgs(opts)...)
+	if err != nil {
 		return nil, fmt.Errorf("cocoon vm clone: %w", err)
 	}
-	return c.Inspect(ctx, opts.To)
+	v, err := parseInspectJSON(out)
+	if err != nil {
+		return nil, fmt.Errorf("cocoon vm clone: %w", err)
+	}
+	if v.ID == "" {
+		return nil, fmt.Errorf("cocoon vm clone %s: empty VM record in JSON payload", opts.To)
+	}
+	return v, nil
 }
 
-// Run runs `cocoon vm run`.
+// Run runs `cocoon vm run --output json`; cocoon re-inspects after start
+// so the emitted JSON reflects the running state (PID, IP). If cocoon's
+// own post-start inspect failed it falls back to the pre-start record
+// (State!="running", PID=0) and only warns on stderr — detect that here
+// and do a single make-up Inspect so callers always see live state.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	if err := c.EnsureImage(ctx, opts.Image, opts.Force); err != nil {
 		return nil, fmt.Errorf("ensure image %s: %w", opts.Image, err)
 	}
-
-	args := buildRunArgs(opts)
-	if _, err := c.runJSON(ctx, args...); err != nil {
+	out, err := c.runJSON(ctx, buildRunArgs(opts)...)
+	if err != nil {
 		return nil, fmt.Errorf("cocoon vm run: %w", err)
 	}
-	return c.Inspect(ctx, opts.Name)
+	v, err := parseInspectJSON(out)
+	if err != nil {
+		return nil, fmt.Errorf("cocoon vm run: %w", err)
+	}
+	if v.ID == "" {
+		return nil, fmt.Errorf("cocoon vm run %s: empty VM record in JSON payload", opts.Name)
+	}
+	if v.State != StateRunning || v.PID == 0 {
+		return c.Inspect(ctx, v.ID)
+	}
+	return v, nil
 }
 
 // EnsureImage ensures the image is available locally and up to date.
@@ -258,7 +279,7 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 // load, so those overrides are stripped when targeting firecracker. Extracted
 // for direct unit-test coverage.
 func buildCloneArgs(opts CloneOptions) []string {
-	args := []string{"vm", "clone"}
+	args := []string{"vm", "clone", "--output", "json"}
 	if opts.To != "" {
 		args = append(args, "--name", opts.To)
 	}
@@ -285,7 +306,7 @@ func buildCloneArgs(opts CloneOptions) []string {
 // buildRunArgs assembles the cocoon vm run argv. Extracted for direct
 // unit-test coverage of the backend / OS flag fan-out.
 func buildRunArgs(opts RunOptions) []string {
-	args := []string{"vm", "run"}
+	args := []string{"vm", "run", "--output", "json"}
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
 	}
