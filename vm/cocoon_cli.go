@@ -291,7 +291,8 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
 	}
-	if opts.Pull {
+	// FromDir forces --pull because the dir holds no base image layers.
+	if opts.Pull || opts.FromDir != "" {
 		args = append(args, "--pull")
 	}
 	if opts.OnDemand && opts.Backend != BackendFirecracker {
@@ -299,8 +300,10 @@ func buildCloneArgs(opts CloneOptions) []string {
 		// same CloneOptions usable for both backends.
 		args = append(args, "--on-demand")
 	}
-	args = append(args, opts.From)
-	return args
+	if opts.FromDir != "" {
+		return append(args, "--from-dir", opts.FromDir)
+	}
+	return append(args, opts.From)
 }
 
 // buildRunArgs assembles the cocoon vm run argv. Extracted for direct

@@ -94,6 +94,31 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 			opts: CloneOptions{From: "snap-a", To: "vm-e", CPU: 1, Memory: "1Gi", Pull: true},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-e", "--cpu", "1", "--memory", "1073741824", "--pull", "snap-a"},
 		},
+		{
+			name: "from-dir replaces positional and forces --pull",
+			opts: CloneOptions{To: "vm-f", FromDir: "/var/lib/cocoon/snaps/foo", Backend: "cloud-hypervisor"},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-f", "--pull", "--from-dir", "/var/lib/cocoon/snaps/foo"},
+		},
+		{
+			name: "from-dir keeps cpu/memory/storage on cloud-hypervisor with on-demand",
+			opts: CloneOptions{To: "vm-g", FromDir: "/snaps/bar", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "cloud-hypervisor", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-g", "--cpu", "2", "--memory", "4294967296", "--storage", "21474836480", "--pull", "--on-demand", "--from-dir", "/snaps/bar"},
+		},
+		{
+			name: "from-dir on firecracker drops cpu/memory but keeps storage and skips on-demand",
+			opts: CloneOptions{To: "vm-h", FromDir: "/snaps/fc", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "firecracker", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-h", "--storage", "21474836480", "--pull", "--from-dir", "/snaps/fc"},
+		},
+		{
+			name: "from-dir suppresses positional From when both set",
+			opts: CloneOptions{From: "ignored-snap", To: "vm-i", FromDir: "/snaps/baz"},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-i", "--pull", "--from-dir", "/snaps/baz"},
+		},
+		{
+			name: "from-dir emits --pull only once when caller also set Pull",
+			opts: CloneOptions{To: "vm-j", FromDir: "/snaps/qux", Pull: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-j", "--pull", "--from-dir", "/snaps/qux"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

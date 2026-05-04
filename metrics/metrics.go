@@ -46,6 +46,15 @@ var (
 		[]string{"result"},
 	)
 
+	CloneFromDirTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "clone_from_dir_total",
+			Help:      "Number of annotation-driven clone-from-dir attempts by result.",
+		},
+		[]string{"result"},
+	)
+
 	VMTableSize = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: metricNamespace,
@@ -140,6 +149,7 @@ func Register(reg prometheus.Registerer) {
 		SnapshotSaveTotal,
 		SnapshotPullTotal,
 		SnapshotPushTotal,
+		CloneFromDirTotal,
 		VMTableSize,
 		OrphanVMTotal,
 		VMInspectTransientFailTotal,

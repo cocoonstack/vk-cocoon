@@ -78,6 +78,10 @@ type CloneOptions struct {
 	// per-page faults during the first seconds of guest execution.
 	// CH only; firecracker ignores the flag.
 	OnDemand bool
+	// FromDir maps to `cocoon vm clone --from-dir`: when set, From is
+	// ignored and --pull is forced (the dir holds snapshot data, not
+	// base image layers).
+	FromDir string
 }
 
 // RunOptions is the input to Runtime.Run.

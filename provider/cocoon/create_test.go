@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -335,6 +336,178 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	}
 	if rt.cloned.From != "fork-vk-ns-demo-0" {
 		t.Fatalf("clone source = %q, want fork-vk-ns-demo-0", rt.cloned.From)
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationDispatches(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "ignored-when-from-dir-set",
+		Mode:   "clone",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "/var/lib/cocoon/snaps/foo"
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatalf("Runtime.Clone was not called")
+	}
+	if rt.cloned.FromDir != "/var/lib/cocoon/snaps/foo" {
+		t.Errorf("clone FromDir = %q, want /var/lib/cocoon/snaps/foo", rt.cloned.FromDir)
+	}
+	if rt.cloned.From != "" {
+		t.Errorf("clone From = %q, want empty when FromDir is set", rt.cloned.From)
+	}
+	if !rt.cloned.OnDemand {
+		t.Errorf("OnDemand should be true on clone-from-dir path")
+	}
+	if rt.snapshotSaveCount != 0 || len(rt.ensuredImages) != 0 {
+		t.Errorf("from-dir path should bypass snapshot/ensure: save=%d images=%v",
+			rt.snapshotSaveCount, rt.ensuredImages)
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationConflictsWithRunMode(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "ubuntu-22.04",
+		Mode:   "run",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "/snaps/foo"
+
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Errorf("expected fast-fail when clone-from-dir is set with mode=run")
+	}
+	if rt.cloned != nil || rt.ran != nil {
+		t.Errorf("no Runtime calls expected on conflict; cloned=%v ran=%v", rt.cloned, rt.ran)
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationConflictsWithForkFrom(t *testing.T) {
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:   "vk-ns-demo-1",
+		Image:    "snap:latest",
+		Mode:     "clone",
+		ForkFrom: "vk-ns-demo-0",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "/snaps/foo"
+
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Errorf("expected fast-fail when clone-from-dir is set with fork-from")
+	}
+	if rt.cloned != nil {
+		t.Errorf("no clone call expected on conflict, got %#v", rt.cloned)
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationRejectsRelativePath(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "ignored",
+		Mode:   "clone",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "relative/path"
+
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Errorf("expected error for relative path in annotation")
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationRejectsNonCanonicalPath(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "ignored",
+		Mode:   "clone",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "/var/lib/cocoon/../etc"
+
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Errorf("expected error for non-canonical path containing ..")
+	}
+	if rt.cloned != nil {
+		t.Errorf("Runtime.Clone should not be invoked when path validation fails")
+	}
+}
+
+func TestCreatePodCloneFromDirAnnotationWhitespaceTreatedAsAbsent(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snap-x": {Name: "snap-x"},
+		},
+	}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "snap-x:latest",
+		Mode:   "clone",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "   \t  "
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatalf("Runtime.Clone was not called")
+	}
+	if rt.cloned.FromDir != "" {
+		t.Errorf("FromDir = %q, want empty (whitespace-only annotation must fall through to default clone)", rt.cloned.FromDir)
+	}
+	if rt.cloned.From != "snap-x" {
+		t.Errorf("From = %q, want snap-x (default clone path)", rt.cloned.From)
+	}
+}
+
+func TestCreatePodCloneFromDirRuntimeFailureSurfacesError(t *testing.T) {
+	rt := &fakeRuntime{cloneErr: errors.New("ch boot rejected")}
+	p := NewProvider()
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "ignored",
+		Mode:   "clone",
+	})
+	pod.Annotations[meta.AnnotationCloneFromDir] = "/var/lib/cocoon/snaps/foo"
+
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil {
+		t.Fatalf("expected error to surface from Runtime.Clone failure")
+	}
+	if !strings.Contains(err.Error(), "ch boot rejected") {
+		t.Errorf("error chain missing root cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/var/lib/cocoon/snaps/foo") {
+		t.Errorf("error should name the dir for ops triage: %v", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -85,18 +86,48 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 // The returned sourceImage is the snapshot's original image (cloudimg URL
 // or OCI ref) when available, used by post-clone classification.
 func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, string, error) {
-	cpu, memory := vmResourceOverrides(pod)
-	forcePull := spec.ForcePull
-	backend := spec.Backend
-	noDirectIO := spec.NoDirectIO
-	mode := strings.ToLower(spec.Mode)
-	switch {
-	case !spec.Managed:
+	if !spec.Managed {
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" || runtime.IP == "" {
 			return nil, "", fmt.Errorf("unmanaged vm %s missing pre-assigned IP/VMID", spec.VMName)
 		}
 		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, "", nil
+	}
+
+	cpu, memory := vmResourceOverrides(pod)
+	forcePull := spec.ForcePull
+	backend := spec.Backend
+	noDirectIO := spec.NoDirectIO
+	mode := strings.ToLower(spec.Mode)
+	fromDir, err := parseCloneFromDirAnnotation(pod)
+	if err != nil {
+		return nil, "", err
+	}
+	switch {
+	case fromDir != "":
+		if mode == string(cocoonv1.AgentModeRun) {
+			return nil, "", fmt.Errorf("annotation %s is incompatible with mode=run", meta.AnnotationCloneFromDir)
+		}
+		if spec.ForkFrom != "" {
+			return nil, "", fmt.Errorf("annotation %s is incompatible with fork-from %q", meta.AnnotationCloneFromDir, spec.ForkFrom)
+		}
+		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
+			FromDir:    fromDir,
+			To:         spec.VMName,
+			CPU:        cpu,
+			Memory:     memory,
+			Network:    spec.Network,
+			Storage:    spec.Storage,
+			Backend:    backend,
+			NoDirectIO: noDirectIO,
+			OnDemand:   true,
+		})
+		if err != nil {
+			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
+			return nil, "", fmt.Errorf("clone vm %s from dir %s: %w", spec.VMName, fromDir, err)
+		}
+		metrics.CloneFromDirTotal.WithLabelValues("ok").Inc()
+		return v, "", nil
 
 	case spec.ForkFrom != "":
 		cloneFrom, err := p.ensureForkSnapshot(ctx, spec.ForkFrom)
@@ -181,6 +212,25 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		return v, srcImage, nil
 	}
+}
+
+// parseCloneFromDirAnnotation returns the validated absolute, canonical
+// path from the clone-from-dir annotation, or "" when absent.
+func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
+	if pod == nil {
+		return "", nil
+	}
+	raw := strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir])
+	if raw == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("annotation %s must be an absolute path, got %q", meta.AnnotationCloneFromDir, raw)
+	}
+	if cleaned := filepath.Clean(raw); cleaned != raw {
+		return "", fmt.Errorf("annotation %s must be a canonical path, got %q (cleaned: %q)", meta.AnnotationCloneFromDir, raw, cleaned)
+	}
+	return raw, nil
 }
 
 // assertSnapshotBackend rejects a clone when the target backend differs from
