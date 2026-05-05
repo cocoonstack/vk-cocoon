@@ -14,11 +14,9 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// sentinel errors for unimplemented or misconfigured access operations.
 var (
 	errAttachNotImplemented      = errors.New("vk-cocoon: AttachToContainer is not implemented")
 	errPortForwardNotImplemented = errors.New("vk-cocoon: PortForward is not implemented")
-	errSSHNotConfigured          = errors.New("vk-cocoon: SSH executor not configured")
 )
 
 // GetContainerLogs returns the guest's systemd journal (Linux) or a
@@ -54,10 +52,12 @@ func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ s
 	return io.NopCloser(bytes.NewReader(out.Bytes())), nil
 }
 
-// RunInContainer is the kubectl exec entrypoint (SSH for Linux, RDP help for Windows).
+// RunInContainer is the kubectl exec entrypoint. Linux pods go through
+// cocoon-agent over vsock; Windows pods get an RDP help-text stub until
+// cocoon-agent grows Windows support.
 func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
 	v := p.vmForPod(namespace, podName)
-	if v == nil || v.IP == "" {
+	if v == nil {
 		return fmt.Errorf("pod %s/%s has no live VM", namespace, podName)
 	}
 	pod, err := p.GetPod(ctx, namespace, podName)
@@ -67,10 +67,7 @@ func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ str
 	if meta.IsWindowsPod(pod) {
 		return p.GuestRDP.Run(ctx, v.IP, cmd, attach.Stdin(), attach.Stdout(), attach.Stderr())
 	}
-	if p.GuestSSH == nil {
-		return errSSHNotConfigured
-	}
-	return p.GuestSSH.Run(ctx, v.IP, cmd, attach.Stdin(), attach.Stdout(), attach.Stderr())
+	return p.Runtime.Exec(ctx, v.ID, cmd, nil, attach.Stdin(), attach.Stdout(), attach.Stderr())
 }
 
 // AttachToContainer is not implemented.

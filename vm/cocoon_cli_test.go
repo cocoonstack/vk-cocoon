@@ -173,3 +173,43 @@ func TestBuildRunArgsAppendsBackendAndOSFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		vmID string
+		argv []string
+		env  map[string]string
+		want []string
+	}{
+		{
+			name: "no env passes through plain argv",
+			vmID: "vm-1",
+			argv: []string{"echo", "hello world"},
+			want: []string{"vm", "exec", "vm-1", "--", "echo", "hello world"},
+		},
+		{
+			name: "env keys sorted for deterministic argv",
+			vmID: "vm-2",
+			argv: []string{"printenv"},
+			env:  map[string]string{"FOO": "1", "BAR": "2", "BAZ": "3"},
+			want: []string{"vm", "exec", "-e", "BAR=2", "-e", "BAZ=3", "-e", "FOO=1", "vm-2", "--", "printenv"},
+		},
+		{
+			name: "argv with leading -- is preserved (cocoon swallows the first one)",
+			vmID: "vm-3",
+			argv: []string{"--", "ls"},
+			want: []string{"vm", "exec", "vm-3", "--", "--", "ls"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildExecArgs(tc.vmID, tc.argv, tc.env)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("buildExecArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}

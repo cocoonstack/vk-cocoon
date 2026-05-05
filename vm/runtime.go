@@ -120,6 +120,7 @@ type Runtime interface {
 	List(ctx context.Context) ([]VM, error)
 	Remove(ctx context.Context, vmID string) error
 	Start(ctx context.Context, vmID string) error
+	Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
 	SnapshotRemoveIfExists(ctx context.Context, name string) error
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)

@@ -10,14 +10,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/projecteru2/core/log"
 	"k8s.io/apimachinery/pkg/api/resource"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // cocoon CLI binary path and backend name constants.
@@ -133,6 +136,30 @@ func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 		return nil, fmt.Errorf("cocoon vm list: %w", err)
 	}
 	return parseVMListJSON(out)
+}
+
+// Exec runs `cocoon vm exec`. Non-zero child exit → utilexec.CodeExitError
+// (vk's RemoteCommand handler probes that interface for the kubectl status);
+// transport / setup failures bubble up as plain errors.
+func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if vmID == "" {
+		return errors.New("cocoon vm exec: vmID is empty")
+	}
+	if len(argv) == 0 {
+		return errors.New("cocoon vm exec: argv is empty")
+	}
+	cmd := c.command(ctx, buildExecArgs(vmID, argv, env)...)
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return utilexec.CodeExitError{Err: fmt.Errorf("cocoon vm exec %s: exit %d", vmID, exitErr.ExitCode()), Code: exitErr.ExitCode()}
+		}
+		return fmt.Errorf("cocoon vm exec %s: %w", vmID, err)
+	}
+	return nil
 }
 
 // Remove runs `cocoon vm rm --force`.
@@ -324,6 +351,25 @@ func buildRunArgs(opts RunOptions) []string {
 		args = append(args, "--no-direct-io")
 	}
 	args = append(args, opts.Image)
+	return args
+}
+
+// buildExecArgs assembles `cocoon vm exec [-e KEY=VAL...] <vmID> -- <argv>...`.
+// Env keys are sorted so the resulting argv is deterministic (test-friendly,
+// log-friendly); cocoon doesn't care about order.
+func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
+	args := make([]string, 0, 4+2*len(env)+len(argv)) //nolint:mnd
+	args = append(args, "vm", "exec")
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", k+"="+env[k])
+	}
+	args = append(args, vmID, "--")
+	args = append(args, argv...)
 	return args
 }
 

@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -45,6 +46,11 @@ type fakeRuntime struct {
 	runVM               *vm.VM
 	snapshots           map[string]*vm.Snapshot
 	listVMs             []vm.VM
+	execCalls           []fakeExecCall
+	execStdout          string
+	execStderr          string
+	execExitCode        int
+	execErr             error
 	ensuredImages       []struct {
 		image string
 		force bool
@@ -158,6 +164,35 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 }
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+
+type fakeExecCall struct {
+	vmID  string
+	argv  []string
+	env   map[string]string
+	stdin string
+}
+
+func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	call := fakeExecCall{vmID: vmID, argv: argv, env: env}
+	if stdin != nil {
+		buf, _ := io.ReadAll(stdin)
+		call.stdin = string(buf)
+	}
+	f.execCalls = append(f.execCalls, call)
+	if f.execErr != nil {
+		return f.execErr
+	}
+	if stdout != nil && f.execStdout != "" {
+		_, _ = stdout.Write([]byte(f.execStdout))
+	}
+	if stderr != nil && f.execStderr != "" {
+		_, _ = stderr.Write([]byte(f.execStderr))
+	}
+	if f.execExitCode != 0 {
+		return utilexec.CodeExitError{Err: fmt.Errorf("fake exec: exit %d", f.execExitCode), Code: f.execExitCode}
+	}
+	return nil
+}
 
 func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
 	ch := make(chan vm.VMEvent)
