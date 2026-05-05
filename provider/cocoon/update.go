@@ -34,7 +34,9 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	switch {
 	case wantHibernate && v != nil:
 		if err := p.hibernate(ctx, pod, v); err != nil {
+			// Surface the wrapped error so operators can see why the workqueue keeps retrying.
 			metrics.PodLifecycleTotal.WithLabelValues("update", "hibernate_failed").Inc()
+			logger.Errorf(ctx, err, "hibernate %s/%s", pod.Namespace, pod.Name)
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "hibernated").Inc()
@@ -42,6 +44,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		// Wake: recreate from the hibernation snapshot.
 		if err := p.wake(ctx, pod); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("update", "wake_failed").Inc()
+			logger.Errorf(ctx, err, "wake %s/%s", pod.Namespace, pod.Name)
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "woken").Inc()

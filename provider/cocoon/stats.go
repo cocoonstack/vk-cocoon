@@ -127,7 +127,8 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	}
 
 	if len(containerCPU) > 0 {
-		families = append(families,
+		families = append(
+			families,
 			newCounterFamily("container_cpu_usage_seconds_total",
 				"Cumulative cpu time consumed by the container in core-seconds", containerCPU...),
 			newGaugeFamily("container_memory_working_set_bytes",

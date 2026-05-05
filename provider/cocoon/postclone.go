@@ -197,7 +197,8 @@ func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkCo
 		for i, nc := range networkConfigs {
 			cmds = append(cmds, fmt.Sprintf(
 				"ip link set dev eth%d down && ip link set dev eth%d address %s && ip link set dev eth%d up",
-				i, i, nc.MAC, i))
+				i, i, nc.MAC, i,
+			))
 		}
 	}
 

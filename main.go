@@ -159,7 +159,8 @@ func main() {
 	}
 
 	kubeletMux := http.NewServeMux()
-	n, err := nodeutil.NewNode(nodeName, newProvider,
+	n, err := nodeutil.NewNode(
+		nodeName, newProvider,
 		nodeutil.WithClient(clientset),
 		nodeutil.AttachProviderRoutes(kubeletMux),
 		withHandler(kubeletMux),
