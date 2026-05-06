@@ -3,7 +3,6 @@ package cocoon
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -60,7 +59,7 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 // GetStatsSummary returns a kubelet-compatible stats summary with real
 // resource usage. metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
-	now := metav1.NewTime(time.Now())
+	now := metav1.Now()
 	nodeCPU, nodeMemory := readNodeUsage()
 
 	snapshots := p.snapshotTrackedVMs()
@@ -219,7 +218,7 @@ func readProcessUsage(pid int) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemorySt
 }
 
 func readProcessCPUSeconds(pid int) float64 {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return 0
 	}
@@ -238,7 +237,7 @@ func readProcessCPUSeconds(pid int) float64 {
 }
 
 func readProcessMemoryWorkingSet(pid int) int64 {
-	f, err := os.Open(fmt.Sprintf("/proc/%d/status", pid))
+	f, err := os.Open("/proc/" + strconv.Itoa(pid) + "/status")
 	if err != nil {
 		return 0
 	}

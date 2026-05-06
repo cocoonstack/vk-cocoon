@@ -75,7 +75,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.startProbeIfEnabled(pod)
 
 	pod.Status.Phase = corev1.PodRunning
-	pod.Status.StartTime = nowPtr()
+	now := metav1.Now()
+	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
@@ -393,9 +394,4 @@ func quantityBytes(q resource.Quantity) string {
 		return strconv.FormatInt(bytes, 10)
 	}
 	return ""
-}
-
-func nowPtr() *metav1.Time {
-	t := metav1.NewTime(time.Now().UTC())
-	return &t
 }

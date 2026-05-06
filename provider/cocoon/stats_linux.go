@@ -2,7 +2,6 @@ package cocoon
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -12,7 +11,7 @@ import (
 // The hypervisor process runs inside the VM's netns, so its procfs
 // view contains the namespaced network devices including the TAP.
 func readProcNetDev(pid int, iface string) (rxBytes, txBytes uint64) {
-	f, err := os.Open(fmt.Sprintf("/proc/%d/net/dev", pid))
+	f, err := os.Open("/proc/" + strconv.Itoa(pid) + "/net/dev")
 	if err != nil {
 		return 0, 0
 	}
