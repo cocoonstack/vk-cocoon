@@ -32,36 +32,7 @@ func TestIsCocoonNotFound(t *testing.T) {
 	}
 }
 
-func TestAppendCreateArgsNormalizesResourceQuantities(t *testing.T) {
-	t.Parallel()
-
-	got := appendCreateArgs([]string{"vm", "run"}, 2, "4Gi", "cocoon-dhcp", "20Gi", 0, nil)
-	want := []string{
-		"vm", "run",
-		"--cpu", "2",
-		"--memory", "4294967296",
-		"--storage", "21474836480",
-		"--network", "cocoon-dhcp",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("appendCreateArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestAppendCreateArgsKeepsEmptyInheritedValues(t *testing.T) {
-	t.Parallel()
-
-	got := appendCreateArgs([]string{"vm", "clone"}, 0, "", "", "20Gi", 0, nil)
-	want := []string{
-		"vm", "clone",
-		"--storage", "21474836480",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("appendCreateArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
+func TestBuildCloneArgs(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -70,29 +41,34 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "cloud-hypervisor clone passes cpu/memory through",
-			opts: CloneOptions{From: "snap-a", To: "vm-a", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "cloud-hypervisor"},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-a", "--cpu", "2", "--memory", "4294967296", "--storage", "21474836480", "snap-a"},
+			name: "default cloud-hypervisor clone keeps just name and positional snapshot",
+			opts: CloneOptions{From: "snap-a", To: "vm-a", Backend: "cloud-hypervisor"},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-a", "snap-a"},
 		},
 		{
-			name: "firecracker clone drops cpu/memory but keeps storage",
-			opts: CloneOptions{From: "snap-a", To: "vm-b", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "firecracker"},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-b", "--storage", "21474836480", "snap-a"},
+			name: "firecracker clone strips on-demand",
+			opts: CloneOptions{From: "snap-a", To: "vm-b", Backend: "firecracker", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-b", "snap-a"},
 		},
 		{
-			name: "empty backend behaves like cloud-hypervisor",
-			opts: CloneOptions{From: "snap-a", To: "vm-c", CPU: 1, Memory: "1Gi"},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-c", "--cpu", "1", "--memory", "1073741824", "snap-a"},
+			name: "network flag passes through",
+			opts: CloneOptions{From: "snap-a", To: "vm-c", Network: "cocoon-dhcp"},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-c", "--network", "cocoon-dhcp", "snap-a"},
 		},
 		{
 			name: "no-direct-io flag appended when set",
-			opts: CloneOptions{From: "snap-a", To: "vm-d", CPU: 1, Memory: "1Gi", NoDirectIO: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-d", "--cpu", "1", "--memory", "1073741824", "--no-direct-io", "snap-a"},
+			opts: CloneOptions{From: "snap-a", To: "vm-d", NoDirectIO: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-d", "--no-direct-io", "snap-a"},
 		},
 		{
 			name: "pull flag appended when set",
-			opts: CloneOptions{From: "snap-a", To: "vm-e", CPU: 1, Memory: "1Gi", Pull: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-e", "--cpu", "1", "--memory", "1073741824", "--pull", "snap-a"},
+			opts: CloneOptions{From: "snap-a", To: "vm-e", Pull: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-e", "--pull", "snap-a"},
+		},
+		{
+			name: "on-demand appended on cloud-hypervisor",
+			opts: CloneOptions{From: "snap-a", To: "vm-od", Backend: "cloud-hypervisor", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-od", "--on-demand", "snap-a"},
 		},
 		{
 			name: "from-dir replaces positional and forces --pull",
@@ -100,14 +76,14 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-f", "--pull", "--from-dir", "/var/lib/cocoon/snaps/foo"},
 		},
 		{
-			name: "from-dir keeps cpu/memory/storage on cloud-hypervisor with on-demand",
-			opts: CloneOptions{To: "vm-g", FromDir: "/snaps/bar", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "cloud-hypervisor", OnDemand: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-g", "--cpu", "2", "--memory", "4294967296", "--storage", "21474836480", "--pull", "--on-demand", "--from-dir", "/snaps/bar"},
+			name: "from-dir on cloud-hypervisor with on-demand",
+			opts: CloneOptions{To: "vm-g", FromDir: "/snaps/bar", Backend: "cloud-hypervisor", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-g", "--pull", "--on-demand", "--from-dir", "/snaps/bar"},
 		},
 		{
-			name: "from-dir on firecracker drops cpu/memory but keeps storage and skips on-demand",
-			opts: CloneOptions{To: "vm-h", FromDir: "/snaps/fc", CPU: 2, Memory: "4Gi", Storage: "20Gi", Backend: "firecracker", OnDemand: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-h", "--storage", "21474836480", "--pull", "--from-dir", "/snaps/fc"},
+			name: "from-dir on firecracker skips on-demand",
+			opts: CloneOptions{To: "vm-h", FromDir: "/snaps/fc", Backend: "firecracker", OnDemand: true},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-h", "--pull", "--from-dir", "/snaps/fc"},
 		},
 		{
 			name: "from-dir suppresses positional From when both set",
@@ -130,7 +106,7 @@ func TestBuildCloneArgsStripsCPUAndMemoryForFirecracker(t *testing.T) {
 	}
 }
 
-func TestBuildRunArgsAppendsBackendAndOSFlags(t *testing.T) {
+func TestBuildRunArgs(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -162,6 +138,20 @@ func TestBuildRunArgsAppendsBackendAndOSFlags(t *testing.T) {
 			name: "no-direct-io flag appended when set",
 			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-e", NoDirectIO: true},
 			want: []string{"vm", "run", "--output", "json", "--name", "vm-e", "--no-direct-io", "ghcr.io/x/y:1"},
+		},
+		{
+			name: "k8s quantities normalized to byte counts",
+			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-f", CPU: 2, Memory: "4Gi", Storage: "20Gi", Network: "cocoon-dhcp"},
+			want: []string{
+				"vm", "run", "--output", "json", "--name", "vm-f",
+				"--cpu", "2", "--memory", "4294967296", "--storage", "21474836480",
+				"--network", "cocoon-dhcp", "ghcr.io/x/y:1",
+			},
+		},
+		{
+			name: "zero cpu and empty quantities omit their flags",
+			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-g", Storage: "20Gi"},
+			want: []string{"vm", "run", "--output", "json", "--name", "vm-g", "--storage", "21474836480", "ghcr.io/x/y:1"},
 		},
 	}
 	for _, tc := range cases {

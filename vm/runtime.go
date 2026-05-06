@@ -59,16 +59,12 @@ type Snapshot struct {
 	Hypervisor  string
 }
 
-// CloneOptions is the input to Runtime.Clone.
+// CloneOptions is the input to Runtime.Clone. Resource fields are absent
+// because cocoon clone inherits CPU/memory/storage/NICs from the snapshot.
 type CloneOptions struct {
 	From       string
 	To         string
-	CPU        int
-	Memory     string
 	Network    string
-	Storage    string
-	NICs       int
-	DNS        []string
 	Backend    string
 	NoDirectIO bool
 	Pull       bool
@@ -92,8 +88,6 @@ type RunOptions struct {
 	Memory     string
 	Network    string
 	Storage    string
-	NICs       int
-	DNS        []string
 	OS         string
 	Force      bool
 	Backend    string

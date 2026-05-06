@@ -94,8 +94,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, "", nil
 	}
 
-	cpu, memory := vmResourceOverrides(pod)
-	forcePull := spec.ForcePull
 	backend := spec.Backend
 	noDirectIO := spec.NoDirectIO
 	mode := strings.ToLower(spec.Mode)
@@ -114,10 +112,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 			FromDir:    fromDir,
 			To:         spec.VMName,
-			CPU:        cpu,
-			Memory:     memory,
 			Network:    spec.Network,
-			Storage:    spec.Storage,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			OnDemand:   true,
@@ -137,10 +132,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 			From:       cloneFrom,
 			To:         spec.VMName,
-			CPU:        cpu,
-			Memory:     memory,
 			Network:    spec.Network,
-			Storage:    spec.Storage,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			OnDemand:   true,
@@ -151,7 +143,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, "", nil // forkFrom has no snapshot metadata
 
 	case mode == string(cocoonv1.AgentModeRun):
-		opts := vm.RunOptions{
+		cpu, memory := vmResourceOverrides(pod)
+		v, err := p.Runtime.Run(ctx, vm.RunOptions{
 			Image:      spec.Image,
 			Name:       spec.VMName,
 			CPU:        cpu,
@@ -159,11 +152,10 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Storage:    spec.Storage,
 			OS:         spec.OS,
-			Force:      forcePull,
+			Force:      spec.ForcePull,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
-		}
-		v, err := p.Runtime.Run(ctx, opts)
+		})
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
 		}
@@ -194,19 +186,15 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			srcImage = snapshot.Image
 		}
 
-		opts := vm.CloneOptions{
+		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 			From:       local,
 			To:         spec.VMName,
-			CPU:        cpu,
-			Memory:     memory,
 			Network:    spec.Network,
-			Storage:    spec.Storage,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			Pull:       srcImage != "",
 			OnDemand:   true,
-		}
-		v, err := p.Runtime.Clone(ctx, opts)
+		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
 		}

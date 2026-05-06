@@ -13,8 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os/exec"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -301,20 +302,15 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	return ch, nil
 }
 
-// buildCloneArgs assembles the cocoon vm clone argv. Firecracker restores
-// the entire VM state from the snapshot and cannot resize CPU/memory on
-// load, so those overrides are stripped when targeting firecracker. Extracted
-// for direct unit-test coverage.
+// buildCloneArgs assembles the cocoon vm clone argv.
 func buildCloneArgs(opts CloneOptions) []string {
 	args := []string{"vm", "clone", "--output", "json"}
 	if opts.To != "" {
 		args = append(args, "--name", opts.To)
 	}
-	cpu, memory := opts.CPU, opts.Memory
-	if opts.Backend == BackendFirecracker {
-		cpu, memory = 0, ""
+	if opts.Network != "" {
+		args = append(args, "--network", opts.Network)
 	}
-	args = appendCreateArgs(args, cpu, memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
 	}
@@ -333,14 +329,24 @@ func buildCloneArgs(opts CloneOptions) []string {
 	return append(args, opts.From)
 }
 
-// buildRunArgs assembles the cocoon vm run argv. Extracted for direct
-// unit-test coverage of the backend / OS flag fan-out.
+// buildRunArgs assembles the cocoon vm run argv.
 func buildRunArgs(opts RunOptions) []string {
 	args := []string{"vm", "run", "--output", "json"}
 	if opts.Name != "" {
 		args = append(args, "--name", opts.Name)
 	}
-	args = appendCreateArgs(args, opts.CPU, opts.Memory, opts.Network, opts.Storage, opts.NICs, opts.DNS)
+	if opts.CPU > 0 {
+		args = append(args, "--cpu", strconv.Itoa(opts.CPU))
+	}
+	if memory := normalizeSizeArg(opts.Memory); memory != "" {
+		args = append(args, "--memory", memory)
+	}
+	if storage := normalizeSizeArg(opts.Storage); storage != "" {
+		args = append(args, "--storage", storage)
+	}
+	if opts.Network != "" {
+		args = append(args, "--network", opts.Network)
+	}
 	if strings.EqualFold(opts.OS, "windows") {
 		args = append(args, "--windows")
 	}
@@ -360,12 +366,7 @@ func buildRunArgs(opts RunOptions) []string {
 func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
 	args := make([]string, 0, 4+2*len(env)+len(argv)) //nolint:mnd
 	args = append(args, "vm", "exec")
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(env)) {
 		args = append(args, "-e", k+"="+env[k])
 	}
 	args = append(args, vmID, "--")
@@ -460,29 +461,6 @@ func isCocoonNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "vm not found") ||
 		strings.Contains(s, "no such vm")
-}
-
-// appendCreateArgs adds resource/network flags shared by clone and run.
-func appendCreateArgs(args []string, cpu int, memory, network, storage string, nics int, dns []string) []string {
-	if cpu > 0 {
-		args = append(args, "--cpu", strconv.Itoa(cpu))
-	}
-	if normalized := normalizeSizeArg(memory); normalized != "" {
-		args = append(args, "--memory", normalized)
-	}
-	if normalized := normalizeSizeArg(storage); normalized != "" {
-		args = append(args, "--storage", normalized)
-	}
-	if network != "" {
-		args = append(args, "--network", network)
-	}
-	if nics > 0 {
-		args = append(args, "--nics", strconv.Itoa(nics))
-	}
-	if len(dns) > 0 {
-		args = append(args, "--dns", strings.Join(dns, ","))
-	}
-	return args
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.

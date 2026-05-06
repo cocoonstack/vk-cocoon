@@ -109,7 +109,6 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		// Cannot import without a puller.
 		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
 	}
-	cpu, memory := vmResourceOverrides(pod)
 	importName := spec.VMName + hibernateImportSuffix
 	pullStart := time.Now()
 	if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
@@ -122,10 +121,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 		From:       importName,
 		To:         spec.VMName,
-		CPU:        cpu,
-		Memory:     memory,
 		Network:    spec.Network,
-		Storage:    spec.Storage,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
 		OnDemand:   true,
