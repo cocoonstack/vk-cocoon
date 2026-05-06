@@ -172,6 +172,28 @@ func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	return nil
 }
 
+// Logs runs `cocoon vm logs [--tail N] <vmID>` and returns the hypervisor log.
+// stdout and stderr are captured separately so cocoon's diagnostic output
+// is surfaced in errors instead of leaking into the log stream.
+func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadCloser, error) {
+	if vmID == "" {
+		return nil, errors.New("cocoon vm logs: vmID is empty")
+	}
+	args := []string{"vm", "logs"}
+	if tail > 0 {
+		args = append(args, "--tail", strconv.Itoa(tail))
+	}
+	args = append(args, vmID)
+	cmd := c.command(ctx, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, cocoonCmdError("vm logs", vmID, err, stderr.Bytes())
+	}
+	return io.NopCloser(&stdout), nil
+}
+
 // SnapshotSave runs `cocoon snapshot save`, handling "already exists" idempotently.
 // The v-k workqueue retries UpdatePod rapidly, and a crashed hibernate can leave
 // a stale snapshot that blocks every retry. When "already exists" is detected,

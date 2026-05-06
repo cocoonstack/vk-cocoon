@@ -1,12 +1,10 @@
 package cocoon
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
@@ -19,37 +17,29 @@ var (
 	errPortForwardNotImplemented = errors.New("vk-cocoon: PortForward is not implemented")
 )
 
-// GetContainerLogs returns the guest's systemd journal (Linux) or a
-// help-text pointing at RDP (Windows). Only opts.Tail is honored.
+// GetContainerLogs returns the per-VM hypervisor log via `cocoon vm logs`.
+// For OCI direct-boot VMs the guest console is wired to CH stdio so the
+// file approximates a container's stdout. opts.Tail is forwarded to
+// cocoon's --tail; default 200 keeps unbounded `kubectl logs` from
+// streaming a long-running VM's full log. Windows gets an RDP help stub.
 func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	pod, err := p.GetPod(ctx, namespace, podName)
 	if err != nil {
 		return nil, err
 	}
 	v := p.vmForPod(namespace, podName)
-	if v == nil || v.IP == "" {
+	if v == nil {
 		return io.NopCloser(strings.NewReader("vk-cocoon: pod has no live VM\n")), nil
 	}
-
 	if meta.IsWindowsPod(pod) {
 		msg := fmt.Sprintf("vk-cocoon: kubectl logs is not supported on Windows guests; connect via RDP to %s\n", v.IP)
 		return io.NopCloser(strings.NewReader(msg)), nil
 	}
-
-	if p.GuestSSH == nil {
-		return io.NopCloser(strings.NewReader("vk-cocoon: SSH executor not configured\n")), nil
-	}
-
 	tail := opts.Tail
 	if tail <= 0 {
 		tail = 200
 	}
-	var out, errBuf bytes.Buffer
-	cmd := []string{"journalctl", "--no-pager", "-n", strconv.Itoa(tail)}
-	if err := p.GuestSSH.Run(ctx, v.IP, cmd, nil, &out, &errBuf); err != nil {
-		return nil, fmt.Errorf("fetch journal from %s: %w", v.IP, err)
-	}
-	return io.NopCloser(bytes.NewReader(out.Bytes())), nil
+	return p.Runtime.Logs(ctx, v.ID, tail)
 }
 
 // RunInContainer is the kubectl exec entrypoint. Linux pods go through

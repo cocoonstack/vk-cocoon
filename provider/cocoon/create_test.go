@@ -51,6 +51,9 @@ type fakeRuntime struct {
 	execStderr          string
 	execExitCode        int
 	execErr             error
+	logsCalls           []fakeLogsCall
+	logsOut             string
+	logsErr             error
 	ensuredImages       []struct {
 		image string
 		force bool
@@ -192,6 +195,19 @@ func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env ma
 		return utilexec.CodeExitError{Err: fmt.Errorf("fake exec: exit %d", f.execExitCode), Code: f.execExitCode}
 	}
 	return nil
+}
+
+type fakeLogsCall struct {
+	vmID string
+	tail int
+}
+
+func (f *fakeRuntime) Logs(_ context.Context, vmID string, tail int) (io.ReadCloser, error) {
+	f.logsCalls = append(f.logsCalls, fakeLogsCall{vmID: vmID, tail: tail})
+	if f.logsErr != nil {
+		return nil, f.logsErr
+	}
+	return io.NopCloser(strings.NewReader(f.logsOut)), nil
 }
 
 func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
