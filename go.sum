@@ -44,8 +44,8 @@ github.com/cockroachdb/redact v1.1.3 h1:AKZds10rFSIj7qADf0g46UixK8NNLwWTNdCIGS5w
 github.com/cockroachdb/redact v1.1.3/go.mod h1:BVNblN9mBWFyMyqK1k3AAiSxhvhfK2oOZZ2lK+dpvRg=
 github.com/cocoonstack/cocoon-common v0.2.1-0.20260504055048-0a2601b20ee0 h1:su1q1cLYV6oE2uUbndIHkPhX/FQojQoyOQpzsE1Vio0=
 github.com/cocoonstack/cocoon-common v0.2.1-0.20260504055048-0a2601b20ee0/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
-github.com/cocoonstack/epoch v0.2.1-0.20260423235109-fcafc2d850ed h1:Zy9b/ftnW3qv5ANMnclZqkMTvbI9Qu5APpK/fk6EyRY=
-github.com/cocoonstack/epoch v0.2.1-0.20260423235109-fcafc2d850ed/go.mod h1:x65KEbc/XleTL39rOLXBAuT5kWNbQahxIYhbSbhXwDw=
+github.com/cocoonstack/epoch v0.2.2-0.20260506031146-18d9447f7019 h1:SDOO+QUz/+kvVSH3wgEceVoWMaEWMg9clCbEGbMtpps=
+github.com/cocoonstack/epoch v0.2.2-0.20260506031146-18d9447f7019/go.mod h1:x65KEbc/XleTL39rOLXBAuT5kWNbQahxIYhbSbhXwDw=
 github.com/codegangsta/inject v0.0.0-20150114235600-33e0aa1cb7c0/go.mod h1:4Zcjuz89kmFXt9morQgcfYZAYZ5n8WHjt81YYWIwtTM=
 github.com/coreos/etcd v3.3.10+incompatible/go.mod h1:uF7uidLiAD3TWHmW31ZFd/JWoc32PjwdhPthX9715RE=
 github.com/coreos/go-etcd v2.0.0+incompatible/go.mod h1:Jez6KQU2B/sWsbdaef3ED8NzMklzPG4d5KIOhIy30Tk=
