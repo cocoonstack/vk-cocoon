@@ -29,33 +29,6 @@ type vmSnapshot struct {
 	VMName     string
 }
 
-// snapshotTrackedVMs copies the minimal VM data needed for stats under
-// RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
-func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	out := make([]vmSnapshot, 0, len(p.pods))
-	for key, pod := range p.pods {
-		spec := meta.ParseVMSpec(pod)
-		v := p.vmsByName[spec.VMName]
-		if v == nil || v.PID == 0 {
-			continue
-		}
-		ns, name := splitPodKey(key)
-		snap := vmSnapshot{
-			ID: v.ID, PID: v.PID,
-			Hypervisor: v.Hypervisor, Backend: spec.Backend,
-			VMName: spec.VMName, Namespace: ns, PodName: name,
-		}
-		if len(v.NetworkConfigs) > 0 {
-			snap.Tap = v.NetworkConfigs[0].Tap
-		}
-		out = append(out, snap)
-	}
-	return out
-}
-
 // GetStatsSummary returns a kubelet-compatible stats summary with real
 // resource usage. metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
@@ -140,6 +113,33 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	}
 
 	return families, nil
+}
+
+// snapshotTrackedVMs copies the minimal VM data needed for stats under
+// RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
+func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	out := make([]vmSnapshot, 0, len(p.pods))
+	for key, pod := range p.pods {
+		spec := meta.ParseVMSpec(pod)
+		v := p.vmsByName[spec.VMName]
+		if v == nil || v.PID == 0 {
+			continue
+		}
+		ns, name := splitPodKey(key)
+		snap := vmSnapshot{
+			ID: v.ID, PID: v.PID,
+			Hypervisor: v.Hypervisor, Backend: spec.Backend,
+			VMName: spec.VMName, Namespace: ns, PodName: name,
+		}
+		if len(v.NetworkConfigs) > 0 {
+			snap.Tap = v.NetworkConfigs[0].Tap
+		}
+		out = append(out, snap)
+	}
+	return out
 }
 
 func buildNetworkStats(pid int, tap string) *statsv1alpha1.NetworkStats {

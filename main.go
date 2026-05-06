@@ -1,4 +1,5 @@
-// vk-cocoon is the virtual-kubelet provider that maps Kubernetes pods to cocoon MicroVMs.
+// Package main is the vk-cocoon entry point. vk-cocoon is the virtual-kubelet
+// provider that maps Kubernetes pods to cocoon MicroVMs.
 package main
 
 import (

@@ -1,3 +1,6 @@
+// Package cocoon implements the virtual-kubelet provider for cocoon MicroVMs.
+// It owns pod lifecycle (create / delete / update), exec / logs over the
+// cocoon-agent vsock channel, status reporting, and stats.
 package cocoon
 
 import (

@@ -50,6 +50,9 @@ type Manager struct {
 	agents  map[string]*agent
 }
 
+// OnUpdate is called when readiness flips; receives the per-agent context.
+type OnUpdate func(ctx context.Context)
+
 // agent is a per-pod probe goroutine, canceled by Forget or shutdown.
 type agent struct {
 	cancel context.CancelFunc
@@ -109,9 +112,6 @@ func (m *Manager) Snapshot(_ context.Context) map[string]Result {
 	maps.Copy(out, m.results)
 	return out
 }
-
-// OnUpdate is called when readiness flips; receives the per-agent context.
-type OnUpdate func(ctx context.Context)
 
 // Start launches (or replaces) a per-pod probe agent. The first probe runs
 // synchronously so CreatePod's initial notify reflects reachability.

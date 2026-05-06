@@ -81,6 +81,21 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 	return capacity, allocatable, nil
 }
 
+// CocoonRootDir returns the cocoon data directory, defaulting to /var/lib/cocoon.
+func CocoonRootDir() string {
+	return commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
+}
+
+// StorageBytes returns total and available bytes on the cocoon root filesystem.
+func StorageBytes() (total, available int64) {
+	rootDir := CocoonRootDir()
+	var stat syscallStatfs
+	if err := statfs(rootDir, &stat); err != nil {
+		return 0, 0
+	}
+	return statTotalBytes(stat), statAvailBytes(stat)
+}
+
 // reserveQuantity returns q * (100 - pct) / 100, rounding down.
 func reserveQuantity(q resource.Quantity, pct int) resource.Quantity {
 	v := q.Value()
@@ -195,21 +210,6 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 		}
 	}
 	return result, nil
-}
-
-// CocoonRootDir returns the cocoon data directory, defaulting to /var/lib/cocoon.
-func CocoonRootDir() string {
-	return commonk8s.EnvOrDefault("COCOON_ROOT_DIR", "/var/lib/cocoon")
-}
-
-// StorageBytes returns total and available bytes on the cocoon root filesystem.
-func StorageBytes() (total, available int64) {
-	rootDir := CocoonRootDir()
-	var stat syscallStatfs
-	if err := statfs(rootDir, &stat); err != nil {
-		return 0, 0
-	}
-	return statTotalBytes(stat), statAvailBytes(stat)
 }
 
 func parseQuantityEnv(key, fallback string) (resource.Quantity, error) {

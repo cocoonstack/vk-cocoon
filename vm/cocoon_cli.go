@@ -275,6 +275,20 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 	return stdout, wait, nil
 }
 
+// SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
+// success. Exposed so callers can invalidate cached fork snapshots when a
+// main VM is recreated.
+func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) error {
+	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(string(out), "snapshot not found") {
+		return nil
+	}
+	return cocoonCmdError("snapshot rm", name, err, out)
+}
+
 // Start runs `cocoon vm start`.
 func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	out, err := c.command(ctx, "vm", "start", vmID).CombinedOutput()
@@ -439,20 +453,6 @@ func parseVMFromStatusJSON(data []byte) VM {
 		}
 	}
 	return v
-}
-
-// SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
-// success. Exposed so callers can invalidate cached fork snapshots when a
-// main VM is recreated.
-func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) error {
-	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	if strings.Contains(string(out), "snapshot not found") {
-		return nil
-	}
-	return cocoonCmdError("snapshot rm", name, err, out)
 }
 
 // runJSON runs cocoon and returns stdout as raw JSON.

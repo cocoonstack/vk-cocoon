@@ -1,3 +1,6 @@
+// Package provider holds the virtual-kubelet provider scaffolding shared
+// across cocoon backends: orphan policy, capacity detection, and the node
+// provider entry point.
 package provider
 
 import (
