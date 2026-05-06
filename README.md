@@ -14,7 +14,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `sudo cocoon …` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | Wraps the [epoch](https://github.com/cocoonstack/epoch) SDK as a `RegistryClient` interface, plus `Puller` and `Pusher` that stream snapshots and cloud images via `epoch/snapshot` and `epoch/cloudimg` |
 | Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
-| Guest exec | `guest/` | SSH executor (Linux) and RDP help-text shim (Windows) |
+| Guest exec | `guest/` | RDP help-text shim (Windows) and SAC dialer (Windows static IP). Linux guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/`. |
 | Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
 | Metrics | `metrics/` | Prometheus collectors for pod lifecycle, snapshot pull / push, VM table size, orphans |
 | Build metadata | `version/` | ldflags-injected version / revision / built-at strings |
@@ -176,7 +176,6 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against epoch. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
-| `VK_SSH_PASSWORD` | unset | SSH password for `kubectl logs / exec` against Linux guests. |
 | `VK_ORPHAN_POLICY` | `alert` | `alert`, `destroy`, or `keep`. |
 | `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
 | `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |

@@ -29,7 +29,6 @@ import (
 	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/guest/rdp"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
-	gossh "github.com/cocoonstack/vk-cocoon/guest/ssh"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
@@ -45,8 +44,6 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultEpochURL     = "http://epoch.cocoon-system.svc:8080"
-	defaultSSHUser      = "root"
-	defaultSSHPort      = 22
 	defaultOrphanPolicy = string(provider.OrphanAlert)
 
 	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
@@ -71,7 +68,6 @@ func main() {
 	epochToken := os.Getenv("EPOCH_TOKEN")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
-	sshPassword := os.Getenv("VK_SSH_PASSWORD")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
@@ -109,7 +105,6 @@ func main() {
 		epochToken:   epochToken,
 		leasesPath:   leasesPath,
 		cocoonBin:    cocoonBin,
-		sshPassword:  sshPassword,
 		orphanPolicy: orphanPolicy,
 		clientset:    clientset,
 	})
@@ -204,7 +199,6 @@ type buildOpts struct {
 	epochToken   string
 	leasesPath   string
 	cocoonBin    string
-	sshPassword  string
 	orphanPolicy string
 	clientset    kubernetes.Interface
 }
@@ -231,7 +225,6 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	} else {
 		p.Pinger = icmpPinger
 	}
-	p.GuestSSH = gossh.NewExecutor(defaultSSHUser, opts.sshPassword, defaultSSHPort)
 	p.GuestRDP = rdp.Executor{}
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)

@@ -82,7 +82,6 @@ type Provider struct {
 	Registry    *registryclient.Client
 	LeaseParser *network.LeaseParser
 	Pinger      network.Pinger
-	GuestSSH    guest.Executor
 	GuestRDP    guest.Executor
 	GuestSAC    guest.Dialer
 	Probes      *probes.Manager
