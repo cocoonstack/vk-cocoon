@@ -134,10 +134,9 @@ func NewProvider() *Provider {
 	}
 }
 
-// Close cancels background goroutines and waits for them to exit.
-// The lifecycle cancel is issued under p.mu to serialize against
-// scheduleDeferredRecheck's Add-under-lock — otherwise a new goroutine
-// could add to recheckWG after Wait had already returned.
+// Close cancels background goroutines and waits for them. The lifecycle
+// cancel runs under p.mu so scheduleDeferredRecheck cannot Add to
+// recheckWG after Wait has returned.
 func (p *Provider) Close() {
 	p.mu.Lock()
 	if p.lifecycleStop != nil {
@@ -169,20 +168,11 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 }
 
 // NotifyPods stores the kubelet's pod-status callback and schedules a
-// deferred initial-status push for every tracked pod. The push is
-// mandatory: adopted pods (post-restart) take their first probe
-// synchronously inside StartupReconcile, before the kubelet has set
-// the notifier. If that first probe returns Ready=true (typical when
-// the underlying VM is already alive), the run loop never sees a
-// transition and onUpdate never fires, so without this push the pod
-// stays at the operator's last-known Phase (usually Pending).
-//
-// The push must be deferred: virtual-kubelet's PodController.Run
-// calls NotifyPods *before* it waits for the informer cache to sync.
-// enqueuePodStatusUpdate then polls knownPods (only populated after
-// cache sync via AddFunc) and silently drops the enqueue after
-// MaxRetries (~3s). Sleep past that window so AddFunc has registered
-// the pod before we notify, then push.
+// deferred initial push so adopted pods (post-restart) leave Pending.
+// virtual-kubelet calls NotifyPods before WaitForCacheSync; pushing
+// synchronously hits enqueuePodStatusUpdate's empty knownPods and is
+// dropped after a ~3s poll budget. pushInitialStatus sleeps past that
+// window before walking tracked pods.
 func (p *Provider) NotifyPods(ctx context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -190,9 +180,14 @@ func (p *Provider) NotifyPods(ctx context.Context, notifier func(*corev1.Pod)) {
 	go p.pushInitialStatus(ctx)
 }
 
-// pushInitialStatus delivers each tracked pod's current status to the
-// kubelet once virtual-kubelet's pod cache has had time to sync.
-// Called in a goroutine from NotifyPods.
+// StartVMWatcher launches a background goroutine that subscribes to cocoon's
+// VM event stream and reacts to VM state changes in near-real-time.
+func (p *Provider) StartVMWatcher(ctx context.Context) {
+	go p.vmWatchLoop(ctx)
+}
+
+// pushInitialStatus runs once after the cache-sync grace window and
+// pushes each tracked pod's status to the kubelet.
 func (p *Provider) pushInitialStatus(ctx context.Context) {
 	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
 		return
@@ -209,12 +204,6 @@ func (p *Provider) pushInitialStatus(ctx context.Context) {
 		p.refreshStatus(ctx, pod)
 		p.notify(pod)
 	}
-}
-
-// StartVMWatcher launches a background goroutine that subscribes to cocoon's
-// VM event stream and reacts to VM state changes in near-real-time.
-func (p *Provider) StartVMWatcher(ctx context.Context) {
-	go p.vmWatchLoop(ctx)
 }
 
 // notify pushes a pod status update through the kubelet callback.
