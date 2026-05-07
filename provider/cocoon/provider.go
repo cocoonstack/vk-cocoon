@@ -34,6 +34,13 @@ const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
 
+	// initialStatusPushDelay defers the post-restart pod-status push so the
+	// kubelet's pod-informer has time to populate knownPods. Without the
+	// delay, enqueuePodStatusUpdate's poll-for-knownPods loop times out
+	// (151ms × 20 retries ≈ 3s) before the AddFunc handler observes the
+	// pod, and the status update is silently dropped.
+	initialStatusPushDelay = 10 * time.Second
+
 	// containerName is the synthetic container name used in pod status and metrics.
 	containerName = "agent"
 
@@ -161,11 +168,47 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return slices.Collect(maps.Values(p.pods)), nil
 }
 
-// NotifyPods stores the kubelet's pod-status callback.
-func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
+// NotifyPods stores the kubelet's pod-status callback and schedules a
+// deferred initial-status push for every tracked pod. The push is
+// mandatory: adopted pods (post-restart) take their first probe
+// synchronously inside StartupReconcile, before the kubelet has set
+// the notifier. If that first probe returns Ready=true (typical when
+// the underlying VM is already alive), the run loop never sees a
+// transition and onUpdate never fires, so without this push the pod
+// stays at the operator's last-known Phase (usually Pending).
+//
+// The push must be deferred: virtual-kubelet's PodController.Run
+// calls NotifyPods *before* it waits for the informer cache to sync.
+// enqueuePodStatusUpdate then polls knownPods (only populated after
+// cache sync via AddFunc) and silently drops the enqueue after
+// MaxRetries (~3s). Sleep past that window so AddFunc has registered
+// the pod before we notify, then push.
+func (p *Provider) NotifyPods(ctx context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.notifyHook = notifier
+	p.mu.Unlock()
+	go p.pushInitialStatus(ctx)
+}
+
+// pushInitialStatus delivers each tracked pod's current status to the
+// kubelet once virtual-kubelet's pod cache has had time to sync.
+// Called in a goroutine from NotifyPods.
+func (p *Provider) pushInitialStatus(ctx context.Context) {
+	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
+		return
+	}
+	p.mu.RLock()
+	pods := slices.Collect(maps.Values(p.pods))
+	p.mu.RUnlock()
+	if len(pods) == 0 {
+		return
+	}
+	log.WithFunc("Provider.pushInitialStatus").
+		Infof(ctx, "pushing initial status for %d tracked pods", len(pods))
+	for _, pod := range pods {
+		p.refreshStatus(ctx, pod)
+		p.notify(pod)
+	}
 }
 
 // StartVMWatcher launches a background goroutine that subscribes to cocoon's
