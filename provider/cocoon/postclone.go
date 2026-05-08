@@ -62,7 +62,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
 	// Bound the entire retry loop with a single context deadline. We
-	// cannot rely on Runtime.Exec honouring the deadline directly:
+	// cannot rely on Runtime.Exec honoring the deadline directly:
 	// Exec spawns `sudo cocoon vm exec ...`, and SIGKILL to sudo
 	// doesn't propagate to the cocoon grandchild, so cmd.Wait can
 	// block on the stdout pipe an orphaned cocoon process holds open.
