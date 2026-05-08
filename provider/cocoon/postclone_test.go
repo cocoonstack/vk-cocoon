@@ -1,11 +1,13 @@
 package cocoon
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -18,49 +20,26 @@ func TestNeedsPostClone(t *testing.T) {
 	cases := []struct {
 		name        string
 		backend     string
-		vmID        string
 		sourceImage string
 		nics        []*vm.NetworkConfig
 		want        bool
 	}{
-		{name: "CH + OCI + DHCP (auto)", backend: "cloud-hypervisor", vmID: "x", nics: dhcpNIC, want: false},
-		{name: "CH + OCI + Static", backend: "cloud-hypervisor", vmID: "x", nics: staticNIC, want: true},
-		{name: "CH + cloudimg (from sourceImage)", backend: "cloud-hypervisor", vmID: "x", sourceImage: "https://cloud-images.ubuntu.com/img.img", nics: dhcpNIC, want: true},
-		{name: "FC + OCI + DHCP", backend: "firecracker", vmID: "x", nics: dhcpNIC, want: true},
-		{name: "FC + OCI + Static", backend: "firecracker", vmID: "x", nics: staticNIC, want: true},
-		{name: "CH + OCI + no NICs (auto)", backend: "cloud-hypervisor", vmID: "x", nics: nil, want: false},
+		{name: "CH + OCI + DHCP (auto)", backend: "cloud-hypervisor", nics: dhcpNIC, want: false},
+		{name: "CH + OCI + Static", backend: "cloud-hypervisor", nics: staticNIC, want: true},
+		// cloudimg + DHCP self-heals via netplan name-match fallback (cocoonv2 be35341).
+		{name: "CH + cloudimg + DHCP (auto, be35341)", backend: "cloud-hypervisor", sourceImage: "https://cloud-images.ubuntu.com/img.img", nics: dhcpNIC, want: false},
+		{name: "CH + cloudimg + Static", backend: "cloud-hypervisor", sourceImage: "https://cloud-images.ubuntu.com/img.img", nics: staticNIC, want: true},
+		{name: "FC + OCI + DHCP", backend: "firecracker", nics: dhcpNIC, want: true},
+		{name: "FC + OCI + Static", backend: "firecracker", nics: staticNIC, want: true},
+		{name: "CH + OCI + no NICs (auto)", backend: "cloud-hypervisor", nics: nil, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := needsPostClone(tc.backend, tc.vmID, tc.sourceImage, tc.nics)
+			got := needsPostClone(tc.backend, "x", tc.sourceImage, tc.nics)
 			if got != tc.want {
-				t.Errorf("needsPostClone(%q, %q, %q, %d nics) = %v, want %v", tc.backend, tc.vmID, tc.sourceImage, len(tc.nics), got, tc.want)
+				t.Errorf("needsPostClone(%q, %q, %d nics) = %v, want %v", tc.backend, tc.sourceImage, len(tc.nics), got, tc.want)
 			}
 		})
-	}
-}
-
-func TestNeedsPostCloneCloudimgFromDisk(t *testing.T) {
-	rootDir := t.TempDir()
-	t.Setenv("COCOON_ROOT_DIR", rootDir)
-	vmID := "fake-cloudimg-vm"
-	vmDir := filepath.Join(rootDir, "run", "cloudhypervisor", vmID)
-	if err := os.MkdirAll(vmDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(vmDir, "overlay.qcow2"), []byte{}, 0o644); err != nil {
-		t.Fatalf("write qcow2: %v", err)
-	}
-
-	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
-	dhcpNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}
-
-	// Cloudimg detected from disk (empty sourceImage) — still needs hint
-	if !needsPostClone("cloud-hypervisor", vmID, "", staticNIC) {
-		t.Errorf("cloudimg + static should need post-clone hint")
-	}
-	if !needsPostClone("cloud-hypervisor", vmID, "", dhcpNIC) {
-		t.Errorf("cloudimg + DHCP should need post-clone hint")
 	}
 }
 
@@ -126,4 +105,104 @@ func TestBuildPostCloneCommands(t *testing.T) {
 			t.Errorf("missing DHCP config for second NIC")
 		}
 	})
+}
+
+func TestPlanPostClone(t *testing.T) {
+	t.Parallel()
+
+	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
+	dhcpNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}
+
+	t.Run("nil VM", func(t *testing.T) {
+		_, ok := planPostClone(meta.VMSpec{}, nil, "")
+		if ok {
+			t.Errorf("nil VM should yield no plan")
+		}
+	})
+
+	t.Run("Linux CH OCI DHCP — no plan", func(t *testing.T) {
+		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
+		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
+		if ok {
+			t.Errorf("CH+OCI+DHCP should not need post-clone setup")
+		}
+	})
+
+	t.Run("Linux CH cloudimg DHCP — no plan (be35341)", func(t *testing.T) {
+		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
+		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "https://cloud-images.ubuntu.com/img.img")
+		if ok {
+			t.Errorf("cloudimg+DHCP self-heals via netplan zfallback; no plan expected")
+		}
+	})
+
+	t.Run("Linux CH static — sh -c plan", func(t *testing.T) {
+		v := &vm.VM{ID: "x", NetworkConfigs: staticNIC}
+		plan, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+		if !ok {
+			t.Fatalf("static-IP should produce a plan")
+		}
+		if len(plan.argv) != 3 || plan.argv[0] != "sh" || plan.argv[1] != "-c" {
+			t.Errorf("Linux plan argv = %v, want [sh -c <script>]", plan.argv)
+		}
+		if !strings.Contains(plan.argv[2], "Address=10.0.0.2/24") {
+			t.Errorf("script missing static IP config: %q", plan.argv[2])
+		}
+	})
+
+	t.Run("Windows — PowerShell PnP-rebind", func(t *testing.T) {
+		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
+		plan, ok := planPostClone(meta.VMSpec{OS: "windows"}, v, "")
+		if !ok {
+			t.Fatalf("Windows should always produce a plan (chained-clone NDIS unstick)")
+		}
+		if plan.argv[0] != "powershell" {
+			t.Errorf("Windows plan argv[0] = %q, want powershell", plan.argv[0])
+		}
+		if !strings.Contains(plan.argv[3], "Get-PnpDevice -Class Net -PresentOnly") {
+			t.Errorf("Windows script missing PnP-rebind: %q", plan.argv[3])
+		}
+		if !strings.Contains(plan.argv[3], "Disable-PnpDevice") || !strings.Contains(plan.argv[3], "Enable-PnpDevice") {
+			t.Errorf("Windows script missing Disable/Enable cycle: %q", plan.argv[3])
+		}
+	})
+}
+
+func TestRunPostCloneSetupSuccess(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
+
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+
+	if len(rt.execCalls) != 1 {
+		t.Fatalf("expected 1 Exec call, got %d", len(rt.execCalls))
+	}
+	if pod.Annotations[annotationPostCloneState] != postCloneStateDone {
+		t.Errorf("post-clone state = %q, want done", pod.Annotations[annotationPostCloneState])
+	}
+	if _, hasHint := pod.Annotations[annotationPostCloneHint]; hasHint {
+		t.Errorf("hint annotation should not be set on success")
+	}
+}
+
+func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := NewProvider()
+	p.Runtime = rt
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}}
+
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
+
+	if len(rt.execCalls) != 0 {
+		t.Errorf("CH+OCI+DHCP no-op path should not call Exec, got %d calls", len(rt.execCalls))
+	}
+	if pod.Annotations[annotationPostCloneState] != "" {
+		t.Errorf("no-op should leave post-clone-state unset, got %q", pod.Annotations[annotationPostCloneState])
+	}
 }

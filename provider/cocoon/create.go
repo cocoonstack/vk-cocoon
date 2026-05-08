@@ -59,14 +59,17 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
+	// Clone-only post-setup: auto-exec via cocoon-agent vsock so the
+	// pod transitions to Ready without operator intervention. Falls back
+	// to writing the post-clone-hint annotation only on timeout/failure.
 	if spec.Mode != string(cocoonv1.AgentModeRun) {
-		p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
+		go p.runPostCloneSetup(context.WithoutCancel(ctx), pod, spec, v, sourceImage)
 	}
 	// Windows VMs with static IP need SAC setup for both run and clone.
 	// Run asynchronously because SAC may take 30-60s to become ready
 	// and CreatePod must return promptly. The probe loop will detect
 	// readiness once the IP is set.
-	if spec.OS == "windows" {
+	if spec.OS == osWindows {
 		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
 	}
 	p.applyRuntime(ctx, pod, v)
