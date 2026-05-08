@@ -61,22 +61,33 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger := log.WithFunc("Provider.runPostCloneSetup")
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
-	// Bound the entire retry loop with a single context deadline so a
-	// hung Runtime.Exec call (e.g. cocoon-agent never accepts the vsock
-	// connection — Windows guest without v0.1.2) cannot starve the
-	// goroutine indefinitely.
+	// Bound the entire retry loop with a single context deadline. We
+	// cannot rely on Runtime.Exec honouring the deadline directly:
+	// Exec spawns `sudo cocoon vm exec ...`, and SIGKILL to sudo
+	// doesn't propagate to the cocoon grandchild, so cmd.Wait can
+	// block on the stdout pipe an orphaned cocoon process holds open.
+	// Run each Exec in a worker goroutine and select on the deadline
+	// instead so we abandon stuck workers rather than waiting on them.
 	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
 	defer cancel()
 
 	var lastErr error
 	for {
-		execErr := p.Runtime.Exec(loopCtx, v.ID, plan.argv, nil, nil, io.Discard, io.Discard)
-		if execErr == nil {
-			logger.Infof(ctx, "post-clone setup succeeded for %s/%s", pod.Namespace, pod.Name)
-			p.markPostCloneState(ctx, pod, postCloneStateDone)
-			return
+		done := make(chan error, 1)
+		go func() {
+			done <- p.Runtime.Exec(loopCtx, v.ID, plan.argv, nil, nil, io.Discard, io.Discard)
+		}()
+		select {
+		case execErr := <-done:
+			if execErr == nil {
+				logger.Infof(ctx, "post-clone setup succeeded for %s/%s", pod.Namespace, pod.Name)
+				p.markPostCloneState(ctx, pod, postCloneStateDone)
+				return
+			}
+			lastErr = execErr
+		case <-loopCtx.Done():
+			lastErr = loopCtx.Err()
 		}
-		lastErr = execErr
 		if loopCtx.Err() != nil {
 			break
 		}
