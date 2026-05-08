@@ -16,6 +16,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/manifest"
 	"github.com/cocoonstack/epoch/utils"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -144,6 +145,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, "", nil // forkFrom has no snapshot metadata
 
 	case mode == string(cocoonv1.AgentModeRun):
+		if err := p.ensureRunImage(ctx, spec.Image, spec.ForcePull); err != nil {
+			return nil, "", fmt.Errorf("ensure image %s: %w", spec.Image, err)
+		}
 		cpu, memory := vmResourceOverrides(pod)
 		v, err := p.Runtime.Run(ctx, vm.RunOptions{
 			Image:      spec.Image,
@@ -234,6 +238,45 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 	}
 	return fmt.Errorf("snapshot %s was taken with %s but CocoonSet requests %s",
 		snapshot.Name, snapshot.Hypervisor, targetBackend)
+}
+
+// ensureRunImage makes spec.Image available to `cocoon vm run`. Cocoon's
+// `image pull` would feed cocoonstack cloud-image artifacts to mkfs.erofs
+// (see cocoonstack/cocoon#35), so when Puller is wired up we peek the
+// manifest kind and route cloud-image refs through Puller.EnsureCloudImage.
+// Snapshots are rejected with a "use mode=clone" error; URLs, container
+// images, classify failures, and a missing Puller all fall through to
+// Runtime.EnsureImage so existing behavior is preserved.
+func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) error {
+	if image == "" {
+		return nil
+	}
+	if p.Puller == nil || p.Puller.Registry == nil || isURLImage(image) {
+		return p.Runtime.EnsureImage(ctx, image, force)
+	}
+	repo, tag := utils.ParseRef(image)
+	raw, _, err := p.Puller.Registry.GetManifest(ctx, repo, tag)
+	if err != nil {
+		// Not an epoch ref or registry hiccup — let cocoon handle it.
+		return p.Runtime.EnsureImage(ctx, image, force)
+	}
+	kind, classifyErr := manifest.Classify(raw)
+	if classifyErr != nil {
+		return p.Runtime.EnsureImage(ctx, image, force)
+	}
+	switch kind {
+	case manifest.KindCloudImage:
+		return p.Puller.EnsureCloudImage(ctx, repo, tag, image, force)
+	case manifest.KindSnapshot:
+		return fmt.Errorf("image %s is a snapshot artifact; use mode=clone instead of mode=run", image)
+	default:
+		return p.Runtime.EnsureImage(ctx, image, force)
+	}
+}
+
+// isURLImage reports whether ref looks like an HTTP(S) cloud-image URL.
+func isURLImage(ref string) bool {
+	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
 }
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.

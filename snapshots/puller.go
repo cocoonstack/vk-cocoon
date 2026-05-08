@@ -4,6 +4,7 @@ package snapshots
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -66,4 +67,36 @@ func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writ
 	}
 	adapter := blobReader{client: p.Registry, name: name}
 	return cloudimgStream(ctx, raw, adapter, w)
+}
+
+// EnsureCloudImage pulls a cloud-image artifact from epoch and pipes its
+// raw qcow2 bytes into `cocoon image import <localName>`. force=true
+// bypasses the local-cache short-circuit and re-imports unconditionally.
+func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName string, force bool) error {
+	localName = cmp.Or(localName, name)
+	if !force {
+		switch _, err := p.Runtime.Image(ctx, localName); {
+		case err == nil:
+			return nil
+		case errors.Is(err, vm.ErrImageNotFound):
+			// fall through to re-import
+		default:
+			return fmt.Errorf("inspect local image %s: %w", localName, err)
+		}
+	}
+
+	importer, wait, err := p.Runtime.ImageImport(ctx, vm.ImageImportOptions{Name: localName})
+	if err != nil {
+		return fmt.Errorf("open cocoon image import: %w", err)
+	}
+	if err := p.PullCloudImage(ctx, name, tag, importer); err != nil {
+		_ = importer.Close()
+		_ = wait()
+		return err
+	}
+	if err := importer.Close(); err != nil {
+		_ = wait()
+		return fmt.Errorf("close importer: %w", err)
+	}
+	return wait()
 }

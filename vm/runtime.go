@@ -10,11 +10,18 @@ import (
 // StateRunning is the state string cocoon reports for a live VM.
 const StateRunning = "running"
 
-// ErrVMNotFound signals the cocoon CLI has authoritatively reported the VM
-// does not exist. Callers use this to distinguish a gone VM from a transient
-// CLI failure (sudo hiccup, timeout, parse error) where the VM may still be
-// alive. Returned wrapped; unwrap with errors.Is.
-var ErrVMNotFound = errors.New("vm not found")
+var (
+	// ErrVMNotFound signals the cocoon CLI has authoritatively reported the
+	// VM does not exist. Callers use this to distinguish a gone VM from a
+	// transient CLI failure (sudo hiccup, timeout, parse error) where the
+	// VM may still be alive. Returned wrapped; unwrap with errors.Is.
+	ErrVMNotFound = errors.New("vm not found")
+
+	// ErrImageNotFound signals the cocoon CLI has authoritatively reported
+	// the image is not stored locally. Used by Puller.EnsureCloudImage as
+	// the idempotency probe for `cocoon image inspect`.
+	ErrImageNotFound = errors.New("image not found")
+)
 
 // NetworkInfo holds CNI-assigned addressing for a NIC. Nil for DHCP networks.
 type NetworkInfo struct {
@@ -100,6 +107,17 @@ type ImportOptions struct {
 	Description string
 }
 
+// ImageImportOptions is the input to Runtime.ImageImport.
+type ImageImportOptions struct {
+	Name string
+}
+
+// Image is the subset of `cocoon image inspect` callers need for idempotency
+// checks. Just the name suffices today; extend as needs surface.
+type Image struct {
+	Name string
+}
+
 // VMEvent is a single event from the cocoon event stream.
 type VMEvent struct {
 	Event string `json:"event"` // ADDED, MODIFIED, DELETED
@@ -122,5 +140,7 @@ type Runtime interface {
 	SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string, force bool) error
+	Image(ctx context.Context, name string) (*Image, error)
+	ImageImport(ctx context.Context, opts ImageImportOptions) (io.WriteCloser, func() error, error)
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 }

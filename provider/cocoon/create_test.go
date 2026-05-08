@@ -166,6 +166,14 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 	return nil
 }
 
+func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
+	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
+}
+
+func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
+	return nopWriteCloser{}, func() error { return nil }, nil
+}
+
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
 
 type fakeExecCall struct {
@@ -796,6 +804,42 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	}
 	if got := p.vmByName("vk-ns-run"); got != nil {
 		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
+	}
+}
+
+// TestEnsureRunImageFallback locks in the runtime-fallback branches:
+// empty refs are no-ops; URLs and a missing Puller skip the manifest
+// probe and shell out to `cocoon image pull`. The classify path itself
+// runs against a real epoch in integration tests.
+func TestEnsureRunImageFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		image   string
+		wantArg string
+	}{
+		{name: "empty skipped", image: "", wantArg: ""},
+		{name: "https url", image: "https://cloud-images.ubuntu.com/x.img", wantArg: "https://cloud-images.ubuntu.com/x.img"},
+		{name: "http url", image: "http://x/y.img", wantArg: "http://x/y.img"},
+		{name: "no puller falls through", image: "ubuntu-22.04", wantArg: "ubuntu-22.04"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{}
+			p := NewProvider()
+			p.Runtime = rt
+			if err := p.ensureRunImage(t.Context(), tc.image, false); err != nil {
+				t.Fatalf("ensureRunImage: %v", err)
+			}
+			if tc.wantArg == "" {
+				if len(rt.ensuredImages) != 0 {
+					t.Fatalf("EnsureImage should not run for empty ref, got %v", rt.ensuredImages)
+				}
+				return
+			}
+			if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != tc.wantArg {
+				t.Fatalf("EnsureImage called with %v, want exactly one call for %q", rt.ensuredImages, tc.wantArg)
+			}
+		})
 	}
 }
 
