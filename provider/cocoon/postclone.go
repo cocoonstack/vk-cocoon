@@ -61,21 +61,27 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger := log.WithFunc("Provider.runPostCloneSetup")
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
-	deadline := time.Now().Add(postCloneAgentBudget)
+	// Bound the entire retry loop with a single context deadline so a
+	// hung Runtime.Exec call (e.g. cocoon-agent never accepts the vsock
+	// connection — Windows guest without v0.1.2) cannot starve the
+	// goroutine indefinitely.
+	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
+	defer cancel()
+
 	var lastErr error
 	for {
-		if execErr := p.Runtime.Exec(ctx, v.ID, plan.argv, nil, nil, io.Discard, io.Discard); execErr == nil {
-			logger.Infof(ctx, "post-clone setup succeeded for %s/%s (vm=%s)", pod.Namespace, pod.Name, v.Name)
+		execErr := p.Runtime.Exec(loopCtx, v.ID, plan.argv, nil, nil, io.Discard, io.Discard)
+		if execErr == nil {
+			logger.Infof(ctx, "post-clone setup succeeded for %s/%s", pod.Namespace, pod.Name)
 			p.markPostCloneState(ctx, pod, postCloneStateDone)
 			return
-		} else {
-			lastErr = execErr
 		}
-		if time.Now().After(deadline) {
+		lastErr = execErr
+		if loopCtx.Err() != nil {
 			break
 		}
-		if !commonk8s.SleepCtx(ctx, postCloneRetryInterval) {
-			return
+		if !commonk8s.SleepCtx(loopCtx, postCloneRetryInterval) {
+			break
 		}
 	}
 	logger.Errorf(ctx, lastErr, "post-clone setup timed out for %s/%s after %s; falling back to manual hint",
