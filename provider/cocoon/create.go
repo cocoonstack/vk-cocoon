@@ -62,7 +62,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// Clone-only post-setup: auto-exec via cocoon-agent vsock so the
 	// pod transitions to Ready without operator intervention. Falls back
 	// to writing the post-clone-hint annotation only on timeout/failure.
-	if spec.Mode != string(cocoonv1.AgentModeRun) {
+	if isClonedBoot(pod, spec) {
 		go p.runPostCloneSetup(context.WithoutCancel(ctx), pod, spec, v, sourceImage)
 	}
 	// Windows VMs with static IP need SAC setup for both run and clone.
@@ -227,6 +227,21 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 		return "", fmt.Errorf("annotation %s must be a canonical path, got %q (cleaned: %q)", meta.AnnotationCloneFromDir, raw, cleaned)
 	}
 	return raw, nil
+}
+
+// isClonedBoot reports whether bringUpVM took a clone path (snapshot,
+// fork, or directory) rather than a fresh `cocoon vm run`. CocoonSet
+// sub-agents inherit `mode=run` from the parent agent spec but actually
+// fork-clone from the main VM, so checking spec.Mode alone is wrong;
+// any of the three clone-source signals flips the result.
+func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
+	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
+		return true
+	}
+	if spec.ForkFrom != "" {
+		return true
+	}
+	return strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
 }
 
 // assertSnapshotBackend rejects a clone when the target backend differs from

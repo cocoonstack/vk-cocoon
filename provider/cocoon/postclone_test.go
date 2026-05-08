@@ -189,6 +189,41 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	}
 }
 
+func TestIsClonedBoot(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		modeAnno string
+		fromDir  string
+		forkFrom string
+		mode     string
+		want     bool
+	}{
+		{name: "mode=run, no fork, no dir", mode: "run", want: false},
+		{name: "mode=clone", mode: "clone", want: true},
+		{name: "mode=run + ForkFrom (sub-agent)", mode: "run", forkFrom: "main-vm", want: true},
+		{name: "mode=run + clone-from-dir", mode: "run", fromDir: "/tmp/snap", want: true},
+		{name: "mode empty defaults to clone", mode: "", want: true},
+		{name: "mode=Run mixed-case", mode: "Run", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+			}
+			if tc.fromDir != "" {
+				pod.Annotations[meta.AnnotationCloneFromDir] = tc.fromDir
+			}
+			spec := meta.VMSpec{Mode: tc.mode, ForkFrom: tc.forkFrom}
+			if got := isClonedBoot(pod, spec); got != tc.want {
+				t.Errorf("isClonedBoot mode=%q forkFrom=%q fromDir=%q = %v, want %v",
+					tc.mode, tc.forkFrom, tc.fromDir, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := NewProvider()
