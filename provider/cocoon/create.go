@@ -264,7 +264,7 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	}
 	switch kind {
 	case manifest.KindCloudImage:
-		return p.Puller.EnsureCloudImage(ctx, repo, tag, image, force)
+		return p.Puller.EnsureCloudImageFromRaw(ctx, repo, image, raw, force)
 	case manifest.KindSnapshot:
 		return fmt.Errorf("image %s is a snapshot artifact; use mode=clone instead of mode=run", image)
 	default:

@@ -53,17 +53,9 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 
 // PullCloudImage fetches a cloud image manifest and writes raw disk bytes to w.
 func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writer) error {
-	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
+	raw, err := p.fetchCloudImageManifest(ctx, name, tag)
 	if err != nil {
-		return fmt.Errorf("get cloudimg manifest %s:%s: %w", name, tag, err)
-	}
-	// Verify it is actually a cloud-image manifest.
-	kind, err := manifest.Classify(raw)
-	if err != nil {
-		return fmt.Errorf("classify manifest: %w", err)
-	}
-	if kind != manifest.KindCloudImage {
-		return fmt.Errorf("manifest %s:%s is not a cloud image (kind=%s)", name, tag, kind)
+		return err
 	}
 	adapter := blobReader{client: p.Registry, name: name}
 	return cloudimgStream(ctx, raw, adapter, w)
@@ -72,6 +64,17 @@ func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writ
 // EnsureCloudImage streams a cloud-image artifact from epoch into `cocoon image
 // import <localName>`. force=true bypasses the local-cache short-circuit.
 func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName string, force bool) error {
+	raw, err := p.fetchCloudImageManifest(ctx, name, tag)
+	if err != nil {
+		return err
+	}
+	return p.EnsureCloudImageFromRaw(ctx, name, localName, raw, force)
+}
+
+// EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`.
+// Caller MUST have classified raw as KindCloudImage; this skips the fetch +
+// classify so callers that already verified the manifest don't pay twice.
+func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName string, raw []byte, force bool) error {
 	localName = cmp.Or(localName, name)
 	if !force {
 		switch _, err := p.Runtime.Image(ctx, localName); {
@@ -88,7 +91,8 @@ func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName stri
 	if err != nil {
 		return fmt.Errorf("open cocoon image import: %w", err)
 	}
-	if err := p.PullCloudImage(ctx, name, tag, importer); err != nil {
+	adapter := blobReader{client: p.Registry, name: name}
+	if err := cloudimgStream(ctx, raw, adapter, importer); err != nil {
 		_ = importer.Close()
 		_ = wait()
 		return fmt.Errorf("stream cloud image: %w", err)
@@ -98,4 +102,21 @@ func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName stri
 		return fmt.Errorf("close importer: %w", err)
 	}
 	return wait()
+}
+
+// fetchCloudImageManifest fetches and verifies the manifest at name:tag is a
+// cloud-image artifact, returning its raw bytes for downstream streaming.
+func (p *Puller) fetchCloudImageManifest(ctx context.Context, name, tag string) ([]byte, error) {
+	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
+	if err != nil {
+		return nil, fmt.Errorf("get cloudimg manifest %s:%s: %w", name, tag, err)
+	}
+	kind, err := manifest.Classify(raw)
+	if err != nil {
+		return nil, fmt.Errorf("classify manifest: %w", err)
+	}
+	if kind != manifest.KindCloudImage {
+		return nil, fmt.Errorf("manifest %s:%s is not a cloud image (kind=%s)", name, tag, kind)
+	}
+	return raw, nil
 }
