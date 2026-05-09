@@ -1,6 +1,7 @@
 package cocoon
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -178,6 +179,29 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	}
 	if _, hasHint := pod.Annotations[annotationPostCloneHint]; hasHint {
 		t.Errorf("hint annotation should not be set on success")
+	}
+}
+
+func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
+	// execErr=context.Canceled simulates the inner Exec returning canceled
+	// after lifecycleCtx fires; pre-cancel the request ctx so loopCtx exits
+	// after a single iteration.
+	rt := &fakeRuntime{execErr: context.Canceled}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+
+	if pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
+		t.Errorf("cancellation must not write state=failed, got %q", pod.Annotations[annotationPostCloneState])
+	}
+	if _, hasHint := pod.Annotations[annotationPostCloneHint]; hasHint {
+		t.Errorf("cancellation must not emit hint annotation")
 	}
 }
 

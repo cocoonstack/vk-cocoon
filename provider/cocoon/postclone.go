@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -85,6 +86,14 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		if !commonk8s.SleepCtx(loopCtx, postCloneRetryInterval) {
 			break
 		}
+	}
+	if errors.Is(lastErr, context.Canceled) {
+		// Provider shutdown canceled lifecycleCtx; the pod will be re-
+		// reconciled on next start. Skip the failed-state + hint writes
+		// because their patch ctx is the same canceled one.
+		logger.Infof(ctx, "post-clone setup canceled for %s/%s after %s (provider shutdown)",
+			pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond))
+		return
 	}
 	logger.Errorf(ctx, lastErr, "post-clone setup timed out for %s/%s after %s (budget %s); falling back to manual hint",
 		pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond), postCloneAgentBudget)
