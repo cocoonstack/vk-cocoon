@@ -19,10 +19,7 @@ var (
 )
 
 // GetContainerLogs returns the per-VM hypervisor log via `cocoon vm logs`.
-// Hypervisor-side log capture is OS-agnostic (CH stdio for direct-boot VMs,
-// firecracker serial for FC), so Linux and Windows go through the same
-// path. opts.Tail is forwarded to cocoon's --tail; default 200 keeps
-// unbounded `kubectl logs` from streaming a long-running VM's full log.
+// Default tail = 200 caps unbounded `kubectl logs` against long-running VMs.
 func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
 	v := p.vmForPod(namespace, podName)
 	if v == nil {
@@ -35,9 +32,8 @@ func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ s
 	return p.Runtime.Logs(ctx, v.ID, tail)
 }
 
-// RunInContainer is the kubectl exec entrypoint. Both Linux and Windows
-// guests go through cocoon-agent over vsock (cocoonv2 5fdd77e + cocoon-agent
-// v0.1.2 added Windows SCM service mode + viosock support).
+// RunInContainer is the kubectl exec entrypoint; both Linux and Windows
+// guests dispatch through cocoon-agent over vsock.
 func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
 	v := p.vmForPod(namespace, podName)
 	if v == nil {

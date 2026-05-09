@@ -59,20 +59,16 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	// Windows VMs with static IP need SAC setup for both run and clone.
-	// Run asynchronously because SAC may take 30-60s to become ready
-	// and CreatePod must return promptly. The probe loop will detect
-	// readiness once the IP is set.
-	if spec.OS == osWindows {
+	p.applyRuntime(ctx, pod, v)
+	// Both async setups run AFTER applyRuntime so the runtime annotations
+	// land first and so the goroutines never race with applyRuntime's
+	// pod.Annotations write. SAC and the post-clone agent path can each
+	// take tens of seconds and CreatePod must return promptly.
+	if spec.OS == string(cocoonv1.OSWindows) {
 		p.bgWG.Go(func() {
 			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 		})
 	}
-	p.applyRuntime(ctx, pod, v)
-	// Clone-only post-setup: auto-exec via cocoon-agent vsock so the
-	// pod transitions to Ready without operator intervention. Falls back
-	// to writing the post-clone-hint annotation only on timeout/failure.
-	// Spawned after applyRuntime to avoid racing on pod.Annotations.
 	if isClonedBoot(pod, spec) {
 		p.bgWG.Go(func() {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
@@ -235,22 +231,18 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 }
 
 // useOnDemandClone picks the cocoon `vm clone --on-demand` flag. Linux
-// guests are fast enough that lazy demand-paging via UFFD is a clear win
-// (clone returns sub-second; first exec is sub-second). Windows guests
-// pay a steep demand-page tax — measured ~57s for a single PowerShell
-// PnP-rebind on a fresh --on-demand clone, vs ~20s on a prefault clone
-// where the kernel maps snapshot pages normally instead of round-
-// tripping through userfaultfd. Net Windows wall-clock saving is ~35s
-// for the cost of ~2s extra in vm clone return.
+// keeps lazy UFFD paging — clone returns sub-second and first exec is
+// already fast. Windows guests pay a steep demand-page tax inside the
+// first PowerShell invocation, so we trade ~2s in clone return for a
+// ~35s saving on the post-clone PnP-rebind by prefaulting the snapshot.
 func useOnDemandClone(spec meta.VMSpec) bool {
-	return spec.OS != osWindows
+	return spec.OS != string(cocoonv1.OSWindows)
 }
 
-// isClonedBoot reports whether bringUpVM took a clone path (snapshot,
-// fork, or directory) rather than a fresh `cocoon vm run`. CocoonSet
-// sub-agents inherit `mode=run` from the parent agent spec but actually
-// fork-clone from the main VM, so checking spec.Mode alone is wrong;
-// any of the three clone-source signals flips the result.
+// isClonedBoot reports whether bringUpVM took a clone path. CocoonSet
+// sub-agents inherit mode=run from the parent spec but fork-clone from
+// the main VM, so spec.Mode alone is insufficient — fromDir / ForkFrom
+// must override.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
 	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
 		return true

@@ -18,26 +18,22 @@ func TestNeedsPostClone(t *testing.T) {
 	dhcpNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}
 
 	cases := []struct {
-		name        string
-		backend     string
-		sourceImage string
-		nics        []*vm.NetworkConfig
-		want        bool
+		name    string
+		backend string
+		nics    []*vm.NetworkConfig
+		want    bool
 	}{
-		{name: "CH + OCI + DHCP (auto)", backend: "cloud-hypervisor", nics: dhcpNIC, want: false},
-		{name: "CH + OCI + Static", backend: "cloud-hypervisor", nics: staticNIC, want: true},
-		// cloudimg + DHCP self-heals via netplan name-match fallback (cocoonv2 be35341).
-		{name: "CH + cloudimg + DHCP (auto, be35341)", backend: "cloud-hypervisor", sourceImage: "https://cloud-images.ubuntu.com/img.img", nics: dhcpNIC, want: false},
-		{name: "CH + cloudimg + Static", backend: "cloud-hypervisor", sourceImage: "https://cloud-images.ubuntu.com/img.img", nics: staticNIC, want: true},
-		{name: "FC + OCI + DHCP", backend: "firecracker", nics: dhcpNIC, want: true},
-		{name: "FC + OCI + Static", backend: "firecracker", nics: staticNIC, want: true},
-		{name: "CH + OCI + no NICs (auto)", backend: "cloud-hypervisor", nics: nil, want: false},
+		{name: "CH + DHCP (auto)", backend: "cloud-hypervisor", nics: dhcpNIC, want: false},
+		{name: "CH + Static", backend: "cloud-hypervisor", nics: staticNIC, want: true},
+		{name: "FC + DHCP", backend: "firecracker", nics: dhcpNIC, want: true},
+		{name: "FC + Static", backend: "firecracker", nics: staticNIC, want: true},
+		{name: "CH + no NICs", backend: "cloud-hypervisor", nics: nil, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := needsPostClone(tc.backend, "x", tc.sourceImage, tc.nics)
+			got := needsPostClone(tc.backend, tc.nics)
 			if got != tc.want {
-				t.Errorf("needsPostClone(%q, %q, %d nics) = %v, want %v", tc.backend, tc.sourceImage, len(tc.nics), got, tc.want)
+				t.Errorf("needsPostClone(%q, %d nics) = %v, want %v", tc.backend, len(tc.nics), got, tc.want)
 			}
 		})
 	}
@@ -113,13 +109,6 @@ func TestPlanPostClone(t *testing.T) {
 	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
 	dhcpNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}
 
-	t.Run("nil VM", func(t *testing.T) {
-		_, ok := planPostClone(meta.VMSpec{}, nil, "")
-		if ok {
-			t.Errorf("nil VM should yield no plan")
-		}
-	})
-
 	t.Run("Linux CH OCI DHCP — no plan", func(t *testing.T) {
 		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
 		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
@@ -128,11 +117,11 @@ func TestPlanPostClone(t *testing.T) {
 		}
 	})
 
-	t.Run("Linux CH cloudimg DHCP — no plan (be35341)", func(t *testing.T) {
+	t.Run("Linux CH cloudimg DHCP — no plan", func(t *testing.T) {
 		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
 		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "https://cloud-images.ubuntu.com/img.img")
 		if ok {
-			t.Errorf("cloudimg+DHCP self-heals via netplan zfallback; no plan expected")
+			t.Errorf("cloudimg+DHCP self-heals via netplan fallback; no plan expected")
 		}
 	})
 
@@ -164,6 +153,9 @@ func TestPlanPostClone(t *testing.T) {
 		}
 		if !strings.Contains(plan.argv[3], "Disable-PnpDevice") || !strings.Contains(plan.argv[3], "Enable-PnpDevice") {
 			t.Errorf("Windows script missing Disable/Enable cycle: %q", plan.argv[3])
+		}
+		if !strings.HasPrefix(plan.hint, "powershell -nop -c '") || !strings.HasSuffix(plan.hint, "'") {
+			t.Errorf("Windows hint should single-quote the script body, got %q", plan.hint)
 		}
 	})
 }

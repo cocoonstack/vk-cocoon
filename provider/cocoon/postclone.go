@@ -15,6 +15,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
@@ -23,36 +24,21 @@ import (
 )
 
 const (
-	// osWindows matches meta.VMSpec.OS for Windows pods.
-	osWindows = "windows"
-
-	// annotationPostCloneHint holds the base64-encoded fallback script
-	// for manual recovery when runPostCloneSetup fails.
-	annotationPostCloneHint = "vm.cocoonstack.io/post-clone-hint"
-
-	// annotationPostCloneState observability for the auto-exec path:
-	// running / done / failed.
+	annotationPostCloneHint  = "vm.cocoonstack.io/post-clone-hint"
 	annotationPostCloneState = "vm.cocoonstack.io/post-clone-state"
 
 	postCloneStateRunning = "running"
 	postCloneStateDone    = "done"
 	postCloneStateFailed  = "failed"
 
-	// postCloneAgentBudget bounds the time spent retrying Runtime.Exec
-	// while the cloned guest's cocoon-agent comes up. PnP-rebind on
-	// Windows takes ~26s; Linux cloud-init can run minutes. 180s covers
-	// the slow path.
-	postCloneAgentBudget = 180 * time.Second
-
-	// postCloneRetryInterval is the backoff between Runtime.Exec attempts.
+	postCloneAgentBudget   = 180 * time.Second
 	postCloneRetryInterval = 3 * time.Second
 )
 
-// runPostCloneSetup auto-executes the post-clone fixup script inside the
-// cloned guest via cocoon-agent vsock, then writes the resulting state
-// to vm.cocoonstack.io/post-clone-state. Falls back to writing the
-// classic post-clone-hint annotation only on timeout/failure so the
-// operator has a manual path.
+// runPostCloneSetup auto-executes the post-clone fixup inside the cloned
+// guest via cocoon-agent vsock and records the outcome in
+// vm.cocoonstack.io/post-clone-state. On timeout or failure it falls back
+// to writing the post-clone-hint annotation so an operator has a manual path.
 func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
@@ -64,13 +50,11 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, v.ID, spec.OS, spec.Backend)
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
-	// Bound the entire retry loop with a single context deadline. We
-	// cannot rely on Runtime.Exec honoring the deadline directly:
-	// Exec spawns `sudo cocoon vm exec ...`, and SIGKILL to sudo
-	// doesn't propagate to the cocoon grandchild, so cmd.Wait can
-	// block on the stdout pipe an orphaned cocoon process holds open.
-	// Run each Exec in a worker goroutine and select on the deadline
-	// instead so we abandon stuck workers rather than waiting on them.
+	// SIGKILL to the sudo wrapper from exec.CommandContext doesn't
+	// propagate to the grandchild cocoon process, so cmd.Wait can block
+	// on its open stdout pipe. Drive each Exec in a worker and select
+	// on the deadline so we abandon stuck workers instead of inheriting
+	// their hang.
 	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
 	defer cancel()
 
@@ -108,128 +92,102 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
 }
 
-// postClonePlan describes what to exec inside the guest after clone.
+// postClonePlan carries both the agent-side argv and a shell-runnable
+// hint string. The hint mirrors argv but quoted so an operator can paste
+// the annotation value into a cocoon vm console session unchanged.
 type postClonePlan struct {
 	argv []string
+	hint string
 }
 
 // planPostClone returns the auto-exec plan for a cloned VM, or ok=false
-// when no setup is needed (e.g. CH+OCI+DHCP self-heals via networkd
-// hot-swap; cloudimg+DHCP self-heals via the netplan name-match fallback
-// added in cocoonv2 be35341).
+// when no setup is needed: CH+OCI+DHCP self-heals via networkd hot-swap
+// and CH+cloudimg+DHCP self-heals via the netplan name-match fallback,
+// so only static-IP and FC clones still need intervention. Windows
+// always needs a PnP-rebind: chained clones land with NDIS-stuck NICs.
 func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
-	if v == nil {
-		return postClonePlan{}, false
+	if spec.OS == string(cocoonv1.OSWindows) {
+		argv := buildWindowsPostCloneArgv()
+		// argv[3] is the PowerShell script body; quote it as a single
+		// shell arg so operators can paste the hint as-is.
+		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
 	}
-	if spec.OS == osWindows {
-		// Chained Windows clones land with NDIS-stuck NICs (a4eeb0d).
-		// PnP-rebind unsticks DHCP for free; static-IP NICs are still
-		// configured by applyWindowsStaticIP via SAC in parallel.
-		return postClonePlan{argv: buildWindowsPostCloneArgv()}, true
-	}
-	if !needsPostClone(spec.Backend, v.ID, sourceImage, v.NetworkConfigs) {
+	if !needsPostClone(spec.Backend, v.NetworkConfigs) {
 		return postClonePlan{}, false
 	}
 	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
-	return postClonePlan{argv: []string{"sh", "-c", script}}, true
+	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
-// markPostCloneState writes the state annotation and patches it back to
-// the apiserver. Best-effort: a failed patch logs but does not block.
-// The local pod.Annotations write is protected by p.mu because GetPod
-// DeepCopies the same pod struct under RLock; a concurrent goroutine
-// write would race with that read.
+// markPostCloneState writes the state annotation locally and patches it
+// to the apiserver. Best-effort: a failed patch logs and continues.
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
-	p.mu.Lock()
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[annotationPostCloneState] = state
-	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
-		log.WithFunc("Provider.markPostCloneState").
-			Warnf(ctx, "patch post-clone state %s for %s/%s: %v", state, pod.Namespace, pod.Name, err)
-	}
+	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
 }
 
-// emitPostCloneHint writes the manual-recovery script into a pod annotation.
-// Called as fallback when runPostCloneSetup fails so an operator can
-// reproduce the fix via cocoon vm console.
+// emitPostCloneHint records a manual-recovery script in pod annotations
+// when runPostCloneSetup gives up. Operators decode and run it from a
+// cocoon vm console session.
 func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
-	if spec.OS == osWindows {
-		// Windows fallback: the same PnP-rebind PowerShell as the auto-exec path.
-		ps := strings.Join(buildWindowsPostCloneArgv(), " ")
-		writeHint(ctx, p, pod, ps)
+	plan, ok := planPostClone(spec, v, sourceImage)
+	if !ok {
 		return
 	}
-	if !needsPostClone(spec.Backend, v.ID, sourceImage, v.NetworkConfigs) {
-		return
-	}
-	writeHint(ctx, p, pod, buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs))
-}
-
-func writeHint(ctx context.Context, p *Provider, pod *corev1.Pod, commands string) {
-	logger := log.WithFunc("Provider.emitPostCloneHint")
-	encoded := base64.StdEncoding.EncodeToString([]byte(commands))
-	p.mu.Lock()
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[annotationPostCloneHint] = encoded
-	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneHint: encoded}); err != nil {
-		logger.Errorf(ctx, err, "patch post-clone hint %s/%s", pod.Namespace, pod.Name)
-	}
-	logger.Warnf(ctx, "manual post-clone setup required for %s/%s; hint at annotation %s",
+	encoded := base64.StdEncoding.EncodeToString([]byte(plan.hint))
+	p.setPodAnnotation(ctx, pod, annotationPostCloneHint, encoded)
+	log.WithFunc("Provider.emitPostCloneHint").Warnf(ctx,
+		"manual post-clone setup required for %s/%s; hint at annotation %s",
 		pod.Namespace, pod.Name, annotationPostCloneHint)
 }
 
-// needsPostClone reports whether a Linux cloned VM requires post-clone
-// setup. After cocoonv2 be35341 (cloudimg netplan name-match fallback),
-// cloudimg+DHCP self-heals like OCI+DHCP, so the only cloudimg case
-// still needing intervention is static-IP — which is captured by the
-// general isStaticNIC check below. FC clones always need MAC fixup.
-//
-// sourceImage is the snapshot's original image URL when available
-// (normal clone path). When empty (forkFrom, wake), falls back to
-// checking the COW file type on disk for buildPostCloneCommands' use.
-func needsPostClone(backend, vmID, sourceImage string, networkConfigs []*vm.NetworkConfig) bool {
-	_ = vmID
-	_ = sourceImage
+// setPodAnnotation writes a single annotation locally under p.mu — to
+// serialize with GetPod's DeepCopy under RLock — and patches it to the
+// apiserver. Patch failures log and are ignored; callers treat the write
+// as best-effort.
+func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
+	p.mu.Lock()
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[key] = val
+	p.mu.Unlock()
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{key: val}); err != nil {
+		log.WithFunc("Provider.setPodAnnotation").Warnf(ctx,
+			"patch annotation %s for %s/%s: %v", key, pod.Namespace, pod.Name, err)
+	}
+}
+
+// needsPostClone reports whether a Linux clone requires manual fixup.
+// FC always does (MAC needs re-applying); CH only when at least one NIC
+// has a static IP — DHCP self-heals on both OCI and cloudimg paths.
+func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
 	if backend == vm.BackendFirecracker {
 		return true
 	}
 	return slices.ContainsFunc(networkConfigs, isStaticNIC)
 }
 
-// buildWindowsPostCloneArgv returns the cocoon-agent argv that runs the
-// PnP-rebind in the cloned Windows guest. Disable-PnpDevice followed by
-// Enable-PnpDevice on every present Net device forces NDIS to rebind
-// and clears the chained-clone DHCP-stuck state.
-//
-// -PresentOnly is load-bearing: chained-clone images accumulate ghost
-// Net PnP entries from earlier MAC generations, and Disable-PnpDevice
-// on a non-Present device returns HRESULT 0x80041001 and aborts the
-// pipeline before reaching the real adapter.
+// buildWindowsPostCloneArgv returns the cocoon-agent argv for the Windows
+// PnP-rebind. -PresentOnly is load-bearing: ghost Net PnP entries from
+// earlier MAC generations make Disable-PnpDevice return HRESULT 0x80041001
+// and abort the pipeline before reaching the real adapter.
 func buildWindowsPostCloneArgv() []string {
-	// Matches cocoonv2 e835a0c. Disable/Enable-PnpDevice both accept
-	// InstanceId by pipeline, so a cached Get-PnpDevice piped twice is
-	// shorter than ForEach-Object. The inter-Disable-Enable Start-Sleep
-	// was measured to add <1s of the ~20s rebind cost — Win11 cmdlets
-	// already block synchronously on kernel unbind/rebind.
+	// Cache Get-PnpDevice and pipe it twice — Disable/Enable-PnpDevice
+	// both accept InstanceId by pipeline, so this is shorter than
+	// ForEach-Object and the inter-cmdlet Start-Sleep is unnecessary
+	// (Win11 cmdlets block synchronously on kernel unbind/rebind).
 	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
 		`$x|Disable-PnpDevice -Confirm:$false;` +
 		`$x|Enable-PnpDevice -Confirm:$false`
 	return []string{"powershell", "-nop", "-c", ps}
 }
 
-// isCloudimg checks whether the image string is a cloudimg URL.
 func isCloudimg(image string) bool {
 	return strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://")
 }
 
-// isCloudimgVM checks whether the VM's writable disk is a qcow2 overlay
-// (cloudimg) rather than a raw COW (OCI).
+// isCloudimgVM tells cloudimg from OCI when sourceImage is empty (forkFrom,
+// wake) by probing the on-disk overlay format.
 func isCloudimgVM(vmID string) bool {
 	rootDir := provider.CocoonRootDir()
 	path := fmt.Sprintf("%s/run/%s/%s/overlay.qcow2", rootDir, runDirCH, vmID)

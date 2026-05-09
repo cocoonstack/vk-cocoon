@@ -239,10 +239,10 @@ type nopWriteCloser struct{}
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
 
-// newTestProvider builds a Provider and registers Close on test cleanup
-// so background goroutines (post-clone exec, static-IP) drain before the
-// test exits. Without this, a goroutine spawned by CreatePod can outlive
-// the test and race with the next test on a recycled pod heap address.
+// newTestProvider builds a Provider and registers Close on cleanup so any
+// goroutines spawned via p.bgWG / p.recheckWG drain before the test exits;
+// without this, a CreatePod-launched goroutine can outlive its test and
+// race with the next test on a recycled pod heap address.
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
 	p := NewProvider()
