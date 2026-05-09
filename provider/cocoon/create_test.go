@@ -807,10 +807,7 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestEnsureRunImageFallback locks in the runtime-fallback branches:
-// empty refs are no-ops; URLs and a missing Puller skip the manifest
-// probe and shell out to `cocoon image pull`. The classify path itself
-// runs against a real epoch in integration tests.
+// TestEnsureRunImageFallback locks in the empty / URL / no-Puller branches.
 func TestEnsureRunImageFallback(t *testing.T) {
 	cases := []struct {
 		name    string

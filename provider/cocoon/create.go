@@ -240,13 +240,11 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 		snapshot.Name, snapshot.Hypervisor, targetBackend)
 }
 
-// ensureRunImage makes spec.Image available to `cocoon vm run`. Cocoon's
-// `image pull` would feed cocoonstack cloud-image artifacts to mkfs.erofs
-// (see cocoonstack/cocoon#35), so when Puller is wired up we peek the
-// manifest kind and route cloud-image refs through Puller.EnsureCloudImage.
-// Snapshots are rejected with a "use mode=clone" error; URLs, container
-// images, classify failures, and a missing Puller all fall through to
-// Runtime.EnsureImage so existing behavior is preserved.
+// ensureRunImage makes spec.Image available to `cocoon vm run`. Peek the
+// manifest kind via Puller; cloud-image artifacts go through
+// Puller.EnsureCloudImage, snapshots are rejected with a "use mode=clone"
+// hint, and everything else (URLs, container images, classify failures,
+// missing Puller) falls through to Runtime.EnsureImage.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) error {
 	if image == "" {
 		return nil
@@ -257,7 +255,7 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	repo, tag := utils.ParseRef(image)
 	raw, _, err := p.Puller.Registry.GetManifest(ctx, repo, tag)
 	if err != nil {
-		// Not an epoch ref or registry hiccup — let cocoon handle it.
+		// Non-epoch ref or registry hiccup; cocoon image pull handles non-epoch refs natively.
 		return p.Runtime.EnsureImage(ctx, image, force)
 	}
 	kind, classifyErr := manifest.Classify(raw)

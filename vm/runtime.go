@@ -112,8 +112,7 @@ type ImageImportOptions struct {
 	Name string
 }
 
-// Image is the subset of `cocoon image inspect` callers need for idempotency
-// checks. Just the name suffices today; extend as needs surface.
+// Image is the subset of `cocoon image inspect` callers need for idempotency checks.
 type Image struct {
 	Name string
 }

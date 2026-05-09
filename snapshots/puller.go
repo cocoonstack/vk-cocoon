@@ -69,9 +69,8 @@ func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writ
 	return cloudimgStream(ctx, raw, adapter, w)
 }
 
-// EnsureCloudImage pulls a cloud-image artifact from epoch and pipes its
-// raw qcow2 bytes into `cocoon image import <localName>`. force=true
-// bypasses the local-cache short-circuit and re-imports unconditionally.
+// EnsureCloudImage streams a cloud-image artifact from epoch into `cocoon image
+// import <localName>`. force=true bypasses the local-cache short-circuit.
 func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName string, force bool) error {
 	localName = cmp.Or(localName, name)
 	if !force {
@@ -92,7 +91,7 @@ func (p *Puller) EnsureCloudImage(ctx context.Context, name, tag, localName stri
 	if err := p.PullCloudImage(ctx, name, tag, importer); err != nil {
 		_ = importer.Close()
 		_ = wait()
-		return err
+		return fmt.Errorf("stream cloud image: %w", err)
 	}
 	if err := importer.Close(); err != nil {
 		_ = wait()

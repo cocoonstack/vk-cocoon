@@ -71,9 +71,7 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 // own post-start inspect failed it falls back to the pre-start record
 // (State!="running", PID=0) and only warns on stderr — detect that here
 // and do a single make-up Inspect so callers always see live state.
-// The caller is responsible for ensuring the image is locally present
-// (provider does it via ensureRunImage so cocoonstack cloud-image
-// artifacts go through Puller instead of `cocoon image pull`).
+// Caller must have ensured the image locally before invoking Run.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	out, err := c.runJSON(ctx, buildRunArgs(opts)...)
 	if err != nil {
@@ -92,11 +90,9 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	return v, nil
 }
 
-// EnsureImage shells `cocoon image pull` for HTTP(S) URLs and standard
-// OCI container images. cocoonstack cloud-image artifacts (artifactType=
-// vnd.cocoonstack.os-image.v1+json) are not handled here — the provider
-// routes those through Puller.EnsureCloudImage. force=true adds --force
-// so cocoon re-downloads instead of hitting the local digest cache.
+// EnsureImage shells `cocoon image pull`; force=true adds --force.
+// Cocoonstack cloud-image artifacts must go through Puller.EnsureCloudImage
+// instead — `cocoon image pull` mistakes them for container images.
 func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) error {
 	if image == "" {
 		return nil
@@ -113,15 +109,14 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 	return nil
 }
 
-// Image runs `cocoon image inspect`; "not found" maps to ErrImageNotFound
-// so EnsureCloudImage can use it as the idempotency probe.
+// Image runs `cocoon image inspect`; "not found in any backend" maps to ErrImageNotFound.
 func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
 	if name == "" {
 		return nil, fmt.Errorf("cocoon image inspect: name is empty")
 	}
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {
-		if strings.Contains(string(out), "not found") {
+		if strings.Contains(strings.ToLower(string(out)), "not found in any backend") {
 			return nil, fmt.Errorf("cocoon image inspect %s: %w", name, ErrImageNotFound)
 		}
 		return nil, cocoonCmdError("image inspect", name, err, out)
@@ -130,8 +125,7 @@ func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
 }
 
 // ImageImport spawns `cocoon image import <name>` and returns its stdin
-// pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar from
-// the magic bytes the caller streams in.
+// pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar.
 func (c *CocoonCLI) ImageImport(ctx context.Context, opts ImageImportOptions) (io.WriteCloser, func() error, error) {
 	if opts.Name == "" {
 		return nil, nil, fmt.Errorf("cocoon image import: name is empty")
