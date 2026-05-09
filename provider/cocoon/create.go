@@ -59,20 +59,25 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	// Clone-only post-setup: auto-exec via cocoon-agent vsock so the
-	// pod transitions to Ready without operator intervention. Falls back
-	// to writing the post-clone-hint annotation only on timeout/failure.
-	if isClonedBoot(pod, spec) {
-		go p.runPostCloneSetup(context.WithoutCancel(ctx), pod, spec, v, sourceImage)
-	}
 	// Windows VMs with static IP need SAC setup for both run and clone.
 	// Run asynchronously because SAC may take 30-60s to become ready
 	// and CreatePod must return promptly. The probe loop will detect
 	// readiness once the IP is set.
 	if spec.OS == osWindows {
-		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
+		p.bgWG.Go(func() {
+			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
+		})
 	}
 	p.applyRuntime(ctx, pod, v)
+	// Clone-only post-setup: auto-exec via cocoon-agent vsock so the
+	// pod transitions to Ready without operator intervention. Falls back
+	// to writing the post-clone-hint annotation only on timeout/failure.
+	// Spawned after applyRuntime to avoid racing on pod.Annotations.
+	if isClonedBoot(pod, spec) {
+		p.bgWG.Go(func() {
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
+		})
+	}
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below
 	// already reflects the initial reachability.

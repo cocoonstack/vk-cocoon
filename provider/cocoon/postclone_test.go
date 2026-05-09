@@ -170,7 +170,7 @@ func TestPlanPostClone(t *testing.T) {
 
 func TestRunPostCloneSetupSuccess(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
@@ -226,7 +226,7 @@ func TestIsClonedBoot(t *testing.T) {
 
 func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}

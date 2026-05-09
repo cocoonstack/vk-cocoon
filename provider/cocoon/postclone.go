@@ -129,11 +129,16 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 
 // markPostCloneState writes the state annotation and patches it back to
 // the apiserver. Best-effort: a failed patch logs but does not block.
+// The local pod.Annotations write is protected by p.mu because GetPod
+// DeepCopies the same pod struct under RLock; a concurrent goroutine
+// write would race with that read.
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
+	p.mu.Lock()
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
 	pod.Annotations[annotationPostCloneState] = state
+	p.mu.Unlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
 		log.WithFunc("Provider.markPostCloneState").
 			Warnf(ctx, "patch post-clone state %s for %s/%s: %v", state, pod.Namespace, pod.Name, err)
@@ -159,10 +164,12 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 func writeHint(ctx context.Context, p *Provider, pod *corev1.Pod, commands string) {
 	logger := log.WithFunc("Provider.emitPostCloneHint")
 	encoded := base64.StdEncoding.EncodeToString([]byte(commands))
+	p.mu.Lock()
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
 	pod.Annotations[annotationPostCloneHint] = encoded
+	p.mu.Unlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneHint: encoded}); err != nil {
 		logger.Errorf(ctx, err, "patch post-clone hint %s/%s", pod.Namespace, pod.Name)
 	}

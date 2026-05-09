@@ -57,7 +57,7 @@ func newRunningPod(t *testing.T, p *Provider, name, vmID, ip string, windows boo
 
 func TestRunInContainerLinuxRoutesToRuntimeExec(t *testing.T) {
 	rt := &fakeRuntime{execStdout: "hello\n", execExitCode: 0}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -86,7 +86,7 @@ func TestRunInContainerLinuxRoutesToRuntimeExec(t *testing.T) {
 
 func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 	rt := &fakeRuntime{execExitCode: 7}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -109,7 +109,7 @@ func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 
 func TestRunInContainerSurfacesRuntimeError(t *testing.T) {
 	rt := &fakeRuntime{execErr: errors.New("dial agent: connection refused")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -125,7 +125,7 @@ func TestRunInContainerSurfacesRuntimeError(t *testing.T) {
 
 func TestRunInContainerNoLiveVMRejected(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ghost-0", Namespace: "ns"}}

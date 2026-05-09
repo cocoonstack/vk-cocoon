@@ -239,6 +239,17 @@ type nopWriteCloser struct{}
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
 
+// newTestProvider builds a Provider and registers Close on test cleanup
+// so background goroutines (post-clone exec, static-IP) drain before the
+// test exits. Without this, a goroutine spawned by CreatePod can outlive
+// the test and race with the next test on a recycled pod heap address.
+func newTestProvider(t *testing.T) *Provider {
+	t.Helper()
+	p := NewProvider()
+	t.Cleanup(p.Close)
+	return p
+}
+
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	spec.Managed = true
@@ -247,7 +258,7 @@ func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 }
 
 func TestCreatePodMissingVMNameRejected(t *testing.T) {
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	p.Probes = probes.NewManager(t.Context())
 
@@ -266,7 +277,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 			},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -299,7 +310,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 
 func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -330,7 +341,7 @@ func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
 	// A fresh main VM must drop the old fork snapshot so sub-agents cloned
 	// after a main recreate pick up current state, not the stale checkpoint.
 	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -360,7 +371,7 @@ func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 			"fork-vk-ns-demo-0": {Name: "fork-vk-ns-demo-0"},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -383,7 +394,7 @@ func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 
 func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -410,7 +421,7 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 
 func TestCreatePodCloneFromDirAnnotationDispatches(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -444,7 +455,7 @@ func TestCreatePodCloneFromDirAnnotationDispatches(t *testing.T) {
 
 func TestCreatePodCloneFromDirAnnotationConflictsWithRunMode(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -465,7 +476,7 @@ func TestCreatePodCloneFromDirAnnotationConflictsWithRunMode(t *testing.T) {
 
 func TestCreatePodCloneFromDirAnnotationConflictsWithForkFrom(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -487,7 +498,7 @@ func TestCreatePodCloneFromDirAnnotationConflictsWithForkFrom(t *testing.T) {
 
 func TestCreatePodCloneFromDirAnnotationRejectsRelativePath(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -505,7 +516,7 @@ func TestCreatePodCloneFromDirAnnotationRejectsRelativePath(t *testing.T) {
 
 func TestCreatePodCloneFromDirAnnotationRejectsNonCanonicalPath(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -530,7 +541,7 @@ func TestCreatePodCloneFromDirAnnotationWhitespaceTreatedAsAbsent(t *testing.T) 
 			"snap-x": {Name: "snap-x"},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -557,7 +568,7 @@ func TestCreatePodCloneFromDirAnnotationWhitespaceTreatedAsAbsent(t *testing.T) 
 
 func TestCreatePodCloneFromDirRuntimeFailureSurfacesError(t *testing.T) {
 	rt := &fakeRuntime{cloneErr: errors.New("ch boot rejected")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -582,7 +593,7 @@ func TestCreatePodCloneFromDirRuntimeFailureSurfacesError(t *testing.T) {
 
 func TestCreatePodRunMode(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -672,7 +683,7 @@ func TestCreatePodCloneModePropagatesBackend(t *testing.T) {
 			},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -703,7 +714,7 @@ func TestCreatePodCloneModeRejectsBackendMismatch(t *testing.T) {
 			},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -724,7 +735,7 @@ func TestCreatePodCloneModeRejectsBackendMismatch(t *testing.T) {
 
 func TestCreatePodRunModePropagatesBackend(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -754,7 +765,7 @@ func TestCreatePodCloneModeWithTag(t *testing.T) {
 			},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -781,7 +792,7 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 			"snapshot-repo": {Name: "snapshot-repo", Image: "https://example.invalid/img.img"},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -800,7 +811,7 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 
 func TestCreatePodRunErrorPropagates(t *testing.T) {
 	rt := &fakeRuntime{runErr: errors.New("cocoon vm run boom")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -832,7 +843,7 @@ func TestEnsureRunImageFallback(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &fakeRuntime{}
-			p := NewProvider()
+			p := newTestProvider(t)
 			p.Runtime = rt
 			if err := p.ensureRunImage(t.Context(), tc.image, false); err != nil {
 				t.Fatalf("ensureRunImage: %v", err)
@@ -908,7 +919,7 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			if tc.imagesPresent {
 				rt.imagesPresent = map[string]bool{repo: true}
 			}
-			p := NewProvider()
+			p := newTestProvider(t)
 			p.Runtime = rt
 			p.Puller = &snapshots.Puller{Registry: client, Runtime: rt}
 
@@ -945,7 +956,7 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 
 func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -972,7 +983,7 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 
 func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	rt := &fakeRuntime{}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 
@@ -996,7 +1007,7 @@ func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "adopted-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -1017,7 +1028,7 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "orphan-vmid", Name: "vk-ghost", IP: "10.0.0.99"}},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -1042,7 +1053,7 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -1077,7 +1088,7 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	meta.HibernateState(true).Apply(pod)
 
 	rt := &fakeRuntime{listVMs: nil}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -1103,7 +1114,7 @@ func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
 		return true, nil, errors.New("api server unreachable")
 	})
 
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = cs
@@ -1125,7 +1136,7 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	// Clientset has no pods — deletion returns NotFound, which evictPod must treat as success.
 	cs := fake.NewSimpleClientset()
 
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = cs
@@ -1151,7 +1162,7 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 			{vm: &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0", State: vm.StateRunning}},
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
@@ -1181,7 +1192,7 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}, // deferred 2 — definitive
 		},
 	}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
@@ -1217,7 +1228,7 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 	// cocoon stays broken forever — budget expiration must evict so the pod
 	// does not sit Running/NotReady indefinitely.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
@@ -1261,7 +1272,7 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 	// to schedule, then drop the pod to let the goroutine exit before the test
 	// returns so its view of the Provider fields does not race with cleanup.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
@@ -1299,7 +1310,7 @@ func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 	// A recheck goroutine running when Close is called must exit so the
 	// provider drains cleanly instead of leaking.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
@@ -1333,7 +1344,7 @@ func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 }
 
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
-	p := NewProvider()
+	p := newTestProvider(t)
 	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set("ns/demo-0", probes.Result{Ready: true, Live: true})
 

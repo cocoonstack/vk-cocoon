@@ -105,6 +105,7 @@ type Provider struct {
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
+	bgWG           sync.WaitGroup       // tracks per-pod background goroutines (post-clone exec, static-IP) so Close can await them
 	notifyHook     func(*corev1.Pod)
 
 	// Recheck tunables. Zero values fall back to the defaultXxx
@@ -144,6 +145,7 @@ func (p *Provider) Close() {
 	}
 	p.mu.Unlock()
 	p.recheckWG.Wait()
+	p.bgWG.Wait()
 	if p.Probes != nil {
 		p.Probes.Close()
 	}
