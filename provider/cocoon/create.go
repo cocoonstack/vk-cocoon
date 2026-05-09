@@ -65,12 +65,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// pod.Annotations write. SAC and the post-clone agent path can each
 	// take tens of seconds and CreatePod must return promptly.
 	if spec.OS == string(cocoonv1.OSWindows) {
-		p.bgWG.Go(func() {
+		p.goBackground(func() {
 			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 		})
 	}
 	if isClonedBoot(pod, spec) {
-		p.bgWG.Go(func() {
+		p.goBackground(func() {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
 		})
 	}

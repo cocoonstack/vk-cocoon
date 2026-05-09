@@ -130,8 +130,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	p.emitPostCloneHint(ctx, pod, spec, v, "") // wake has no snapshot source metadata
 	p.applyRuntime(ctx, pod, v)
+	// wake is always a clone path, so route through the same auto-exec
+	// goroutine as CreatePod's clone branch. sourceImage is "" — wake
+	// has no snapshot-source metadata, so cloudimg vs OCI dispatch in
+	// buildPostCloneCommands falls back to the on-disk overlay probe.
+	p.goBackground(func() {
+		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
+	})
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
