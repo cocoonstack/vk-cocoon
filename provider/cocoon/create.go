@@ -59,17 +59,21 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	if spec.Mode != string(cocoonv1.AgentModeRun) {
-		p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
-	}
-	// Windows VMs with static IP need SAC setup for both run and clone.
-	// Run asynchronously because SAC may take 30-60s to become ready
-	// and CreatePod must return promptly. The probe loop will detect
-	// readiness once the IP is set.
-	if spec.OS == "windows" {
-		go p.applyWindowsStaticIP(context.WithoutCancel(ctx), pod, v)
-	}
 	p.applyRuntime(ctx, pod, v)
+	// Both async setups run AFTER applyRuntime so the runtime annotations
+	// land first and so the goroutines never race with applyRuntime's
+	// pod.Annotations write. SAC and the post-clone agent path can each
+	// take tens of seconds and CreatePod must return promptly.
+	if spec.OS == string(cocoonv1.OSWindows) {
+		p.goBackground(func() {
+			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
+		})
+	}
+	if isClonedBoot(pod, spec) {
+		p.goBackground(func() {
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
+		})
+	}
 	p.trackPod(pod, v)
 	// Start runs its first probe synchronously so refreshStatus below
 	// already reflects the initial reachability.
@@ -117,7 +121,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
-			OnDemand:   true,
+			OnDemand:   useOnDemandClone(spec),
 		})
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
@@ -137,7 +141,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
-			OnDemand:   true,
+			OnDemand:   useOnDemandClone(spec),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -198,7 +202,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			Pull:       srcImage != "",
-			OnDemand:   true,
+			OnDemand:   useOnDemandClone(spec),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
@@ -224,6 +228,28 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 		return "", fmt.Errorf("annotation %s must be a canonical path, got %q (cleaned: %q)", meta.AnnotationCloneFromDir, raw, cleaned)
 	}
 	return raw, nil
+}
+
+// useOnDemandClone picks the cocoon `vm clone --on-demand` flag. Linux
+// keeps lazy UFFD paging — clone return and first exec are both fast.
+// Windows pays enough demand-page cost on the first PowerShell call
+// that prefaulting the snapshot wins overall.
+func useOnDemandClone(spec meta.VMSpec) bool {
+	return spec.OS != string(cocoonv1.OSWindows)
+}
+
+// isClonedBoot reports whether bringUpVM took a clone path. CocoonSet
+// sub-agents inherit mode=run from the parent spec but fork-clone from
+// the main VM, so spec.Mode alone is insufficient — fromDir / ForkFrom
+// must override.
+func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
+	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
+		return true
+	}
+	if spec.ForkFrom != "" {
+		return true
+	}
+	return strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
 }
 
 // assertSnapshotBackend rejects a clone when the target backend differs from

@@ -106,7 +106,6 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	if p.Puller == nil {
-		// Cannot import without a puller.
 		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
 	}
 	importName := spec.VMName + hibernateImportSuffix
@@ -124,14 +123,18 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Network:    spec.Network,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   true,
+		OnDemand:   useOnDemandClone(spec),
 	})
 	if err != nil {
 		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	p.emitPostCloneHint(ctx, pod, spec, v, "") // wake has no snapshot source metadata
 	p.applyRuntime(ctx, pod, v)
+	// sourceImage is "" — wake has no snapshot-source metadata, so the
+	// cloudimg vs OCI dispatch falls back to the on-disk overlay probe.
+	p.goBackground(func() {
+		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
+	})
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).

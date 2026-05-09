@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
-
-	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 var (
@@ -21,22 +19,11 @@ var (
 )
 
 // GetContainerLogs returns the per-VM hypervisor log via `cocoon vm logs`.
-// For OCI direct-boot VMs the guest console is wired to CH stdio so the
-// file approximates a container's stdout. opts.Tail is forwarded to
-// cocoon's --tail; default 200 keeps unbounded `kubectl logs` from
-// streaming a long-running VM's full log. Windows gets an RDP help stub.
+// Default tail = 200 caps unbounded `kubectl logs` against long-running VMs.
 func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ string, opts api.ContainerLogOpts) (io.ReadCloser, error) {
-	pod, err := p.GetPod(ctx, namespace, podName)
-	if err != nil {
-		return nil, err
-	}
 	v := p.vmForPod(namespace, podName)
 	if v == nil {
 		return io.NopCloser(strings.NewReader("vk-cocoon: pod has no live VM\n")), nil
-	}
-	if meta.IsWindowsPod(pod) {
-		msg := fmt.Sprintf("vk-cocoon: kubectl logs is not supported on Windows guests; connect via RDP to %s\n", v.IP)
-		return io.NopCloser(strings.NewReader(msg)), nil
 	}
 	tail := opts.Tail
 	if tail <= 0 {
@@ -45,20 +32,12 @@ func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ s
 	return p.Runtime.Logs(ctx, v.ID, tail)
 }
 
-// RunInContainer is the kubectl exec entrypoint. Linux pods go through
-// cocoon-agent over vsock; Windows pods get an RDP help-text stub until
-// cocoon-agent grows Windows support.
+// RunInContainer is the kubectl exec entrypoint; both Linux and Windows
+// guests dispatch through cocoon-agent over vsock.
 func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ string, cmd []string, attach api.AttachIO) error {
 	v := p.vmForPod(namespace, podName)
 	if v == nil {
 		return fmt.Errorf("pod %s/%s has no live VM", namespace, podName)
-	}
-	pod, err := p.GetPod(ctx, namespace, podName)
-	if err != nil {
-		return err
-	}
-	if meta.IsWindowsPod(pod) {
-		return p.GuestRDP.Run(ctx, v.IP, cmd, attach.Stdin(), attach.Stdout(), attach.Stderr())
 	}
 	return p.Runtime.Exec(ctx, v.ID, cmd, nil, attach.Stdin(), attach.Stdout(), attach.Stderr())
 }

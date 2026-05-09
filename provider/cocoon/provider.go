@@ -105,6 +105,7 @@ type Provider struct {
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
+	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
 	notifyHook     func(*corev1.Pod)
 
 	// Recheck tunables. Zero values fall back to the defaultXxx
@@ -135,8 +136,8 @@ func NewProvider() *Provider {
 }
 
 // Close cancels background goroutines and waits for them. The lifecycle
-// cancel runs under p.mu so scheduleDeferredRecheck cannot Add to
-// recheckWG after Wait has returned.
+// cancel runs under p.mu so spawn paths cannot Add to a waitgroup after
+// Wait has returned.
 func (p *Provider) Close() {
 	p.mu.Lock()
 	if p.lifecycleStop != nil {
@@ -144,9 +145,22 @@ func (p *Provider) Close() {
 	}
 	p.mu.Unlock()
 	p.recheckWG.Wait()
+	p.bgWG.Wait()
 	if p.Probes != nil {
 		p.Probes.Close()
 	}
+}
+
+// goBackground spawns f tracked by p.bgWG, taking p.mu so Add cannot
+// race Close's lifecycleStop+Wait. A bgWG.Go after Close's Wait would
+// trip the sync.WaitGroup add-after-wait misuse.
+func (p *Provider) goBackground(f func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lifecycleCtx.Err() != nil {
+		return
+	}
+	p.bgWG.Go(f)
 }
 
 // GetPod returns a deep copy of the stored pod.
