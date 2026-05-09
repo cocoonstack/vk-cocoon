@@ -136,8 +136,8 @@ func NewProvider() *Provider {
 }
 
 // Close cancels background goroutines and waits for them. The lifecycle
-// cancel runs under p.mu so scheduleDeferredRecheck and goBackground
-// cannot Add to recheckWG/bgWG after Wait has returned.
+// cancel runs under p.mu so spawn paths cannot Add to a waitgroup after
+// Wait has returned.
 func (p *Provider) Close() {
 	p.mu.Lock()
 	if p.lifecycleStop != nil {
@@ -151,10 +151,9 @@ func (p *Provider) Close() {
 	}
 }
 
-// goBackground spawns f via p.bgWG so Close awaits it, but only if the
-// lifecycle ctx is still live. Add must serialize with Close's
-// lifecycleStop under p.mu — without this, a concurrent Close could
-// race with bgWG.Go and trip the WaitGroup misuse (Add after Wait).
+// goBackground spawns f tracked by p.bgWG, taking p.mu so Add cannot
+// race Close's lifecycleStop+Wait. A bgWG.Go after Close's Wait would
+// trip the sync.WaitGroup add-after-wait misuse.
 func (p *Provider) goBackground(f func()) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

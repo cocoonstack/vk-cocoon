@@ -131,10 +131,8 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.applyRuntime(ctx, pod, v)
-	// wake is always a clone path, so route through the same auto-exec
-	// goroutine as CreatePod's clone branch. sourceImage is "" — wake
-	// has no snapshot-source metadata, so cloudimg vs OCI dispatch in
-	// buildPostCloneCommands falls back to the on-disk overlay probe.
+	// sourceImage is "" — wake has no snapshot-source metadata, so the
+	// cloudimg vs OCI dispatch falls back to the on-disk overlay probe.
 	p.goBackground(func() {
 		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
 	})
