@@ -59,6 +59,9 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
+	t0 := time.Now()
+	logger.Infof(ctx, "post-clone setup starting for %s/%s vm=%s os=%q backend=%q",
+		pod.Namespace, pod.Name, v.ID, spec.OS, spec.Backend)
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
 	// Bound the entire retry loop with a single context deadline. We
@@ -72,7 +75,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	defer cancel()
 
 	var lastErr error
-	for {
+	for attempt := 1; ; attempt++ {
+		attemptStart := time.Now()
 		done := make(chan error, 1)
 		go func() {
 			done <- p.Runtime.Exec(loopCtx, v.ID, plan.argv, nil, nil, io.Discard, io.Discard)
@@ -80,11 +84,14 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		select {
 		case execErr := <-done:
 			if execErr == nil {
-				logger.Infof(ctx, "post-clone setup succeeded for %s/%s", pod.Namespace, pod.Name)
+				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
+					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				return
 			}
 			lastErr = execErr
+			logger.Warnf(ctx, "post-clone exec attempt %d failed for %s/%s after %s: %v",
+				attempt, pod.Namespace, pod.Name, time.Since(attemptStart).Round(time.Millisecond), execErr)
 		case <-loopCtx.Done():
 			lastErr = loopCtx.Err()
 		}
@@ -95,8 +102,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 			break
 		}
 	}
-	logger.Errorf(ctx, lastErr, "post-clone setup timed out for %s/%s after %s; falling back to manual hint",
-		pod.Namespace, pod.Name, postCloneAgentBudget)
+	logger.Errorf(ctx, lastErr, "post-clone setup timed out for %s/%s after %s (budget %s); falling back to manual hint",
+		pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond), postCloneAgentBudget)
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
 }
@@ -205,11 +212,15 @@ func needsPostClone(backend, vmID, sourceImage string, networkConfigs []*vm.Netw
 // on a non-Present device returns HRESULT 0x80041001 and aborts the
 // pipeline before reaching the real adapter.
 func buildWindowsPostCloneArgv() []string {
-	const ps = `Get-PnpDevice -Class Net -PresentOnly | ForEach-Object { ` +
-		`Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false; ` +
-		`Start-Sleep 2; ` +
-		`Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false }`
-	return []string{"powershell", "-NoProfile", "-Command", ps}
+	// Matches cocoonv2 e835a0c. Disable/Enable-PnpDevice both accept
+	// InstanceId by pipeline, so a cached Get-PnpDevice piped twice is
+	// shorter than ForEach-Object. The inter-Disable-Enable Start-Sleep
+	// was measured to add <1s of the ~20s rebind cost — Win11 cmdlets
+	// already block synchronously on kernel unbind/rebind.
+	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
+		`$x|Disable-PnpDevice -Confirm:$false;` +
+		`$x|Enable-PnpDevice -Confirm:$false`
+	return []string{"powershell", "-nop", "-c", ps}
 }
 
 // isCloudimg checks whether the image string is a cloudimg URL.
