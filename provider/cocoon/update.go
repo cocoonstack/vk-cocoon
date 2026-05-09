@@ -106,7 +106,6 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	if p.Puller == nil {
-		// Cannot import without a puller.
 		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
 	}
 	importName := spec.VMName + hibernateImportSuffix

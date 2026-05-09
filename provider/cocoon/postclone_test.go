@@ -186,7 +186,6 @@ func TestIsClonedBoot(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		modeAnno string
 		fromDir  string
 		forkFrom string
 		mode     string

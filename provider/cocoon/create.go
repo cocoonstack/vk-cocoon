@@ -231,10 +231,9 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 }
 
 // useOnDemandClone picks the cocoon `vm clone --on-demand` flag. Linux
-// keeps lazy UFFD paging — clone returns sub-second and first exec is
-// already fast. Windows guests pay a steep demand-page tax inside the
-// first PowerShell invocation, so we trade ~2s in clone return for a
-// ~35s saving on the post-clone PnP-rebind by prefaulting the snapshot.
+// keeps lazy UFFD paging — clone return and first exec are both fast.
+// Windows pays enough demand-page cost on the first PowerShell call
+// that prefaulting the snapshot wins overall.
 func useOnDemandClone(spec meta.VMSpec) bool {
 	return spec.OS != string(cocoonv1.OSWindows)
 }
