@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +23,11 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -58,6 +62,8 @@ type fakeRuntime struct {
 		image string
 		force bool
 	}
+	imagesPresent     map[string]bool // names that Image() reports as cached
+	imageInspectCalls []string
 
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
@@ -164,6 +170,18 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 		force bool
 	}{image, force})
 	return nil
+}
+
+func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
+	f.imageInspectCalls = append(f.imageInspectCalls, name)
+	if f.imagesPresent[name] {
+		return &vm.Image{Name: name}, nil
+	}
+	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
+}
+
+func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
+	return nopWriteCloser{}, func() error { return nil }, nil
 }
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
@@ -796,6 +814,132 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	}
 	if got := p.vmByName("vk-ns-run"); got != nil {
 		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
+	}
+}
+
+// TestEnsureRunImageFallback locks in the empty / URL / no-Puller branches.
+func TestEnsureRunImageFallback(t *testing.T) {
+	cases := []struct {
+		name    string
+		image   string
+		wantArg string
+	}{
+		{name: "empty skipped", image: "", wantArg: ""},
+		{name: "https url", image: "https://cloud-images.ubuntu.com/x.img", wantArg: "https://cloud-images.ubuntu.com/x.img"},
+		{name: "http url", image: "http://x/y.img", wantArg: "http://x/y.img"},
+		{name: "no puller falls through", image: "ubuntu-22.04", wantArg: "ubuntu-22.04"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{}
+			p := NewProvider()
+			p.Runtime = rt
+			if err := p.ensureRunImage(t.Context(), tc.image, false); err != nil {
+				t.Fatalf("ensureRunImage: %v", err)
+			}
+			if tc.wantArg == "" {
+				if len(rt.ensuredImages) != 0 {
+					t.Fatalf("EnsureImage should not run for empty ref, got %v", rt.ensuredImages)
+				}
+				return
+			}
+			if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != tc.wantArg {
+				t.Fatalf("EnsureImage called with %v, want exactly one call for %q", rt.ensuredImages, tc.wantArg)
+			}
+		})
+	}
+}
+
+// TestEnsureRunImageDispatch covers the manifest-classification branches:
+// cloud-image artifacts route through Puller (skipping cocoon image pull),
+// snapshot artifacts hard-error, and classify / fetch failures fall back to
+// Runtime.EnsureImage.
+func TestEnsureRunImageDispatch(t *testing.T) {
+	const repo = "ubuntu"
+
+	cases := []struct {
+		name           string
+		manifestStatus int
+		manifestBody   string
+		imagesPresent  bool
+		wantErr        string
+		wantPullerHit  bool // expect Puller path (Image() probed, no EnsureImage shell-out)
+		wantEnsureArg  string
+	}{
+		{
+			name:           "cloud image dispatched to Puller",
+			manifestStatus: http.StatusOK,
+			manifestBody:   `{"artifactType":"application/vnd.cocoonstack.os-image.v1+json"}`,
+			imagesPresent:  true,
+			wantPullerHit:  true,
+		},
+		{
+			name:           "snapshot artifact rejected",
+			manifestStatus: http.StatusOK,
+			manifestBody:   `{"artifactType":"application/vnd.cocoonstack.snapshot.v1+json"}`,
+			wantErr:        "snapshot artifact",
+		},
+		{
+			name:           "classify-error falls through",
+			manifestStatus: http.StatusOK,
+			manifestBody:   `not-json`,
+			wantEnsureArg:  repo,
+		},
+		{
+			name:           "GetManifest 5xx falls through",
+			manifestStatus: http.StatusInternalServerError,
+			manifestBody:   "boom",
+			wantEnsureArg:  repo,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.manifestStatus)
+				_, _ = io.WriteString(w, tc.manifestBody)
+			}))
+			defer srv.Close()
+
+			client, err := registryclient.New(srv.URL, "")
+			if err != nil {
+				t.Fatalf("registryclient.New: %v", err)
+			}
+			rt := &fakeRuntime{}
+			if tc.imagesPresent {
+				rt.imagesPresent = map[string]bool{repo: true}
+			}
+			p := NewProvider()
+			p.Runtime = rt
+			p.Puller = &snapshots.Puller{Registry: client, Runtime: rt}
+
+			err = p.ensureRunImage(t.Context(), repo, false)
+			switch {
+			case tc.wantErr != "":
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				if len(rt.ensuredImages) != 0 {
+					t.Fatalf("EnsureImage should not run on snapshot-reject path, got %v", rt.ensuredImages)
+				}
+			case tc.wantPullerHit:
+				if err != nil {
+					t.Fatalf("ensureRunImage: %v", err)
+				}
+				if len(rt.imageInspectCalls) == 0 {
+					t.Fatalf("expected Image() inspect on Puller path, got none")
+				}
+				if len(rt.ensuredImages) != 0 {
+					t.Fatalf("Puller path should not shell EnsureImage, got %v", rt.ensuredImages)
+				}
+			default: // fallthrough to Runtime.EnsureImage
+				if err != nil {
+					t.Fatalf("ensureRunImage: %v", err)
+				}
+				if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != tc.wantEnsureArg {
+					t.Fatalf("EnsureImage = %v, want one call for %q", rt.ensuredImages, tc.wantEnsureArg)
+				}
+			}
+		})
 	}
 }
 
