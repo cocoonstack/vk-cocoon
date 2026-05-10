@@ -30,7 +30,8 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	p.mu.Lock()
 	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
-	if tracked, ok := p.pods[key]; ok {
+	tracked := p.pods[key]
+	if tracked != nil {
 		if g := meta.ReadCocoonSetGeneration(tracked); g > gen {
 			gen = g
 		}
@@ -46,6 +47,10 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	p.lifecycleIntent[key] = status
 	status.Apply(pod)
+	if tracked != nil && tracked != pod {
+		// Keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
+		status.Apply(tracked)
+	}
 	p.mu.Unlock()
 
 	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)

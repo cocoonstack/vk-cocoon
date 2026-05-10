@@ -363,6 +363,29 @@ func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 	}
 }
 
+func TestMarkLifecycleStateUpdatesTrackedPodAnnotations(t *testing.T) {
+	t.Parallel()
+
+	// Async paths call markLifecycleState with a stale pod pointer; tracked pod's annotations must still get the new state so GetPod stays consistent.
+	tracked := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
+	tracked.Annotations[meta.AnnotationCocoonSetGeneration] = "5"
+	cs := fake.NewSimpleClientset(tracked)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(tracked, nil)
+
+	stale := tracked.DeepCopy()
+	stale.Annotations[meta.AnnotationCocoonSetGeneration] = "3"
+	p.markLifecycleState(t.Context(), stale, meta.LifecycleStateReady, "")
+
+	if got := tracked.Annotations[meta.AnnotationLifecycleState]; got != "ready" {
+		t.Errorf("tracked pod state = %q, want ready", got)
+	}
+	if got := tracked.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "5" {
+		t.Errorf("tracked pod observed-generation = %q, want 5", got)
+	}
+}
+
 func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
 	t.Parallel()
 
