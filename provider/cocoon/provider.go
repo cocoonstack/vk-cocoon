@@ -378,7 +378,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			logger.Warnf(ctx, "vm watcher start failed: %v, retrying in %s", err, backoff)
+			logger.Errorf(ctx, err, "vm watcher start failed, retrying in %s", backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -730,7 +730,7 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 		pod, err := p.GetPod(ctx, namespace, name)
 		if err != nil {
 			log.WithFunc("Provider.probeUpdate").
-				Warnf(ctx, "pod %s/%s lookup failed, skipping notify: %v", namespace, name, err)
+				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
 		p.refreshStatus(ctx, pod)

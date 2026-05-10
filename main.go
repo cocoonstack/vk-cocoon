@@ -81,7 +81,7 @@ func main() {
 
 	clientset, err := commonk8s.NewClientset()
 	if err != nil {
-		logger.Fatalf(ctx, err, "build clientset: %v", err)
+		logger.Fatalf(ctx, err, "build clientset")
 	}
 
 	metrics.Register(prometheus.DefaultRegisterer)
@@ -91,13 +91,13 @@ func main() {
 
 	tlsCert, tlsSource, err := commonk8s.LoadOrGenerateCert(certPath, keyPath, nodeName, nodeIP)
 	if err != nil {
-		logger.Fatalf(signalCtx, err, "tls setup: %v", err)
+		logger.Fatalf(signalCtx, err, "tls setup")
 	}
 	logger.Infof(signalCtx, "kubelet TLS from %s", tlsSource)
 
 	nodeCapacity, nodeAllocatable, err := provider.NodeResources()
 	if err != nil {
-		logger.Fatalf(signalCtx, err, "node resources: %v", err)
+		logger.Fatalf(signalCtx, err, "node resources")
 	}
 
 	p, err := buildProvider(signalCtx, buildOpts{
@@ -110,11 +110,11 @@ func main() {
 		clientset:    clientset,
 	})
 	if err != nil {
-		logger.Fatalf(signalCtx, err, "build provider: %v", err)
+		logger.Fatalf(signalCtx, err, "build provider")
 	}
 
 	if reconcileErr := p.StartupReconcile(signalCtx); reconcileErr != nil {
-		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node: %v", reconcileErr)
+		logger.Fatalf(signalCtx, reconcileErr, "startup reconcile failed; refusing to register node")
 	}
 
 	p.StartVMWatcher(signalCtx)
@@ -168,7 +168,7 @@ func main() {
 		}),
 	)
 	if err != nil {
-		logger.Fatalf(signalCtx, err, "create virtual-kubelet node: %v", err)
+		logger.Fatalf(signalCtx, err, "create virtual-kubelet node")
 	}
 
 	prometheus.DefaultRegisterer.MustRegister(metrics.NewVMCollector(p.CollectVMStats))
@@ -180,7 +180,7 @@ func main() {
 	go func() {
 		logger.Infof(signalCtx, "vk-cocoon node %s kubelet API on :%d", nodeName, kubeletAPIPort)
 		if err := n.Run(signalCtx); err != nil {
-			logger.Fatalf(signalCtx, err, "virtual-kubelet node exited: %v", err)
+			logger.Fatalf(signalCtx, err, "virtual-kubelet node exited")
 		}
 	}()
 
@@ -261,7 +261,7 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 			KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
-			logger.Warnf(ctx, "patch daemon endpoints attempt %d: %v", attempt, err)
+			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
 			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}

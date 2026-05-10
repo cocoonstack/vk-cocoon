@@ -179,7 +179,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		// so sub-agents that scale later clone from current state.
 		forkName := forkSnapshotName(spec.VMName)
 		if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
-			log.WithFunc("Provider.bringUpVM").Warnf(ctx, "invalidate fork snapshot %s: %v", forkName, err)
+			log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
 		}
 		return v, "", nil
 
