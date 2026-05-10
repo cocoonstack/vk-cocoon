@@ -363,6 +363,78 @@ func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 	}
 }
 
+func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
+	t.Parallel()
+
+	// Simulates startup: pod carries lifecycle annotations from before restart.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{
+			meta.AnnotationLifecycleState:              "ready",
+			meta.AnnotationLifecycleObservedGeneration: "3",
+		},
+	}}
+	p := newTestProvider(t)
+	p.seedLifecycleIntentFromPod(pod)
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	intent := p.lifecycleIntent[key]
+	flushed := p.lifecycleFlushed[key]
+	p.mu.RUnlock()
+	if intent.State != meta.LifecycleStateReady || intent.ObservedGeneration != 3 {
+		t.Errorf("intent = %s/%d, want ready/3", intent.State, intent.ObservedGeneration)
+	}
+	if flushed != intent.Snapshot() {
+		t.Errorf("flushed must match intent on seed to avoid spurious reconcile")
+	}
+}
+
+func TestSeedLifecycleIntentFromPodSkipsUnannotatedPod(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	p := newTestProvider(t)
+	p.seedLifecycleIntentFromPod(pod)
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	_, present := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if present {
+		t.Errorf("must not seed intent for pod without lifecycle-state annotation")
+	}
+}
+
+func TestRepublishAfterRestartWithSeed(t *testing.T) {
+	t.Parallel()
+
+	// Post-restart: seed reconstructs intent, then a gen-stamp UpdatePod must republish.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
+	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "3"
+	pod.Annotations[meta.AnnotationLifecycleState] = "ready"
+	pod.Annotations[meta.AnnotationLifecycleObservedGeneration] = "3"
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo"})
+	p.seedLifecycleIntentFromPod(pod)
+
+	bumped := pod.DeepCopy()
+	bumped.Annotations[meta.AnnotationCocoonSetGeneration] = "5"
+	if err := p.UpdatePod(t.Context(), bumped); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
+	}
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "5" {
+		t.Errorf("observed-generation = %q, want 5 (republish after restart)", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "ready" {
+		t.Errorf("state = %q, want ready", got)
+	}
+}
+
 func TestForgetPodDropsLifecycleState(t *testing.T) {
 	t.Parallel()
 

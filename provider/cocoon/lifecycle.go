@@ -122,6 +122,19 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	}
 }
 
+// seedLifecycleIntentFromPod restores intent from the pod's annotations on startup so post-restart gen-stamps still echo.
+func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
+	if meta.ReadLifecycleState(pod) == "" {
+		return
+	}
+	status := meta.ReadLifecycleStatus(pod)
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	p.lifecycleIntent[key] = status
+	p.lifecycleFlushed[key] = status.Snapshot()
+	p.mu.Unlock()
+}
+
 // republishLifecycleOnGenerationBump re-marks current state on a bare gen-stamp UpdatePod; otherwise observed-generation freezes.
 func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *corev1.Pod) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
