@@ -1,0 +1,164 @@
+package cocoon
+
+import (
+	"context"
+	"time"
+
+	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/meta"
+)
+
+const (
+	lifecyclePatchAttempts     = 3
+	lifecyclePatchInterval     = 500 * time.Millisecond
+	lifecycleReconcileInterval = 15 * time.Second
+)
+
+// StartLifecycleReconciler runs the annotation re-flush loop; NotifyPods only pushes pod.Status.
+func (p *Provider) StartLifecycleReconciler() {
+	p.goBackground(func() {
+		p.runLifecycleReconciler(p.lifecycleCtx)
+	})
+}
+
+func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
+	gen := meta.ReadCocoonSetGeneration(pod)
+	tracked := p.pods[key]
+	if tracked != nil {
+		if g := meta.ReadCocoonSetGeneration(tracked); g > gen {
+			gen = g
+		}
+	}
+	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
+	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
+		p.mu.Unlock()
+		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
+			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
+			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
+			cur.State, cur.ObservedGeneration)
+		return
+	}
+	p.lifecycleIntent[key] = status
+	status.Apply(pod)
+	if tracked != nil && tracked != pod {
+		// Keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
+		status.Apply(tracked)
+	}
+	p.mu.Unlock()
+
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+}
+
+func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
+	logger := log.WithFunc("Provider.flushLifecycle")
+	annos := status.Annotations()
+	key := meta.PodKey(namespace, name)
+	snap := status.Snapshot()
+	var lastErr error
+	for range lifecyclePatchAttempts {
+		// Skip if intent advanced or pod was forgotten — a newer flush owns the write.
+		p.mu.RLock()
+		cur, ok := p.lifecycleIntent[key]
+		p.mu.RUnlock()
+		if !ok || cur.Snapshot() != snap {
+			return
+		}
+		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		if err == nil {
+			p.recordLifecycleFlushed(key, snap)
+			return
+		}
+		if apierrors.IsNotFound(err) {
+			// Pod deleted on apiserver; drop tracking so reconciler stops retrying.
+			p.mu.Lock()
+			delete(p.lifecycleIntent, key)
+			delete(p.lifecycleFlushed, key)
+			p.mu.Unlock()
+			return
+		}
+		lastErr = err
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
+			return
+		}
+	}
+	logger.Warnf(ctx, "lifecycle patch failed for %s/%s after %d attempts, will reconcile: %v",
+		namespace, name, lifecyclePatchAttempts, lastErr)
+}
+
+func (p *Provider) runLifecycleReconciler(ctx context.Context) {
+	ticker := time.NewTicker(lifecycleReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.reconcileAllLifecycle(ctx)
+		}
+	}
+}
+
+func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
+	type lcDrift struct {
+		ns, name string
+		status   meta.LifecycleStatus
+	}
+
+	p.mu.RLock()
+	drifts := make([]lcDrift, 0, len(p.lifecycleIntent))
+	for key, intent := range p.lifecycleIntent {
+		if p.lifecycleFlushed[key] == intent.Snapshot() {
+			continue
+		}
+		ns, name := splitPodKey(key)
+		drifts = append(drifts, lcDrift{ns: ns, name: name, status: intent})
+	}
+	p.mu.RUnlock()
+
+	for _, d := range drifts {
+		p.flushLifecycle(ctx, d.ns, d.name, d.status)
+	}
+}
+
+// seedLifecycleIntentFromPod restores intent from the pod's annotations on startup so post-restart gen-stamps still echo.
+func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
+	if meta.ReadLifecycleState(pod) == "" {
+		return
+	}
+	status := meta.ReadLifecycleStatus(pod)
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	p.lifecycleIntent[key] = status
+	p.lifecycleFlushed[key] = status.Snapshot()
+	p.mu.Unlock()
+}
+
+// republishLifecycleOnGenerationBump re-marks current state on a bare gen-stamp UpdatePod; otherwise observed-generation freezes.
+func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *corev1.Pod) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	cur, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+		return
+	}
+	p.markLifecycleState(ctx, pod, cur.State, cur.Message)
+}
+
+func (p *Provider) recordLifecycleFlushed(key, snap string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Skip if the pod was forgotten or the intent advanced past this snapshot.
+	cur, ok := p.lifecycleIntent[key]
+	if !ok || cur.Snapshot() != snap {
+		return
+	}
+	p.lifecycleFlushed[key] = snap
+}

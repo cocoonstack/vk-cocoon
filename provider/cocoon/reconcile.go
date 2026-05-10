@@ -90,6 +90,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		v := vms[idx]
 		p.trackPod(pod, &v)
+		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
 		p.startProbeIfEnabled(pod)
 	}
@@ -124,6 +125,7 @@ func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod)
 		logger.Errorf(ctx, err, "clear stale hibernate annotations %s/%s", pod.Namespace, pod.Name)
 	}
 	p.trackPod(pod, nil)
+	p.seedLifecycleIntentFromPod(pod)
 }
 
 // adoptByVMName re-adopts a live VM whose matching pod has no VMID
@@ -146,6 +148,7 @@ func (p *Provider) adoptByVMName(
 		v.Name, pod.Namespace, pod.Name)
 	p.applyRuntime(ctx, pod, &v)
 	p.trackPod(pod, &v)
+	p.seedLifecycleIntentFromPod(pod)
 	p.startProbeIfEnabled(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return &v
@@ -158,6 +161,7 @@ func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	p.trackPod(pod, nil)
+	p.seedLifecycleIntentFromPod(pod)
 	log.WithFunc("Provider.StartupReconcile").
 		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
