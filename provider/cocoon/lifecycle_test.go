@@ -316,6 +316,53 @@ func TestRecordLifecycleFlushedSkipsAdvancedIntent(t *testing.T) {
 	}
 }
 
+func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
+	t.Parallel()
+
+	// Intent advances mid-retry; flushLifecycle must not patch the stale snapshot.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	key := meta.PodKey("ns", "demo-0")
+	advanced := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 5}
+	p.lifecycleIntent[key] = advanced
+
+	patches := 0
+	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return false, nil, nil
+	})
+	stale := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 4}
+	p.flushLifecycle(t.Context(), "ns", "demo-0", stale)
+	if patches != 0 {
+		t.Errorf("flushLifecycle must skip stale snapshot, got %d patches", patches)
+	}
+}
+
+func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
+	t.Parallel()
+
+	// Pod deletion → patch returns NotFound → drop intent so reconciler stops retrying.
+	cs := fake.NewSimpleClientset()
+	p := newTestProvider(t)
+	p.Clientset = cs
+	key := meta.PodKey("ns", "demo-0")
+	status := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.lifecycleIntent[key] = status
+	p.recordLifecycleFlushed(key, status.Snapshot())
+
+	p.flushLifecycle(t.Context(), "ns", "demo-0", status)
+
+	p.mu.RLock()
+	_, intentStill := p.lifecycleIntent[key]
+	_, flushedStill := p.lifecycleFlushed[key]
+	p.mu.RUnlock()
+	if intentStill || flushedStill {
+		t.Errorf("NotFound must drop tracking, intent=%v flushed=%v", intentStill, flushedStill)
+	}
+}
+
 func TestForgetPodDropsLifecycleState(t *testing.T) {
 	t.Parallel()
 

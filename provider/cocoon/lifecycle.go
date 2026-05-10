@@ -6,6 +6,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -53,11 +54,28 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
 	logger := log.WithFunc("Provider.flushLifecycle")
 	annos := status.Annotations()
+	key := meta.PodKey(namespace, name)
+	snap := status.Snapshot()
 	var lastErr error
 	for range lifecyclePatchAttempts {
+		// Skip if intent advanced or pod was forgotten — a newer flush owns the write.
+		p.mu.RLock()
+		cur, ok := p.lifecycleIntent[key]
+		p.mu.RUnlock()
+		if !ok || cur.Snapshot() != snap {
+			return
+		}
 		err := p.patchPodAnnotations(ctx, namespace, name, annos)
 		if err == nil {
-			p.recordLifecycleFlushed(meta.PodKey(namespace, name), status.Snapshot())
+			p.recordLifecycleFlushed(key, snap)
+			return
+		}
+		if apierrors.IsNotFound(err) {
+			// Pod deleted on apiserver; drop tracking so reconciler stops retrying.
+			p.mu.Lock()
+			delete(p.lifecycleIntent, key)
+			delete(p.lifecycleFlushed, key)
+			p.mu.Unlock()
 			return
 		}
 		lastErr = err
