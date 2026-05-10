@@ -64,10 +64,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // so the operator does not observe Hibernated while the VM is still running.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
-		return fmt.Errorf("snapshot save %s: %w", v.Name, err)
+		err = fmt.Errorf("snapshot save %s: %w", v.Name, err)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		return err
 	}
 	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
@@ -75,7 +78,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		pushStart := time.Now()
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-			return fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
+			err = fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
+			p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+			return err
 		}
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
@@ -87,7 +92,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
-		return fmt.Errorf("remove vm %s: %w", v.ID, err)
+		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		return err
 	}
 	// Best-effort: VM is already removed, so retrying the whole hibernate
 	// on patch failure would hit "VM not found". Log and continue.
@@ -96,6 +103,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
 	return nil
 }
 
@@ -105,14 +113,19 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if spec.VMName == "" {
 		return nil
 	}
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 	if p.Puller == nil {
-		return fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
+		err := fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		return err
 	}
 	importName := spec.VMName + hibernateImportSuffix
 	pullStart := time.Now()
 	if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
 		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-		return fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
+		err = fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		return err
 	}
 	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
 	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
@@ -126,12 +139,12 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		OnDemand:   useOnDemandClone(spec),
 	})
 	if err != nil {
-		return fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
+		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		return err
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.applyRuntime(ctx, pod, v)
-	// sourceImage is "" — wake has no snapshot-source metadata, so the
-	// cloudimg vs OCI dispatch falls back to the on-disk overlay probe.
 	p.goBackground(func() {
 		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
 	})

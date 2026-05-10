@@ -33,6 +33,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
 
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
+
 	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
 		p.applyRuntime(ctx, pod, existing)
@@ -40,6 +42,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.startProbeIfEnabled(pod)
 		p.refreshStatus(ctx, pod)
 		p.notify(pod)
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 		metrics.PodLifecycleTotal.WithLabelValues("create", "adopted").Inc()
 		return nil
 	}
@@ -47,6 +50,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		metrics.PodLifecycleTotal.WithLabelValues("create", "failed").Inc()
 		return err
 	}
@@ -60,16 +64,14 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	p.applyRuntime(ctx, pod, v)
-	// Both async setups run AFTER applyRuntime so the runtime annotations
-	// land first and so the goroutines never race with applyRuntime's
-	// pod.Annotations write. SAC and the post-clone agent path can each
-	// take tens of seconds and CreatePod must return promptly.
+	// Capture isClonedBoot before goroutines mutate pod.Annotations.
+	cloned := isClonedBoot(pod, spec)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {
 			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 		})
 	}
-	if isClonedBoot(pod, spec) {
+	if cloned {
 		p.goBackground(func() {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
 		})
@@ -84,6 +86,10 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
+	if !cloned {
+		// Cloned boots stay `creating` until runPostCloneSetup finishes.
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
 	return nil
 }

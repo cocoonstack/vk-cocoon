@@ -1,0 +1,114 @@
+package cocoon
+
+import (
+	"context"
+	"time"
+
+	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
+
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/meta"
+)
+
+const (
+	lifecyclePatchAttempts     = 3
+	lifecyclePatchInterval     = 500 * time.Millisecond
+	lifecycleReconcileInterval = 15 * time.Second
+)
+
+// StartLifecycleReconciler runs the annotation re-flush loop; NotifyPods only pushes pod.Status.
+func (p *Provider) StartLifecycleReconciler() {
+	p.goBackground(func() {
+		p.runLifecycleReconciler(p.lifecycleCtx)
+	})
+}
+
+func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
+	status := meta.LifecycleStatus{
+		State:              state,
+		ObservedGeneration: meta.ReadCocoonSetGeneration(pod),
+		Message:            message,
+	}
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	// Reject stale writes from late goroutines that captured an older pod.
+	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
+		p.mu.Unlock()
+		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
+			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
+			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
+			cur.State, cur.ObservedGeneration)
+		return
+	}
+	p.lifecycleIntent[key] = status
+	status.Apply(pod)
+	p.mu.Unlock()
+
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+}
+
+func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
+	logger := log.WithFunc("Provider.flushLifecycle")
+	annos := status.Annotations()
+	var lastErr error
+	for range lifecyclePatchAttempts {
+		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		if err == nil {
+			p.recordLifecycleFlushed(meta.PodKey(namespace, name), status.Snapshot())
+			return
+		}
+		lastErr = err
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
+			return
+		}
+	}
+	logger.Warnf(ctx, "lifecycle patch failed for %s/%s after %d attempts, will reconcile: %v",
+		namespace, name, lifecyclePatchAttempts, lastErr)
+}
+
+func (p *Provider) runLifecycleReconciler(ctx context.Context) {
+	ticker := time.NewTicker(lifecycleReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.reconcileAllLifecycle(ctx)
+		}
+	}
+}
+
+func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
+	type lcDrift struct {
+		ns, name string
+		status   meta.LifecycleStatus
+	}
+
+	p.mu.RLock()
+	drifts := make([]lcDrift, 0, len(p.lifecycleIntent))
+	for key, intent := range p.lifecycleIntent {
+		if p.lifecycleFlushed[key] == intent.Snapshot() {
+			continue
+		}
+		ns, name := splitPodKey(key)
+		drifts = append(drifts, lcDrift{ns: ns, name: name, status: intent})
+	}
+	p.mu.RUnlock()
+
+	for _, d := range drifts {
+		p.flushLifecycle(ctx, d.ns, d.name, d.status)
+	}
+}
+
+func (p *Provider) recordLifecycleFlushed(key, snap string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Skip if the pod was forgotten or the intent advanced past this snapshot.
+	cur, ok := p.lifecycleIntent[key]
+	if !ok || cur.Snapshot() != snap {
+		return
+	}
+	p.lifecycleFlushed[key] = snap
+}

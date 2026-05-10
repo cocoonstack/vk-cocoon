@@ -107,6 +107,9 @@ type Provider struct {
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
 	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
 	notifyHook     func(*corev1.Pod)
+	// Source of truth for lifecycle annotations (decoupled from p.pods).
+	lifecycleIntent  map[string]meta.LifecycleStatus
+	lifecycleFlushed map[string]string
 
 	// Recheck tunables. Zero values fall back to the defaultXxx
 	// constants, so production code never sets them; tests shrink them
@@ -122,16 +125,18 @@ type Provider struct {
 func NewProvider() *Provider {
 	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
 	return &Provider{
-		startTime:      time.Now(),
-		lifecycleCtx:   lifecycleCtx,
-		lifecycleStop:  lifecycleStop,
-		OrphanPolicy:   provider.OrphanAlert,
-		Pinger:         network.NopPinger{},
-		pods:           map[string]*corev1.Pod{},
-		vmsByPod:       map[string]*vm.VM{},
-		vmsByName:      map[string]*vm.VM{},
-		lastRestart:    map[string]time.Time{},
-		pendingRecheck: map[string]struct{}{},
+		startTime:        time.Now(),
+		lifecycleCtx:     lifecycleCtx,
+		lifecycleStop:    lifecycleStop,
+		OrphanPolicy:     provider.OrphanAlert,
+		Pinger:           network.NopPinger{},
+		pods:             map[string]*corev1.Pod{},
+		vmsByPod:         map[string]*vm.VM{},
+		vmsByName:        map[string]*vm.VM{},
+		lastRestart:      map[string]time.Time{},
+		pendingRecheck:   map[string]struct{}{},
+		lifecycleIntent:  map[string]meta.LifecycleStatus{},
+		lifecycleFlushed: map[string]string{},
 	}
 }
 
@@ -276,6 +281,8 @@ func (p *Provider) forgetPod(namespace, name string) {
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
+	delete(p.lifecycleIntent, key)
+	delete(p.lifecycleFlushed, key)
 	p.mu.Unlock()
 	if p.Probes != nil {
 		p.Probes.Forget(key)
@@ -640,6 +647,8 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
+	delete(p.lifecycleIntent, key)
+	delete(p.lifecycleFlushed, key)
 	p.mu.Unlock()
 
 	if p.Probes != nil {

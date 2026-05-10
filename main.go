@@ -118,6 +118,7 @@ func main() {
 	}
 
 	p.StartVMWatcher(signalCtx)
+	p.StartLifecycleReconciler()
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {

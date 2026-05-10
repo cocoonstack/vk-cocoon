@@ -1,0 +1,261 @@
+package cocoon
+
+import (
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/cocoonstack/cocoon-common/meta"
+)
+
+func TestMarkLifecycleStateWritesAtomicTriple(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateHibernating, "")
+
+	updated, err := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "hibernating" {
+		t.Errorf("state = %q, want hibernating", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "5" {
+		t.Errorf("observed-generation = %q, want 5", got)
+	}
+	if _, ok := updated.Annotations[meta.AnnotationLifecycleStateMessage]; ok {
+		t.Errorf("message must be unset for non-failed state, got %q",
+			updated.Annotations[meta.AnnotationLifecycleStateMessage])
+	}
+}
+
+func TestMarkLifecycleStateClearsMessageOnTerminalSuccess(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{
+			meta.AnnotationLifecycleStateMessage: "stale failure reason",
+		},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if msg, ok := updated.Annotations[meta.AnnotationLifecycleStateMessage]; ok {
+		t.Errorf("ready state must clear stale message, got %q", msg)
+	}
+}
+
+func TestMarkLifecycleStateRecordsMessageOnFailed(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateFailed, "boot exploded")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "failed" {
+		t.Errorf("state = %q", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleStateMessage]; got != "boot exploded" {
+		t.Errorf("message = %q", got)
+	}
+}
+
+func TestReconcileSkipsPodWithoutLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	patches := 0
+	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return false, nil, nil
+	})
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, nil)
+
+	p.reconcileAllLifecycle(t.Context())
+
+	if patches != 0 {
+		t.Errorf("reconcile must not patch pods without lifecycle annotation, patches=%d", patches)
+	}
+}
+
+func TestReconcileSkipsWhenNoDrift(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, nil)
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	patches := 0
+	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return false, nil, nil
+	})
+	p.reconcileAllLifecycle(t.Context())
+	if patches != 0 {
+		t.Errorf("reconcile should no-op when in-memory == flushed, got %d patches", patches)
+	}
+}
+
+func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	key := meta.PodKey("ns", "demo-0")
+	intent := meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 4}
+	p.lifecycleIntent[key] = intent
+	stale := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 3}
+	p.recordLifecycleFlushed(key, stale.Snapshot())
+
+	p.reconcileAllLifecycle(t.Context())
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "hibernated" {
+		t.Errorf("apiserver state after reconcile = %q, want hibernated", got)
+	}
+	if got := p.lifecycleFlushed[key]; got != intent.Snapshot() {
+		t.Errorf("flushed snapshot after reconcile = %q, want %q", got, intent.Snapshot())
+	}
+}
+
+func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
+	t.Parallel()
+
+	stalePod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{
+			meta.AnnotationLifecycleState:              "ready",
+			meta.AnnotationLifecycleObservedGeneration: "3",
+		},
+	}}
+	cs := fake.NewSimpleClientset(stalePod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(stalePod, nil)
+
+	key := meta.PodKey("ns", "demo-0")
+	intent := meta.LifecycleStatus{State: meta.LifecycleStateHibernating, ObservedGeneration: 4}
+	p.lifecycleIntent[key] = intent
+
+	p.reconcileAllLifecycle(t.Context())
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "hibernating" {
+		t.Errorf("reconcile must publish intent (hibernating) not stale pod annotation, got %q", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "4" {
+		t.Errorf("reconcile must publish intent obs-gen=4, got %q", got)
+	}
+}
+
+func TestMarkLifecycleStateRejectsStaleObservedGeneration(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	newPod := pod.DeepCopy()
+	newPod.Annotations = map[string]string{meta.AnnotationCocoonSetGeneration: "5"}
+	p.markLifecycleState(t.Context(), newPod, meta.LifecycleStateHibernating, "")
+
+	stalePod := pod.DeepCopy()
+	stalePod.Annotations = map[string]string{meta.AnnotationCocoonSetGeneration: "4"}
+	p.markLifecycleState(t.Context(), stalePod, meta.LifecycleStateReady, "")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	got := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if got.State != meta.LifecycleStateHibernating || got.ObservedGeneration != 5 {
+		t.Errorf("intent must keep newer hibernating/5, got %s/%d", got.State, got.ObservedGeneration)
+	}
+}
+
+func TestRecordLifecycleFlushedSkipsForgottenPod(t *testing.T) {
+	t.Parallel()
+
+	p := newTestProvider(t)
+	key := meta.PodKey("ns", "demo-0")
+	p.recordLifecycleFlushed(key, "stale-snapshot")
+
+	p.mu.RLock()
+	_, present := p.lifecycleFlushed[key]
+	p.mu.RUnlock()
+	if present {
+		t.Errorf("recordLifecycleFlushed must not resurrect entries for forgotten pods")
+	}
+}
+
+func TestRecordLifecycleFlushedSkipsAdvancedIntent(t *testing.T) {
+	t.Parallel()
+
+	p := newTestProvider(t)
+	key := meta.PodKey("ns", "demo-0")
+	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 5}
+
+	older := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 4}
+	p.recordLifecycleFlushed(key, older.Snapshot())
+
+	p.mu.RLock()
+	got := p.lifecycleFlushed[key]
+	p.mu.RUnlock()
+	if got != "" {
+		t.Errorf("flushed snapshot must not be set when intent advanced, got %q", got)
+	}
+}
+
+func TestForgetPodDropsLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	p := newTestProvider(t)
+	key := meta.PodKey("ns", "demo-0")
+	status := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.lifecycleIntent[key] = status
+	p.recordLifecycleFlushed(key, status.Snapshot())
+
+	p.forgetPod("ns", "demo-0")
+
+	p.mu.RLock()
+	flushed := p.lifecycleFlushed[key]
+	_, intentStill := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if flushed != "" {
+		t.Errorf("forgetPod must drop flushed entry, got %q", flushed)
+	}
+	if intentStill {
+		t.Errorf("forgetPod must drop intent entry")
+	}
+}
