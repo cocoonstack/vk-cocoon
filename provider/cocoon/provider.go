@@ -420,6 +420,13 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		return
 	}
 
+	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
+	if meta.ReadHibernateState(affectedPod) {
+		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, skipping VM-gone handler",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
+		return
+	}
+
 	// Double-check: inspect the VM via cocoon CLI with a short inline retry.
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {

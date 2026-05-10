@@ -1153,6 +1153,27 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	meta.HibernateState(true).Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0"})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0"})
+
+	if rt.inspectN != 0 {
+		t.Errorf("inspect must not be called for hibernating pod, got %d calls", rt.inspectN)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil {
+		t.Errorf("hibernating pod's VM tracking must be preserved")
+	}
+}
+
 func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 	// First inspect fails transiently, second returns a running VM.
 	// Pod must not be evicted; no deferred recheck needed.
