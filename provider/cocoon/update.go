@@ -51,6 +51,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	default:
 		// No lifecycle transition; skip the refresh+notify round trip so we
 		// don't echo the incoming pod back to the apiserver.
+		p.republishLifecycleOnGenerationBump(ctx, pod)
 		metrics.PodLifecycleTotal.WithLabelValues("update", "noop").Inc()
 		return nil
 	}

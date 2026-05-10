@@ -25,14 +25,16 @@ func (p *Provider) StartLifecycleReconciler() {
 }
 
 func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
-	status := meta.LifecycleStatus{
-		State:              state,
-		ObservedGeneration: meta.ReadCocoonSetGeneration(pod),
-		Message:            message,
-	}
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	// Reject stale writes from late goroutines that captured an older pod.
+	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
+	gen := meta.ReadCocoonSetGeneration(pod)
+	if tracked, ok := p.pods[key]; ok {
+		if g := meta.ReadCocoonSetGeneration(tracked); g > gen {
+			gen = g
+		}
+	}
+	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
 		p.mu.Unlock()
 		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
@@ -100,6 +102,18 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	for _, d := range drifts {
 		p.flushLifecycle(ctx, d.ns, d.name, d.status)
 	}
+}
+
+// republishLifecycleOnGenerationBump re-marks current state on a bare gen-stamp UpdatePod; otherwise observed-generation freezes.
+func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *corev1.Pod) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	cur, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+		return
+	}
+	p.markLifecycleState(ctx, pod, cur.State, cur.Message)
 }
 
 func (p *Provider) recordLifecycleFlushed(key, snap string) {

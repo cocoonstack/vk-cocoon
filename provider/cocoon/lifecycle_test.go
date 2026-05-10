@@ -10,6 +10,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 func TestMarkLifecycleStateWritesAtomicTriple(t *testing.T) {
@@ -176,6 +177,84 @@ func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 	}
 	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "4" {
 		t.Errorf("reconcile must publish intent obs-gen=4, got %q", got)
+	}
+}
+
+func TestMarkLifecycleStateUsesLatestTrackedGen(t *testing.T) {
+	t.Parallel()
+
+	// Async paths close over a stale pod pointer; tracked pod's gen is fresher.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, nil)
+
+	stale := pod.DeepCopy()
+	stale.Annotations[meta.AnnotationCocoonSetGeneration] = "3"
+	p.markLifecycleState(t.Context(), stale, meta.LifecycleStateReady, "")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	got := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if got.ObservedGeneration != 5 {
+		t.Errorf("intent gen = %d, want 5 (tracked pod's gen)", got.ObservedGeneration)
+	}
+}
+
+func TestUpdatePodNoopRepublishesOnGenerationBump(t *testing.T) {
+	t.Parallel()
+
+	// Bare gen-stamp UpdatePod must echo new gen into observed-generation.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
+	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "1"
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo"})
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	bumped := pod.DeepCopy()
+	bumped.Annotations[meta.AnnotationCocoonSetGeneration] = "2"
+	if err := p.UpdatePod(t.Context(), bumped); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
+	}
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "2" {
+		t.Errorf("observed-generation = %q, want 2", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "ready" {
+		t.Errorf("state = %q, want ready (must not change)", got)
+	}
+}
+
+func TestUpdatePodNoopSkipsRepublishWhenGenUnchanged(t *testing.T) {
+	t.Parallel()
+
+	// Same gen must not patch — would echo into operator's reconcile loop.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
+	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "1"
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo"})
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	patches := 0
+	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return false, nil, nil
+	})
+	if err := p.UpdatePod(t.Context(), pod.DeepCopy()); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
+	}
+	if patches != 0 {
+		t.Errorf("noop with unchanged gen must not patch, got %d patches", patches)
 	}
 }
 
