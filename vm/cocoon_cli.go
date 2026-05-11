@@ -148,11 +148,8 @@ func (c *CocoonCLI) ImageImport(ctx context.Context, opts ImageImportOptions) (i
 	return stdin, wait, nil
 }
 
-// Inspect runs `cocoon vm inspect`.
-//
-// A cocoon reply of "not found" is translated to ErrVMNotFound so callers can
-// tell a gone VM apart from a transient CLI failure; any other error is
-// returned as-is and must be treated as inconclusive.
+// Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound.
+// Any other error is inconclusive (transient CLI failure, sudo timeout, etc.).
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
 	if err != nil {
