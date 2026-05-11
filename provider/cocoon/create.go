@@ -155,12 +155,13 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, "", nil // forkFrom has no snapshot metadata
 
 	case mode == string(cocoonv1.AgentModeRun):
-		if err := p.ensureRunImage(ctx, spec.Image, spec.ForcePull); err != nil {
+		runImage, err := p.ensureRunImage(ctx, spec.Image, spec.ForcePull)
+		if err != nil {
 			return nil, "", fmt.Errorf("ensure image %s: %w", spec.Image, err)
 		}
 		cpu, memory := vmResourceOverrides(pod)
 		v, err := p.Runtime.Run(ctx, vm.RunOptions{
-			Image:      spec.Image,
+			Image:      runImage,
 			Name:       spec.VMName,
 			CPU:        cpu,
 			Memory:     memory,
@@ -272,36 +273,43 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 		snapshot.Name, snapshot.Hypervisor, targetBackend)
 }
 
-// ensureRunImage makes spec.Image available to `cocoon vm run`. Peek the
-// manifest kind via Puller; cloud-image artifacts go through
-// Puller.EnsureCloudImage, snapshots are rejected with a "use mode=clone"
-// hint, and everything else (URLs, container images, classify failures,
-// missing Puller) falls through to Runtime.EnsureImage.
-func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) error {
+// ensureRunImage materializes the base image locally and returns the ref
+// `cocoon vm run` should be invoked with. Cloud-image artifacts pulled
+// from epoch return the canonical /dl/{repo}/{tag} URL so vmCfg.Image
+// (and any snapshot pushed back to epoch) stays portable across nodes;
+// other kinds return the input unchanged.
+func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
-		return nil
+		return image, nil
 	}
 	if p.Puller == nil || p.Puller.Registry == nil || isURLImage(image) {
-		return p.Runtime.EnsureImage(ctx, image, force)
+		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
 	repo, tag := utils.ParseRef(image)
 	raw, _, err := p.Puller.Registry.GetManifest(ctx, repo, tag)
 	if err != nil {
 		// Non-epoch ref or registry hiccup; cocoon image pull handles non-epoch refs natively.
-		return p.Runtime.EnsureImage(ctx, image, force)
+		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
 	kind, classifyErr := manifest.Classify(raw)
 	if classifyErr != nil {
-		return p.Runtime.EnsureImage(ctx, image, force)
+		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
 	switch kind {
 	case manifest.KindCloudImage:
-		return p.Puller.EnsureCloudImageFromRaw(ctx, repo, image, raw, force)
+		canonical := canonicalCloudImgURL(p.Puller.Registry.BaseURL(), repo, tag)
+		return canonical, p.Puller.EnsureCloudImageFromRaw(ctx, repo, canonical, raw, force)
 	case manifest.KindSnapshot:
-		return fmt.Errorf("image %s is a snapshot artifact; use mode=clone instead of mode=run", image)
+		return image, fmt.Errorf("image %s is a snapshot artifact; use mode=clone instead of mode=run", image)
 	default:
-		return p.Runtime.EnsureImage(ctx, image, force)
+		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
+}
+
+// canonicalCloudImgURL builds the /dl/{repo}/{tag} URL cocoon's cloudimg
+// backend can pull via plain http.Get.
+func canonicalCloudImgURL(baseURL, repo, tag string) string {
+	return fmt.Sprintf("%s/dl/%s/%s", strings.TrimRight(baseURL, "/"), repo, tag)
 }
 
 // isURLImage reports whether ref looks like an HTTP(S) cloud-image URL.
