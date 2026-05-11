@@ -166,7 +166,9 @@ func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
 
-// handleOrphan applies OrphanPolicy to an unmatched VM.
+// handleOrphan applies OrphanPolicy to an unmatched VM. Non-destroy
+// policies index the VM by name so a recreated pod adopts it instead
+// of cloning into a name collision.
 func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 	logger := log.WithFunc("Provider.handleOrphan")
 	switch p.OrphanPolicy {
@@ -176,10 +178,22 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 			logger.Errorf(ctx, err, "remove orphan VM %s", v.ID)
 		}
 	case provider.OrphanKeep:
-		// no-op
+		p.indexOrphanByName(v)
 	default: // provider.OrphanAlert
 		metrics.OrphanVMTotal.Inc()
 		logger.Warnf(ctx, "orphan VM detected: name=%s id=%s state=%s ip=%s — apply policy=destroy to clean up automatically",
 			v.Name, v.ID, v.State, v.IP)
+		p.indexOrphanByName(v)
 	}
+}
+
+// indexOrphanByName exposes an orphan VM to vmByName so the next
+// CreatePod for its pod takes the adopt branch.
+func (p *Provider) indexOrphanByName(v *vm.VM) {
+	if v == nil || v.Name == "" {
+		return
+	}
+	p.mu.Lock()
+	p.vmsByName[v.Name] = v
+	p.mu.Unlock()
 }

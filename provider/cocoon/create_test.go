@@ -1043,6 +1043,49 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
+	// R12 regression: pod force-deleted during vk-cocoon restart leaves
+	// the VM live with no pod; the recreated pod must adopt the orphan.
+	rt := &fakeRuntime{
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset() // no pods — the force-deleted state
+	// Default OrphanAlert: keep the VM, just warn.
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+		t.Fatalf("orphan VM must be indexed by name so CreatePod can adopt it, got %#v", got)
+	}
+	if rt.removedID != "" {
+		t.Errorf("OrphanAlert must not remove the VM, removedID=%q", rt.removedID)
+	}
+}
+
+func TestStartupReconcileOrphanKeepIndexesByName(t *testing.T) {
+	rt := &fakeRuntime{
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+	p.OrphanPolicy = provider.OrphanKeep
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+		t.Fatalf("OrphanKeep must index by name, got %#v", got)
+	}
+}
+
 func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	// Simulate the post-crash state: CreatePod succeeded but the runtime
 	// annotation patch failed, so the pod has no VMID yet the VM is live.
