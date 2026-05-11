@@ -919,9 +919,8 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("registryclient.New: %v", err)
 			}
-			// Cloudimg path now imports under the canonical /dl/{repo}/{tag}
-			// URL — keep the short-circuit hitting by keying the fake runtime's
-			// Image lookup on the same URL form.
+			// Cloudimg path imports under the canonical /dl URL, so the
+			// fake runtime's Image lookup must key on the same form.
 			wantURL := canonicalCloudImgURL(srv.URL, repo, "latest")
 			rt := &fakeRuntime{}
 			if tc.imagesPresent {
@@ -950,14 +949,13 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 				if len(rt.ensuredImages) != 0 {
 					t.Fatalf("Puller path should not shell EnsureImage, got %v", rt.ensuredImages)
 				}
-				// Cloudimg path returns the canonical /dl/{repo}/{tag} URL so
-				// vmCfg.Image (and any future SnapshotConfig pushed back to
-				// epoch) is a portable http(s) URL — fixes issue 38.
+				// Cloudimg path returns the canonical URL so vmCfg.Image
+				// stays portable across nodes.
 				if got != wantURL {
-					t.Fatalf("ensureRunImage returned %q, want %q (issue 38: cloudimg ref must canonicalize to URL form)", got, wantURL)
+					t.Fatalf("ensureRunImage returned %q, want %q", got, wantURL)
 				}
-				// The import name keyed into cocoon must match the returned
-				// URL so the subsequent `cocoon vm run` can find the blob.
+				// Import name must match the returned URL so the subsequent
+				// `cocoon vm run` finds the blob.
 				if len(rt.imageInspectCalls) == 0 || rt.imageInspectCalls[0] != wantURL {
 					t.Fatalf("Puller imported under %v, want first inspect on %q", rt.imageInspectCalls, wantURL)
 				}

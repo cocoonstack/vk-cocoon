@@ -274,13 +274,10 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 }
 
 // ensureRunImage materializes the base image locally and returns the ref
-// `cocoon vm run` should be invoked with. For most kinds the returned ref
-// equals the input. For cloud-image artifacts pulled from epoch the
-// returned ref is the canonical /dl/{repo}/{tag} URL — keyed as the local
-// cloudimg name so cocoon's vmCfg.Image (and any future SnapshotConfig
-// pushed back to epoch) becomes a URL another node can resolve via plain
-// http.Get on clone. Issue 38 traces back to a bare OCI ref leaking into
-// vmCfg.Image; using the URL form here is the upstream fix.
+// `cocoon vm run` should be invoked with. Cloud-image artifacts pulled
+// from epoch return the canonical /dl/{repo}/{tag} URL so vmCfg.Image
+// (and any snapshot pushed back to epoch) stays portable across nodes;
+// other kinds return the input unchanged.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
@@ -309,10 +306,8 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	}
 }
 
-// canonicalCloudImgURL composes the /dl/{repo}/{tag} URL form that cocoon's
-// cloudimg backend can pull via plain http.Get. Used as both the local
-// image name (so vmCfg.Image is portable across nodes) and the on-wire
-// fetch URL when a clone happens on a fresh node.
+// canonicalCloudImgURL builds the /dl/{repo}/{tag} URL cocoon's cloudimg
+// backend can pull via plain http.Get.
 func canonicalCloudImgURL(baseURL, repo, tag string) string {
 	return fmt.Sprintf("%s/dl/%s/%s", strings.TrimRight(baseURL, "/"), repo, tag)
 }
