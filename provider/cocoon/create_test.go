@@ -845,8 +845,12 @@ func TestEnsureRunImageFallback(t *testing.T) {
 			rt := &fakeRuntime{}
 			p := newTestProvider(t)
 			p.Runtime = rt
-			if err := p.ensureRunImage(t.Context(), tc.image, false); err != nil {
+			got, err := p.ensureRunImage(t.Context(), tc.image, false)
+			if err != nil {
 				t.Fatalf("ensureRunImage: %v", err)
+			}
+			if got != tc.image {
+				t.Fatalf("ensureRunImage returned %q, want %q (input unchanged on fallback paths)", got, tc.image)
 			}
 			if tc.wantArg == "" {
 				if len(rt.ensuredImages) != 0 {
@@ -915,15 +919,19 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("registryclient.New: %v", err)
 			}
+			// Cloudimg path now imports under the canonical /dl/{repo}/{tag}
+			// URL — keep the short-circuit hitting by keying the fake runtime's
+			// Image lookup on the same URL form.
+			wantURL := canonicalCloudImgURL(srv.URL, repo, "latest")
 			rt := &fakeRuntime{}
 			if tc.imagesPresent {
-				rt.imagesPresent = map[string]bool{repo: true}
+				rt.imagesPresent = map[string]bool{wantURL: true}
 			}
 			p := newTestProvider(t)
 			p.Runtime = rt
 			p.Puller = &snapshots.Puller{Registry: client, Runtime: rt}
 
-			err = p.ensureRunImage(t.Context(), repo, false)
+			got, err := p.ensureRunImage(t.Context(), repo, false)
 			switch {
 			case tc.wantErr != "":
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -942,9 +950,23 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 				if len(rt.ensuredImages) != 0 {
 					t.Fatalf("Puller path should not shell EnsureImage, got %v", rt.ensuredImages)
 				}
+				// Cloudimg path returns the canonical /dl/{repo}/{tag} URL so
+				// vmCfg.Image (and any future SnapshotConfig pushed back to
+				// epoch) is a portable http(s) URL — fixes issue 38.
+				if got != wantURL {
+					t.Fatalf("ensureRunImage returned %q, want %q (issue 38: cloudimg ref must canonicalize to URL form)", got, wantURL)
+				}
+				// The import name keyed into cocoon must match the returned
+				// URL so the subsequent `cocoon vm run` can find the blob.
+				if len(rt.imageInspectCalls) == 0 || rt.imageInspectCalls[0] != wantURL {
+					t.Fatalf("Puller imported under %v, want first inspect on %q", rt.imageInspectCalls, wantURL)
+				}
 			default: // fallthrough to Runtime.EnsureImage
 				if err != nil {
 					t.Fatalf("ensureRunImage: %v", err)
+				}
+				if got != repo {
+					t.Fatalf("ensureRunImage returned %q, want %q (fallback returns input unchanged)", got, repo)
 				}
 				if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != tc.wantEnsureArg {
 					t.Fatalf("EnsureImage = %v, want one call for %q", rt.ensuredImages, tc.wantEnsureArg)
