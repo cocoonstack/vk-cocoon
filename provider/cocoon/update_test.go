@@ -166,7 +166,7 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	}
 }
 
-func TestResolveWakeSourceFallsBackToPullerNameWhenLocalMissing(t *testing.T) {
+func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
