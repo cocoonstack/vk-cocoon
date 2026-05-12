@@ -1,6 +1,7 @@
 package cocoon
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -114,6 +115,32 @@ func TestHibernateContinuesOnNICDropUnsupported(t *testing.T) {
 	}
 	if rt.savedSnapshot.vmID != "vmid-2" {
 		t.Errorf("snapshot save must still run after degraded NetResize, got %q", rt.savedSnapshot.vmID)
+	}
+}
+
+func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{"vk-ns-demo-0": {Name: "vk-ns-demo-0"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	got, err := p.resolveWakeSource(context.Background(), "vk-ns-demo-0")
+	if err != nil {
+		t.Fatalf("resolveWakeSource: %v", err)
+	}
+	if got != "vk-ns-demo-0" {
+		t.Errorf("source = %q, want vk-ns-demo-0 (local snapshot)", got)
+	}
+}
+
+func TestResolveWakeSourceFallsBackToPullerNameWhenLocalMissing(t *testing.T) {
+	// fakeRuntime.Snapshot returns "not found" when the map is empty.
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	// p.Puller stays nil — exercise the "no puller configured" branch.
+
+	if _, err := p.resolveWakeSource(context.Background(), "vk-ns-demo-0"); err == nil {
+		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
 }
 

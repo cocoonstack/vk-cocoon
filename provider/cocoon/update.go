@@ -136,24 +136,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
-	if p.Puller == nil {
-		err := fmt.Errorf("wake %s: no snapshot puller configured", spec.VMName)
+	sourceName, err := p.resolveWakeSource(ctx, spec.VMName)
+	if err != nil {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	importName := spec.VMName + hibernateImportSuffix
-	pullStart := time.Now()
-	if err := p.Puller.PullSnapshot(ctx, spec.VMName, meta.HibernateSnapshotTag, importName); err != nil {
-		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-		err = fmt.Errorf("pull hibernation snapshot %s: %w", spec.VMName, err)
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
-		return err
-	}
-	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
-	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	opts := vm.CloneOptions{
-		From:       importName,
+		From:       sourceName,
 		To:         spec.VMName,
 		Network:    spec.Network,
 		Backend:    spec.Backend,
@@ -161,13 +151,12 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		OnDemand:   true,
 	}
 	if dropNIC {
-		one := 1
-		opts.NICs = &one
+		opts.NICs = ptr(1)
 	}
 	cloneStart := time.Now()
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
-		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
+		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, sourceName, err)
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
@@ -185,6 +174,31 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil
 }
+
+// resolveWakeSource returns the local snapshot name to clone from on wake.
+// Same-node hibernate→wake hits the local snapshot left behind by hibernate's
+// SnapshotSave and skips the epoch round-trip; cross-node falls back to pull.
+func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, error) {
+	if _, err := p.Runtime.Snapshot(ctx, vmName); err == nil {
+		return vmName, nil
+	}
+	if p.Puller == nil {
+		return "", fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
+	}
+	importName := vmName + hibernateImportSuffix
+	pullStart := time.Now()
+	if err := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); err != nil {
+		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
+		return "", fmt.Errorf("pull hibernation snapshot %s: %w", vmName, err)
+	}
+	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
+	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
+	return importName, nil
+}
+
+// ptr returns a pointer to v. Used to populate optional *T fields inline
+// without spilling a one-shot variable into the surrounding scope.
+func ptr[T any](v T) *T { return &v }
 
 // shouldDropNICBeforeHibernate reports whether the hibernate path should
 // run `vm net --nics 0` before snapshot save (and the matching wake path
