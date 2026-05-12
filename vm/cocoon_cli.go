@@ -332,7 +332,7 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// String-matched on stderr — cocoon CLI has no structured error channel.
+// String-matched on combined output — cocoon CLI has no structured error channel.
 const netResizeUnsupportedMarker = "backend does not support net resize"
 
 // NetResize runs `cocoon vm net --nics N`.
