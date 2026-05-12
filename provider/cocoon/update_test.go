@@ -1,7 +1,6 @@
 package cocoon
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -123,7 +122,7 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	got, err := p.resolveWakeSource(context.Background(), "vk-ns-demo-0")
+	got, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
@@ -139,7 +138,7 @@ func TestResolveWakeSourceFallsBackToPullerNameWhenLocalMissing(t *testing.T) {
 	p.Runtime = rt
 	// p.Puller stays nil — exercise the "no puller configured" branch.
 
-	if _, err := p.resolveWakeSource(context.Background(), "vk-ns-demo-0"); err == nil {
+	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
 }

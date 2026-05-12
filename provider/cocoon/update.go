@@ -8,6 +8,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -151,7 +152,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		OnDemand:   true,
 	}
 	if dropNIC {
-		opts.NICs = ptr(1)
+		opts.NICs = ptr.To(1)
 	}
 	cloneStart := time.Now()
 	v, err := p.Runtime.Clone(ctx, opts)
@@ -195,10 +196,6 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 	return importName, nil
 }
-
-// ptr returns a pointer to v. Used to populate optional *T fields inline
-// without spilling a one-shot variable into the surrounding scope.
-func ptr[T any](v T) *T { return &v }
 
 // shouldDropNICBeforeHibernate reports whether the hibernate path should
 // run `vm net --nics 0` before snapshot save (and the matching wake path
