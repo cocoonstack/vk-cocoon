@@ -117,6 +117,27 @@ func TestHibernateContinuesOnNICDropUnsupported(t *testing.T) {
 	}
 }
 
+func TestHibernateContinuesOnNICDropGenericErr(t *testing.T) {
+	rt := &fakeRuntime{netResizeErr: errors.New("transient")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	v := &vm.VM{ID: "vmid-3", Name: "vk-ns-demo-0"}
+
+	if err := p.hibernate(t.Context(), pod, v); err != nil {
+		t.Fatalf("hibernate must not fail on transient NetResize error, got %v", err)
+	}
+	if rt.savedSnapshot.vmID != "vmid-3" {
+		t.Errorf("snapshot save must still run after warn-degraded NetResize, got %q", rt.savedSnapshot.vmID)
+	}
+}
+
 func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{"vk-ns-demo-0": {Name: "vk-ns-demo-0"}}}
 	p := newTestProvider(t)
@@ -140,26 +161,5 @@ func TestResolveWakeSourceFallsBackToPullerNameWhenLocalMissing(t *testing.T) {
 
 	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
-	}
-}
-
-func TestHibernateContinuesOnNICDropGenericErr(t *testing.T) {
-	rt := &fakeRuntime{netResizeErr: errors.New("transient")}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSWindows),
-	})
-	v := &vm.VM{ID: "vmid-3", Name: "vk-ns-demo-0"}
-
-	if err := p.hibernate(t.Context(), pod, v); err != nil {
-		t.Fatalf("hibernate must not fail on transient NetResize error, got %v", err)
-	}
-	if rt.savedSnapshot.vmID != "vmid-3" {
-		t.Errorf("snapshot save must still run after warn-degraded NetResize, got %q", rt.savedSnapshot.vmID)
 	}
 }
