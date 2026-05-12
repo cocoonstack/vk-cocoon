@@ -35,7 +35,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
-	// Adopt an existing local VM rather than creating a new one.
 	if existing := p.vmByName(spec.VMName); existing != nil {
 		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
@@ -56,7 +55,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues(spec.Mode, spec.Backend).Observe(time.Since(bootStart).Seconds())
 
-	// Resolve IP from cocoon-net lease before returning.
 	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
 		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
 			v.IP = lease.IP
@@ -77,8 +75,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		})
 	}
 	p.trackPod(pod, v)
-	// Start runs its first probe synchronously so refreshStatus below
-	// already reflects the initial reachability.
+	// First probe is synchronous so refreshStatus below sees its result.
 	p.startProbeIfEnabled(pod)
 
 	pod.Status.Phase = corev1.PodRunning
@@ -94,9 +91,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// bringUpVM dispatches on mode: unmanaged (adopt), clone, run, or fork.
-// The returned sourceImage is the snapshot's original image (cloudimg URL
-// or OCI ref) when available, used by post-clone classification.
+// bringUpVM dispatches on mode: unmanaged, clone, run, or fork. The
+// returned sourceImage feeds post-clone classification.
 func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, string, error) {
 	if !spec.Managed {
 		runtime := meta.ParseVMRuntime(pod)
@@ -175,9 +171,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
 		}
-		// A fresh main VM must invalidate any fork snapshot cached from a
-		// previous incarnation (e.g. VM kill + recreate, operator recreate),
-		// so sub-agents that scale later clone from current state.
+		// Invalidate fork snapshot from a previous incarnation so later
+		// sub-agents clone from current state.
 		forkName := forkSnapshotName(spec.VMName)
 		if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
 			log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
@@ -237,10 +232,8 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 	return raw, nil
 }
 
-// isClonedBoot reports whether bringUpVM took a clone path. CocoonSet
-// sub-agents inherit mode=run from the parent spec but fork-clone from
-// the main VM, so spec.Mode alone is insufficient — fromDir / ForkFrom
-// must override.
+// isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
+// is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
 	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
 		return true
@@ -266,10 +259,8 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 }
 
 // ensureRunImage materializes the base image locally and returns the ref
-// `cocoon vm run` should be invoked with. Cloud-image artifacts pulled
-// from epoch return the canonical /dl/{repo}/{tag} URL so vmCfg.Image
-// (and any snapshot pushed back to epoch) stays portable across nodes;
-// other kinds return the input unchanged.
+// `cocoon vm run` should be invoked with. Cloud-image refs canonicalize to
+// the /dl/{repo}/{tag} URL so vmCfg.Image is portable across nodes.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
@@ -310,8 +301,7 @@ func isURLImage(ref string) bool {
 }
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.
-// The local snapshot name includes the tag so that different tags of the
-// same repo are stored separately (e.g. "myvm:v1" and "myvm:v2").
+// Local name includes the tag so myvm:v1 and myvm:v2 stay separate.
 func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) (*vm.Snapshot, error) {
 	if repo == "" {
 		return nil, nil
@@ -335,13 +325,9 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	return snapshot, nil
 }
 
-// ensureForkSnapshot returns the fork snapshot name for a source VM,
-// creating it if missing and reusing it otherwise. Reuse matters because
-// `snapshot save` pauses the source VM, dumps guest memory, and costs
-// ~2s for a 1GiB Linux guest — paying that on every sub-agent creation
-// multiplied the hot-scale path by 4–5×. Sub-agents of a CocoonSet are
-// identical replicas, so the first checkpoint is the one that matters;
-// to refresh the fork state, scale the set to zero and back up.
+// ensureForkSnapshot returns the fork snapshot for a source VM, creating
+// once and reusing thereafter; `snapshot save` pauses the VM and costs
+// ~2s/GiB, which would multiply hot-scale by 4-5× if paid per sub-agent.
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
@@ -363,7 +349,6 @@ func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) 
 	return snapshotName, nil
 }
 
-// vmByName looks up a VM by name.
 func (p *Provider) vmByName(name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -414,8 +399,7 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	pod.Status = *status
 }
 
-// localSnapshotName builds the cocoon-local snapshot name from a repo and tag.
-// The default tag is omitted for backward compatibility with existing snapshots.
+// localSnapshotName omits the default tag for backward compatibility.
 func localSnapshotName(repo, tag string) string {
 	if tag == "" || tag == meta.DefaultSnapshotTag {
 		return repo

@@ -16,15 +16,11 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// hibernateImportSuffix avoids name collision between the import target
-// and the live VM that the subsequent Clone produces.
+// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
 const hibernateImportSuffix = "-hibernate-import"
 
-// UpdatePod handles hibernate/wake transitions. Other spec changes are ignored.
-// A K8s-side pod update that does not represent a hibernate/wake toggle is a
-// no-op: refreshing status and re-notifying on every tick just feeds a loop
-// where the patched pod comes back as another UpdatePod, pinning CPU and
-// tripling the reconcile work the operator has to do.
+// UpdatePod handles hibernate/wake transitions; other spec changes are no-ops
+// to avoid echoing the patched pod back as another UpdatePod.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
@@ -37,14 +33,12 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	switch {
 	case wantHibernate && v != nil:
 		if err := p.hibernate(ctx, pod, v); err != nil {
-			// Surface the wrapped error so operators can see why the workqueue keeps retrying.
 			metrics.PodLifecycleTotal.WithLabelValues("update", "hibernate_failed").Inc()
 			logger.Errorf(ctx, err, "hibernate %s/%s", pod.Namespace, pod.Name)
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "hibernated").Inc()
 	case !wantHibernate && v == nil:
-		// Wake: recreate from the hibernation snapshot.
 		if err := p.wake(ctx, pod); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("update", "wake_failed").Inc()
 			logger.Errorf(ctx, err, "wake %s/%s", pod.Namespace, pod.Name)
@@ -52,8 +46,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "woken").Inc()
 	default:
-		// No lifecycle transition; skip the refresh+notify round trip so we
-		// don't echo the incoming pod back to the apiserver.
+		// Skip refresh+notify so we don't echo the incoming pod back.
 		p.republishLifecycleOnGenerationBump(ctx, pod)
 		metrics.PodLifecycleTotal.WithLabelValues("update", "noop").Inc()
 		return nil
@@ -63,10 +56,8 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// hibernate runs Save -> Push -> Remove; Remove failure rolls back the
-// push so the operator never sees Hibernated while the VM is still live.
-// CH+Windows drops the NIC first so the snapshot is NIC-less and wake
-// can hot-add a fresh device (bypassing MAC-swap PnP rebind).
+// hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
+// so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
@@ -104,7 +95,6 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {
-			// Roll back the hibernate tag.
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
@@ -113,9 +103,8 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	// Best-effort: VM is already removed, so retrying the whole hibernate
-	// on patch failure would hit "VM not found". Log and continue.
-	// Startup reconcile detects the stale state via VMID + hibernate annotation.
+	// VM already removed: retrying hibernate would hit "VM not found".
+	// Startup reconcile recovers via VMID + hibernate annotation.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
 	}
@@ -125,8 +114,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 }
 
 // wake restores the VM from the hibernation snapshot. CH+Windows clones
-// with --nics 1 and skips runPostCloneSetup — the inverse of drop-NIC
-// hibernate, so the fresh NIC needs no PnP rebind.
+// with --nics 1 and skips post-clone setup (NIC-less snapshot invariant).
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
@@ -168,15 +156,17 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
-	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil
 }
 
-// resolveWakeSource picks the local snapshot when present; cross-node
-// falls back to PullSnapshot. Saves the epoch round-trip on same-node wake.
+// resolveWakeSource returns the local snapshot when present, else pulls.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, error) {
-	if _, err := p.Runtime.Snapshot(ctx, vmName); err == nil {
+	_, err := p.Runtime.Snapshot(ctx, vmName)
+	if err == nil {
 		return vmName, nil
+	}
+	if !errors.Is(err, vm.ErrSnapshotNotFound) {
+		return "", fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
 	if p.Puller == nil {
 		return "", fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
@@ -192,15 +182,14 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 	return importName, nil
 }
 
-// shouldDropNICBeforeHibernate gates the drop-NIC/--nics-1 dance to
-// CH+Windows: Windows PnP rejects MAC swap on the same PCI slot, and
-// only CH implements `vm net --nics`.
+// shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same
+// PCI slot, and only CH implements `vm net --nics`.
 func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
 		spec.OS == string(cocoonv1.OSWindows)
 }
 
-// forgetVMOnly clears the VM record but keeps the pod (used by hibernate).
+// forgetVMOnly clears the VM record but keeps the pod.
 func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -248,10 +248,13 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	return nil
 }
 
-// Snapshot runs `cocoon snapshot inspect`.
+// Snapshot runs `cocoon snapshot inspect`; "snapshot not found" maps to ErrSnapshotNotFound.
 func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error) {
 	out, err := c.runJSON(ctx, "snapshot", "inspect", name)
 	if err != nil {
+		if isCocoonSnapshotNotFound(err) {
+			return nil, fmt.Errorf("cocoon snapshot inspect %s: %w", name, ErrSnapshotNotFound)
+		}
 		return nil, fmt.Errorf("cocoon snapshot inspect %s: %w", name, err)
 	}
 	return parseSnapshotJSON(out)
@@ -532,6 +535,15 @@ func isCocoonNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "vm not found") ||
 		strings.Contains(s, "no such vm")
+}
+
+func isCocoonSnapshotNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "snapshot not found") ||
+		strings.Contains(s, "no such snapshot")
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.

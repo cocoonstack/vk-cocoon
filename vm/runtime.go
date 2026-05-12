@@ -22,6 +22,9 @@ var (
 	// the idempotency probe for `cocoon image inspect`.
 	ErrImageNotFound = errors.New("image not found")
 
+	// ErrSnapshotNotFound is the sibling of ErrVMNotFound for snapshot inspect.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
+
 	// ErrNetResizeUnsupported signals the backend (firecracker) has no NetResize.
 	ErrNetResizeUnsupported = errors.New("net resize unsupported by backend")
 )
