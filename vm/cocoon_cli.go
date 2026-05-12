@@ -24,13 +24,14 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 )
 
-// cocoon CLI binary path and backend name constants.
 const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
 
 	// BackendFirecracker matches cocoonv1.BackendFirecracker. Exported so
 	// provider/cocoon can reuse it without importing CRD types.
 	BackendFirecracker = "firecracker"
+
+	netResizeUnsupportedMarker = "backend does not support net resize"
 )
 
 var _ Runtime = (*CocoonCLI)(nil)
@@ -317,10 +318,11 @@ func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) err
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(string(out), "snapshot not found") {
+	wrapped := cocoonCmdError("snapshot rm", name, err, out)
+	if isCocoonSnapshotNotFound(wrapped) {
 		return nil
 	}
-	return cocoonCmdError("snapshot rm", name, err, out)
+	return wrapped
 }
 
 // Start runs `cocoon vm start`.
@@ -332,14 +334,11 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// String-matched on combined output — cocoon CLI has no structured error channel.
-const netResizeUnsupportedMarker = "backend does not support net resize"
-
 // NetResize runs `cocoon vm net --nics N`.
 func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {
-		if strings.Contains(strings.ToLower(string(out)), netResizeUnsupportedMarker) {
+		if isNetResizeUnsupported(out) {
 			return fmt.Errorf("cocoon vm net %s: %w (output: %s)", vmID, ErrNetResizeUnsupported, strings.TrimSpace(string(out)))
 		}
 		return cocoonCmdError("vm net", vmID, err, out)
@@ -408,7 +407,7 @@ func buildCloneArgs(opts CloneOptions) []string {
 		// same CloneOptions usable for both backends.
 		args = append(args, "--on-demand")
 	}
-	if opts.NICs != nil {
+	if opts.NICs != nil && opts.Backend != BackendFirecracker {
 		args = append(args, "--nics", strconv.Itoa(*opts.NICs))
 	}
 	if opts.FromDir != "" {
@@ -544,6 +543,10 @@ func isCocoonSnapshotNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "snapshot not found") ||
 		strings.Contains(s, "no such snapshot")
+}
+
+func isNetResizeUnsupported(out []byte) bool {
+	return strings.Contains(strings.ToLower(string(out)), netResizeUnsupportedMarker)
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.

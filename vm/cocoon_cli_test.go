@@ -136,6 +136,11 @@ func TestBuildCloneArgs(t *testing.T) {
 			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", OnDemand: true, NICs: ptr.To(2)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--on-demand", "--nics", "2", "snap-a"},
 		},
+		{
+			name: "firecracker clone strips --nics",
+			opts: CloneOptions{From: "snap-a", To: "vm-n", Backend: "firecracker", NICs: ptr.To(1)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-n", "snap-a"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
