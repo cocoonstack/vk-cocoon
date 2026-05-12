@@ -339,8 +339,8 @@ const netResizeUnsupportedMarker = "backend does not support net resize"
 func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {
-		if bytes.Contains(out, []byte(netResizeUnsupportedMarker)) {
-			return ErrNetResizeUnsupported
+		if strings.Contains(strings.ToLower(string(out)), netResizeUnsupportedMarker) {
+			return fmt.Errorf("cocoon vm net %s: %w (output: %s)", vmID, ErrNetResizeUnsupported, strings.TrimSpace(string(out)))
 		}
 		return cocoonCmdError("vm net", vmID, err, out)
 	}

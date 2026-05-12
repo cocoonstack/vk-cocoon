@@ -34,6 +34,30 @@ func TestIsCocoonNotFound(t *testing.T) {
 	}
 }
 
+func TestIsCocoonSnapshotNotFound(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "snapshot not found", err: errors.New("exit status 1 (stderr: snapshot not found)"), want: true},
+		{name: "no such snapshot", err: errors.New("exit status 2 (stderr: no such snapshot)"), want: true},
+		{name: "case-insensitive Snapshot Not Found", err: errors.New("Snapshot Not Found"), want: true},
+		{name: "vm not found must not match", err: errors.New("vm not found"), want: false},
+		{name: "config not found must not match", err: errors.New("config file not found"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCocoonSnapshotNotFound(tc.err); got != tc.want {
+				t.Fatalf("isCocoonSnapshotNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildCloneArgs(t *testing.T) {
 	t.Parallel()
 
