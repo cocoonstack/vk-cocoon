@@ -329,6 +329,25 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
+// netResizeUnsupportedMarker is the stderr substring the netresize extension
+// emits when the backend cannot hot-resize NICs. Matched as a string because
+// the CLI surfaces the error through exit status + combined output rather
+// than a structured channel.
+const netResizeUnsupportedMarker = "backend does not support net resize"
+
+// NetResize runs `cocoon vm net --nics N`. Returns ErrNetResizeUnsupported
+// when the backend has no implementation (firecracker).
+func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
+	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
+	if err != nil {
+		if bytes.Contains(out, []byte(netResizeUnsupportedMarker)) {
+			return ErrNetResizeUnsupported
+		}
+		return cocoonCmdError("vm net", vmID, err, out)
+	}
+	return nil
+}
+
 // WatchEvents starts `cocoon vm status --event --format json` and streams
 // parsed VMEvent values. The channel closes when ctx is canceled or the
 // subprocess exits. On parse errors the line is silently skipped.
@@ -389,6 +408,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 		// UFFD lazy memory restore is CH-only; skipping on FC keeps the
 		// same CloneOptions usable for both backends.
 		args = append(args, "--on-demand")
+	}
+	if opts.NICs != nil {
+		args = append(args, "--nics", strconv.Itoa(*opts.NICs))
 	}
 	if opts.FromDir != "" {
 		return append(args, "--from-dir", opts.FromDir)

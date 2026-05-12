@@ -21,6 +21,10 @@ var (
 	// the image is not stored locally. Used by Puller.EnsureCloudImage as
 	// the idempotency probe for `cocoon image inspect`.
 	ErrImageNotFound = errors.New("image not found")
+
+	// ErrNetResizeUnsupported signals the backend has no `vm net --nics`
+	// implementation (firecracker). Callers degrade to warn-and-continue.
+	ErrNetResizeUnsupported = errors.New("net resize unsupported by backend")
 )
 
 // NetworkInfo holds CNI-assigned addressing for a NIC. Nil for DHCP networks.
@@ -66,8 +70,8 @@ type Snapshot struct {
 	Hypervisor  string
 }
 
-// CloneOptions is the input to Runtime.Clone. Resource fields are absent
-// because cocoon clone inherits CPU/memory/storage/NICs from the snapshot.
+// CloneOptions is the input to Runtime.Clone. CPU/memory/storage inherit
+// from the snapshot; NIC count inherits too unless NICs overrides it.
 type CloneOptions struct {
 	From       string
 	To         string
@@ -85,6 +89,10 @@ type CloneOptions struct {
 	// ignored and --pull is forced (the dir holds snapshot data, not
 	// base image layers).
 	FromDir string
+	// NICs maps to `cocoon vm clone --nics N`: nil inherits the
+	// snapshot's NIC count, a non-nil pointer overrides it. The wake
+	// path uses this to re-add a NIC that hibernate dropped pre-snap.
+	NICs *int
 }
 
 // RunOptions is the input to Runtime.Run.
@@ -142,4 +150,7 @@ type Runtime interface {
 	Image(ctx context.Context, name string) (*Image, error)
 	ImageImport(ctx context.Context, opts ImageImportOptions) (io.WriteCloser, func() error, error)
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
+	// NetResize hot-resizes a live VM's NIC count via `cocoon vm net --nics`.
+	// Returns ErrNetResizeUnsupported when the backend (firecracker) cannot.
+	NetResize(ctx context.Context, vmID string, target int) error
 }

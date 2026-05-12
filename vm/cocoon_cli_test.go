@@ -32,6 +32,8 @@ func TestIsCocoonNotFound(t *testing.T) {
 	}
 }
 
+func intPtr(n int) *int { return &n }
+
 func TestBuildCloneArgs(t *testing.T) {
 	t.Parallel()
 
@@ -94,6 +96,21 @@ func TestBuildCloneArgs(t *testing.T) {
 			name: "from-dir emits --pull only once when caller also set Pull",
 			opts: CloneOptions{To: "vm-j", FromDir: "/snaps/qux", Pull: true},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-j", "--pull", "--from-dir", "/snaps/qux"},
+		},
+		{
+			name: "nics override appended before positional snapshot",
+			opts: CloneOptions{From: "snap-a", To: "vm-k", NICs: intPtr(1)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-k", "--nics", "1", "snap-a"},
+		},
+		{
+			name: "nics zero override emits --nics 0",
+			opts: CloneOptions{From: "snap-a", To: "vm-l", NICs: intPtr(0)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-l", "--nics", "0", "snap-a"},
+		},
+		{
+			name: "nics combines with on-demand on CH",
+			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", OnDemand: true, NICs: intPtr(2)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--on-demand", "--nics", "2", "snap-a"},
 		},
 	}
 	for _, tc := range cases {

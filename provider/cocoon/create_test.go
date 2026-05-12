@@ -65,6 +65,9 @@ type fakeRuntime struct {
 	imagesPresent     map[string]bool // names that Image() reports as cached
 	imageInspectCalls []string
 
+	netResizeCalls []netResizeCall
+	netResizeErr   error
+
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
 	// of transient failures followed by a definitive result.
@@ -185,6 +188,16 @@ func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (i
 }
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+
+type netResizeCall struct {
+	vmID   string
+	target int
+}
+
+func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
+	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
+	return f.netResizeErr
+}
 
 type fakeExecCall struct {
 	vmID  string

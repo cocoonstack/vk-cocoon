@@ -2,12 +2,14 @@ package cocoon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -63,9 +65,24 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 // hibernate snapshots the VM to epoch then tears it down. Order is
 // Save -> Push -> Remove. If Remove fails, the pushed tag is rolled back
 // so the operator does not observe Hibernated while the VM is still running.
+//
+// CH+Windows runs `vm net --nics 0` first so the snapshot captures a NIC-less
+// guest. The matched wake clone uses --nics 1 to hot-add a fresh NIC, which
+// Windows enumerates as a brand-new device — bypassing the MAC-swap PnP path
+// that previously forced an in-guest powershell rebind.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
+	spec := meta.ParseVMSpec(pod)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
+	if shouldDropNICBeforeHibernate(spec) {
+		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
+			if errors.Is(err, vm.ErrNetResizeUnsupported) {
+				logger.Warnf(ctx, "drop NIC pre-hibernate of %s: backend lacks net resize; snapshot keeps existing NICs", v.Name)
+			} else {
+				logger.Warnf(ctx, "drop NIC pre-hibernate of %s failed: %v — continuing with original NIC count", v.Name, err)
+			}
+		}
+	}
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
@@ -108,7 +125,11 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
-// wake restores the VM from the hibernation snapshot.
+// wake restores the VM from the hibernation snapshot. The CH+Windows path
+// is the inverse of the drop-NIC hibernate: the snapshot has zero NICs, so
+// clone overrides with --nics 1 to hot-add a fresh device. The same path
+// skips runPostCloneSetup because a fresh NIC needs no PnP rebind — there
+// is no prior MAC for Windows to be confused about.
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
@@ -130,15 +151,21 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
 	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
-	cloneStart := time.Now()
-	v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
+	dropNIC := shouldDropNICBeforeHibernate(spec)
+	opts := vm.CloneOptions{
 		From:       importName,
 		To:         spec.VMName,
 		Network:    spec.Network,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   useOnDemandClone(spec),
-	})
+		OnDemand:   true,
+	}
+	if dropNIC {
+		one := 1
+		opts.NICs = &one
+	}
+	cloneStart := time.Now()
+	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
 		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, importName, err)
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
@@ -146,13 +173,27 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.applyRuntime(ctx, pod, v)
-	p.goBackground(func() {
-		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
-	})
+	if dropNIC {
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	} else {
+		p.goBackground(func() {
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
+		})
+	}
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	// Hibernate tag cleanup is the operator's responsibility (reconcileWake).
 	return nil
+}
+
+// shouldDropNICBeforeHibernate reports whether the hibernate path should
+// run `vm net --nics 0` before snapshot save (and the matching wake path
+// should re-add the NIC via `vm clone --nics 1`). Confined to CH+Windows:
+// Windows PnP cannot tolerate MAC swap on the same PCI slot, and CH is
+// the only backend whose `vm net --nics` extension is implemented.
+func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
+	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
+		spec.OS == string(cocoonv1.OSWindows)
 }
 
 // forgetVMOnly clears the VM record but keeps the pod (used by hibernate).
