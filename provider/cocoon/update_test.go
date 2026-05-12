@@ -36,7 +36,6 @@ func TestHibernateDropsNICOnCHWindows(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
-	// Pusher nil: hibernate skips epoch push but still does NetResize + Save + Remove.
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -153,11 +152,9 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 }
 
 func TestResolveWakeSourceFallsBackToPullerNameWhenLocalMissing(t *testing.T) {
-	// fakeRuntime.Snapshot returns "not found" when the map is empty.
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	// p.Puller stays nil — exercise the "no puller configured" branch.
 
 	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")

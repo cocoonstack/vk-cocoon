@@ -63,14 +63,10 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// hibernate snapshots the VM to epoch then tears it down. Order is
-// Save -> Push -> Remove. If Remove fails, the pushed tag is rolled back
-// so the operator does not observe Hibernated while the VM is still running.
-//
-// CH+Windows runs `vm net --nics 0` first so the snapshot captures a NIC-less
-// guest. The matched wake clone uses --nics 1 to hot-add a fresh NIC, which
-// Windows enumerates as a brand-new device — bypassing the MAC-swap PnP path
-// that previously forced an in-guest powershell rebind.
+// hibernate runs Save -> Push -> Remove; Remove failure rolls back the
+// push so the operator never sees Hibernated while the VM is still live.
+// CH+Windows drops the NIC first so the snapshot is NIC-less and wake
+// can hot-add a fresh device (bypassing MAC-swap PnP rebind).
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
@@ -126,11 +122,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
-// wake restores the VM from the hibernation snapshot. The CH+Windows path
-// is the inverse of the drop-NIC hibernate: the snapshot has zero NICs, so
-// clone overrides with --nics 1 to hot-add a fresh device. The same path
-// skips runPostCloneSetup because a fresh NIC needs no PnP rebind — there
-// is no prior MAC for Windows to be confused about.
+// wake restores the VM from the hibernation snapshot. CH+Windows clones
+// with --nics 1 and skips runPostCloneSetup — the inverse of drop-NIC
+// hibernate, so the fresh NIC needs no PnP rebind.
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
@@ -176,9 +170,8 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// resolveWakeSource returns the local snapshot name to clone from on wake.
-// Same-node hibernate→wake hits the local snapshot left behind by hibernate's
-// SnapshotSave and skips the epoch round-trip; cross-node falls back to pull.
+// resolveWakeSource picks the local snapshot when present; cross-node
+// falls back to PullSnapshot. Saves the epoch round-trip on same-node wake.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, error) {
 	if _, err := p.Runtime.Snapshot(ctx, vmName); err == nil {
 		return vmName, nil
@@ -197,11 +190,9 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 	return importName, nil
 }
 
-// shouldDropNICBeforeHibernate reports whether the hibernate path should
-// run `vm net --nics 0` before snapshot save (and the matching wake path
-// should re-add the NIC via `vm clone --nics 1`). Confined to CH+Windows:
-// Windows PnP cannot tolerate MAC swap on the same PCI slot, and CH is
-// the only backend whose `vm net --nics` extension is implemented.
+// shouldDropNICBeforeHibernate gates the drop-NIC/--nics-1 dance to
+// CH+Windows: Windows PnP rejects MAC swap on the same PCI slot, and
+// only CH implements `vm net --nics`.
 func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
 		spec.OS == string(cocoonv1.OSWindows)

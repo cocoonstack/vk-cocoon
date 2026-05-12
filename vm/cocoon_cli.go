@@ -329,14 +329,10 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// netResizeUnsupportedMarker is the stderr substring the netresize extension
-// emits when the backend cannot hot-resize NICs. Matched as a string because
-// the CLI surfaces the error through exit status + combined output rather
-// than a structured channel.
+// String-matched on stderr — cocoon CLI has no structured error channel.
 const netResizeUnsupportedMarker = "backend does not support net resize"
 
-// NetResize runs `cocoon vm net --nics N`. Returns ErrNetResizeUnsupported
-// when the backend has no implementation (firecracker).
+// NetResize runs `cocoon vm net --nics N`.
 func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {
