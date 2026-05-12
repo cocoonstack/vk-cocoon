@@ -74,10 +74,12 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	if shouldDropNICBeforeHibernate(spec) {
 		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 			if errors.Is(err, vm.ErrNetResizeUnsupported) {
-				logger.Warnf(ctx, "drop NIC pre-hibernate of %s: backend lacks net resize; snapshot keeps existing NICs", v.Name)
+				err = fmt.Errorf("drop NIC pre-hibernate %s: backend lacks net resize: %w", v.Name, err)
 			} else {
-				logger.Warnf(ctx, "drop NIC pre-hibernate of %s failed: %v — continuing with original NIC count", v.Name, err)
+				err = fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
 			}
+			p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+			return err
 		}
 	}
 	saveStart := time.Now()

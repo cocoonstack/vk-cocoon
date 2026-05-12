@@ -95,7 +95,7 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 	}
 }
 
-func TestHibernateContinuesOnNICDropUnsupported(t *testing.T) {
+func TestHibernateFailsOnNICDropUnsupported(t *testing.T) {
 	rt := &fakeRuntime{netResizeErr: vm.ErrNetResizeUnsupported}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -108,16 +108,24 @@ func TestHibernateContinuesOnNICDropUnsupported(t *testing.T) {
 	})
 	v := &vm.VM{ID: "vmid-2", Name: "vk-ns-demo-0"}
 
-	if err := p.hibernate(t.Context(), pod, v); err != nil {
-		t.Fatalf("hibernate must degrade gracefully on ErrNetResizeUnsupported, got %v", err)
+	err := p.hibernate(t.Context(), pod, v)
+	if err == nil {
+		t.Fatalf("hibernate must fail when NIC drop is unsupported on CH+Windows")
 	}
-	if rt.savedSnapshot.vmID != "vmid-2" {
-		t.Errorf("snapshot save must still run after degraded NetResize, got %q", rt.savedSnapshot.vmID)
+	if !errors.Is(err, vm.ErrNetResizeUnsupported) {
+		t.Errorf("error must wrap ErrNetResizeUnsupported, got %v", err)
+	}
+	if rt.savedSnapshot.vmID != "" {
+		t.Errorf("snapshot save must not run after NIC drop failure, got %q", rt.savedSnapshot.vmID)
+	}
+	if meta.ReadLifecycleState(pod) != meta.LifecycleStateFailed {
+		t.Errorf("lifecycle state = %q, want %q", meta.ReadLifecycleState(pod), meta.LifecycleStateFailed)
 	}
 }
 
-func TestHibernateContinuesOnNICDropGenericErr(t *testing.T) {
-	rt := &fakeRuntime{netResizeErr: errors.New("transient")}
+func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
+	dropErr := errors.New("transient")
+	rt := &fakeRuntime{netResizeErr: dropErr}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -129,11 +137,18 @@ func TestHibernateContinuesOnNICDropGenericErr(t *testing.T) {
 	})
 	v := &vm.VM{ID: "vmid-3", Name: "vk-ns-demo-0"}
 
-	if err := p.hibernate(t.Context(), pod, v); err != nil {
-		t.Fatalf("hibernate must not fail on transient NetResize error, got %v", err)
+	err := p.hibernate(t.Context(), pod, v)
+	if err == nil {
+		t.Fatalf("hibernate must fail on transient NetResize error")
 	}
-	if rt.savedSnapshot.vmID != "vmid-3" {
-		t.Errorf("snapshot save must still run after warn-degraded NetResize, got %q", rt.savedSnapshot.vmID)
+	if !errors.Is(err, dropErr) {
+		t.Errorf("error must wrap transient NetResize err, got %v", err)
+	}
+	if rt.savedSnapshot.vmID != "" {
+		t.Errorf("snapshot save must not run after NIC drop failure, got %q", rt.savedSnapshot.vmID)
+	}
+	if meta.ReadLifecycleState(pod) != meta.LifecycleStateFailed {
+		t.Errorf("lifecycle state = %q, want %q", meta.ReadLifecycleState(pod), meta.LifecycleStateFailed)
 	}
 }
 
