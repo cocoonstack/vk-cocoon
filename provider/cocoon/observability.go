@@ -30,3 +30,13 @@ func (p *Provider) emitNormalf(pod *corev1.Pod, reason, format string, args ...a
 		p.Recorder.Eventf(pod, corev1.EventTypeNormal, reason, format, args...)
 	}
 }
+
+// lifecycleAlreadyFailed reports whether a concurrent goroutine has marked
+// the tracked pod as Failed. Used to gate Ready transitions so a successful
+// post-clone exec cannot clobber a prior static-IP / SAC failure.
+func (p *Provider) lifecycleAlreadyFailed(pod *corev1.Pod) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	cur, ok := p.lifecycleIntent[meta.PodKey(pod.Namespace, pod.Name)]
+	return ok && cur.State == meta.LifecycleStateFailed
+}

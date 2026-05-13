@@ -124,7 +124,11 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
-	p.emitNormalf(pod, "Hibernated", "snapshot pushed to epoch")
+	if p.Pusher != nil {
+		p.emitNormalf(pod, "Hibernated", "snapshot pushed to epoch")
+	} else {
+		p.emitNormalf(pod, "Hibernated", "snapshot saved locally (no epoch pusher configured)")
+	}
 	return nil
 }
 

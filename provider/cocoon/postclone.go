@@ -88,8 +88,11 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
-				p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
-				p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
+				// Don't clobber a prior Failed (e.g. applyWindowsStaticIP race) with Ready.
+				if !p.lifecycleAlreadyFailed(pod) {
+					p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
+				}
 				return
 			}
 			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, execErr))
