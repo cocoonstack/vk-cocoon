@@ -69,8 +69,6 @@ type fakeRuntime struct {
 	netResizeCalls []netResizeCall
 	netResizeErr   error
 
-	// onSnapshotSave, when set, fires at SnapshotSave entry — for ordering tests.
-	onSnapshotSave func()
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
 	// removeErr, when set, makes Remove fail with this error.
@@ -147,9 +145,6 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
-	if f.onSnapshotSave != nil {
-		f.onSnapshotSave()
-	}
 	if f.snapshotSaveErr != nil {
 		return f.snapshotSaveErr
 	}

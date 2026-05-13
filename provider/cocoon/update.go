@@ -58,9 +58,9 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 // hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
 // so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
-// VMID clears between Push and Remove so operator never sees
-// manifest+VMID together; failures before that point keep VMID intact
-// so the pod stays recoverable.
+// VMID clears between Push and Remove so the operator's manifest+VMID
+// race window collapses to one patch RTT; failures before that point
+// keep VMID intact so the pod stays recoverable.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
