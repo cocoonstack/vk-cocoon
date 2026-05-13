@@ -377,15 +377,18 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
 	}
+	var lastErr error
 	for range 3 {
-		if err := p.patchPodAnnotations(ctx, namespace, name, annos); err == nil {
+		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		if err == nil {
 			return
 		}
+		lastErr = err
 		if !commonk8s.SleepCtx(ctx, 500*time.Millisecond) {
 			return
 		}
 	}
-	logger.Warnf(ctx, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
+	logger.Errorf(ctx, lastErr, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

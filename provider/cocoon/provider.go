@@ -447,8 +447,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		// Still transient after inline retries. Spawn a deferred recheck so
 		// a genuinely gone VM does not leave the pod stuck indefinitely —
 		// cocoon does not re-emit DELETED, and probes only ping IPs.
-		logger.Warnf(ctx, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s: %v",
-			trackedID, affectedPod.Namespace, affectedPod.Name, err)
+		logger.Errorf(ctx, err, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
 		metrics.VMInspectTransientFailTotal.Inc()
 		p.scheduleDeferredRecheck(trackedID)
 

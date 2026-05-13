@@ -88,8 +88,8 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 			return
 		}
 	}
-	logger.Warnf(ctx, "lifecycle patch failed for %s/%s after %d attempts, will reconcile: %v",
-		namespace, name, lifecyclePatchAttempts, lastErr)
+	logger.Errorf(ctx, lastErr, "lifecycle patch failed for %s/%s after %d attempts, will reconcile",
+		namespace, name, lifecyclePatchAttempts)
 }
 
 func (p *Provider) runLifecycleReconciler(ctx context.Context) {
