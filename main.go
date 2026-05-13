@@ -57,7 +57,10 @@ const (
 
 func main() {
 	ctx := context.Background()
-	commonlog.Setup(ctx, "VK_LOG_LEVEL")
+	if err := commonlog.Setup(ctx, "VK_LOG_LEVEL"); err != nil {
+		fmt.Fprintf(os.Stderr, "log setup: %v\n", err)
+		os.Exit(1)
+	}
 
 	logger := log.WithFunc("main")
 	logger.Infof(ctx, "vk-cocoon %s starting (rev=%s built=%s)",
@@ -74,7 +77,11 @@ func main() {
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
 	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
-		nodeIP = commonk8s.DetectNodeIP()
+		detected, err := commonk8s.DetectNodeIP()
+		if err != nil {
+			logger.Fatalf(ctx, err, "detect node ip")
+		}
+		nodeIP = detected
 	}
 	certPath := commonk8s.EnvOrDefault("VK_TLS_CERT", defaultTLSCert)
 	keyPath := commonk8s.EnvOrDefault("VK_TLS_KEY", defaultTLSKey)
@@ -89,7 +96,7 @@ func main() {
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	tlsCert, tlsSource, err := commonk8s.LoadOrGenerateCert(certPath, keyPath, nodeName, nodeIP)
+	tlsCert, tlsSource, err := commonk8s.LoadOrGenerateCert(signalCtx, certPath, keyPath, nodeName, nodeIP)
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "tls setup")
 	}
