@@ -315,6 +315,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 		t.Errorf("clone Pull = false, want true (base image should be auto-pulled)")
 	}
 
+	p.Close()
 	runtime := meta.ParseVMRuntime(pod)
 	if runtime.VMID == "" {
 		t.Errorf("VMID annotation was not written back")
