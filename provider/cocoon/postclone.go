@@ -173,8 +173,8 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	pod.Annotations[key] = val
 	p.mu.Unlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{key: val}); err != nil {
-		log.WithFunc("Provider.setPodAnnotation").Warnf(ctx,
-			"patch annotation %s for %s/%s: %v", key, pod.Namespace, pod.Name, err)
+		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
+			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}
 }
 
