@@ -232,9 +232,7 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 	return raw, nil
 }
 
-// useOnDemandClone disables UFFD on Windows: lazy paging stalls Windows
-// DHCP/NDIS boot for tens of seconds. Linux's networkd is lean enough
-// that UFFD page-faults stay under the DHCP timeout.
+// useOnDemandClone is off for Windows: UFFD lazy paging stalls DHCP boot.
 func useOnDemandClone(spec meta.VMSpec) bool {
 	return spec.OS != string(cocoonv1.OSWindows)
 }

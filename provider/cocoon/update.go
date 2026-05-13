@@ -186,16 +186,15 @@ func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 		spec.OS == string(cocoonv1.OSWindows)
 }
 
-// cleanupWakeImport drops the per-wake import snapshot when wake pulled
-// it from epoch (cross-node case). Same-node wake clones from the pod's
-// local snapshot which must stay live for subsequent wakes.
+// cleanupWakeImport drops the cross-node import; same-node keeps the
+// local snapshot live for the next wake.
 func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
 	if sourceName == vmName {
 		return
 	}
 	p.goBackground(func() {
 		if err := p.Runtime.SnapshotRemoveIfExists(p.lifecycleCtx, sourceName); err != nil {
-			log.WithFunc("Provider.wake").Warnf(p.lifecycleCtx, "remove hibernate-import %s: %v", sourceName, err)
+			log.WithFunc("Provider.cleanupWakeImport").Warnf(p.lifecycleCtx, "remove hibernate-import %s: %v", sourceName, err)
 		}
 	})
 }

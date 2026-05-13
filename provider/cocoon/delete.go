@@ -35,9 +35,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
-	// Local snapshots survive vm rm; clear the per-pod ones so a same-named
-	// CocoonSet re-created later cannot inherit stale guest memory via
-	// ensureSnapshot's local cache hit or resolveWakeSource's local probe.
+	// Drop per-pod local snapshots so a same-named CocoonSet can't inherit stale guest memory.
 	if v.Name != "" {
 		for _, name := range []string{v.Name, forkSnapshotName(v.Name)} {
 			if err := p.Runtime.SnapshotRemoveIfExists(ctx, name); err != nil {
