@@ -129,7 +129,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Network:    spec.Network,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   useOnDemandClone(spec),
+		OnDemand:   useOnDemandClone(spec.OS),
 	}
 	if dropNIC {
 		opts.NICs = ptr.To(1)
@@ -187,18 +187,13 @@ func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 }
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the
-// local snapshot live for the next wake. Detached ctx so Close cancel
-// can't abort the rm mid-flight.
+// local snapshot live for the next wake.
 func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
 	if sourceName == vmName {
 		return
 	}
 	p.goBackground(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
-		defer cancel()
-		if err := p.Runtime.SnapshotRemoveIfExists(ctx, sourceName); err != nil {
-			log.WithFunc("Provider.cleanupWakeImport").Warnf(ctx, "remove hibernate-import %s: %v", sourceName, err)
-		}
+		p.removeSnapshotDetached("Provider.cleanupWakeImport", sourceName)
 	})
 }
 

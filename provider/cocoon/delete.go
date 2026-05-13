@@ -3,7 +3,6 @@ package cocoon
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -11,8 +10,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
-
-const snapshotCleanupTimeout = 10 * time.Second
 
 // DeletePod removes a pod, optionally snapshotting the VM first.
 func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
@@ -38,15 +35,10 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
-	// Detached ctx so caller cancel can't abort cleanup mid-rm.
 	if v.Name != "" {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
 		for _, name := range []string{v.Name, forkSnapshotName(v.Name)} {
-			if err := p.Runtime.SnapshotRemoveIfExists(cleanupCtx, name); err != nil {
-				logger.Warnf(cleanupCtx, "remove local snapshot %s: %v", name, err)
-			}
+			p.removeSnapshotDetached("Provider.DeletePod", name)
 		}
-		cancel()
 	}
 
 	p.forgetPod(pod.Namespace, pod.Name)

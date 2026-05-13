@@ -123,7 +123,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
-			OnDemand:   useOnDemandClone(spec),
+			OnDemand:   useOnDemandClone(spec.OS),
 		})
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
@@ -143,7 +143,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
-			OnDemand:   useOnDemandClone(spec),
+			OnDemand:   useOnDemandClone(spec.OS),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -204,7 +204,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 			Pull:       srcImage != "",
-			OnDemand:   useOnDemandClone(spec),
+			OnDemand:   useOnDemandClone(spec.OS),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
@@ -233,8 +233,8 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 }
 
 // useOnDemandClone is off for Windows: UFFD lazy paging stalls DHCP boot.
-func useOnDemandClone(spec meta.VMSpec) bool {
-	return spec.OS != string(cocoonv1.OSWindows)
+func useOnDemandClone(os string) bool {
+	return os != string(cocoonv1.OSWindows)
 }
 
 // isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
