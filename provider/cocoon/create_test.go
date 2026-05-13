@@ -69,6 +69,11 @@ type fakeRuntime struct {
 	netResizeCalls []netResizeCall
 	netResizeErr   error
 
+	// onSnapshotSave fires at the start of SnapshotSave; tests use it to
+	// capture caller-side state (e.g. pod annotations) at the moment Save
+	// is invoked, to assert ordering against earlier mutations.
+	onSnapshotSave func()
+
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
 	// of transient failures followed by a definitive result.
@@ -132,6 +137,9 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+	if f.onSnapshotSave != nil {
+		f.onSnapshotSave()
+	}
 	f.savedSnapshot.name = name
 	f.savedSnapshot.vmID = vmID
 	f.snapshotSaveCount++

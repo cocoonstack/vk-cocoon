@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"testing"
 
@@ -113,6 +114,44 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 				t.Errorf("expected SnapshotSave + Remove to still run, got save=%q remove=%q", rt.savedSnapshot.vmID, rt.removedID)
 			}
 		})
+	}
+}
+
+func TestHibernateClearsVMIDBeforeSnapshotSave(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	pod.Annotations[meta.AnnotationVMID] = "vmid-pre"
+	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+
+	var atSave map[string]string
+	rt.onSnapshotSave = func() {
+		atSave = maps.Clone(pod.Annotations)
+	}
+
+	v := &vm.VM{ID: "vmid-pre", Name: "vk-ns-demo-0"}
+	if err := p.hibernate(t.Context(), pod, v); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+
+	if atSave == nil {
+		t.Fatalf("SnapshotSave was never invoked")
+	}
+	if got, ok := atSave[meta.AnnotationVMID]; ok && got != "" {
+		t.Errorf("VMID annotation must be cleared before SnapshotSave; got %q", got)
+	}
+	if got, ok := atSave[meta.AnnotationIP]; ok && got != "" {
+		t.Errorf("IP annotation must be cleared before SnapshotSave; got %q", got)
+	}
+	if got := pod.Annotations[meta.AnnotationVMID]; got != "" {
+		t.Errorf("VMID annotation must remain cleared post-hibernate; got %q", got)
 	}
 }
 
