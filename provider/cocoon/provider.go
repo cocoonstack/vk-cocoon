@@ -268,11 +268,9 @@ func (p *Provider) gcStaleRestarts() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cutoff := time.Now().Add(-restartCooldown * 2)
-	for id, t := range p.lastRestart {
-		if t.Before(cutoff) {
-			delete(p.lastRestart, id)
-		}
-	}
+	maps.DeleteFunc(p.lastRestart, func(_ string, t time.Time) bool {
+		return t.Before(cutoff)
+	})
 }
 
 // forgetPod drops the pod, VM, and probe from the in-memory tables.
