@@ -89,6 +89,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+				p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
 				return
 			}
 			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, execErr))
