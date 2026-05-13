@@ -20,20 +20,27 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
+	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 const (
-	annotationPostCloneHint  = "vm.cocoonstack.io/post-clone-hint"
-	annotationPostCloneState = "vm.cocoonstack.io/post-clone-state"
+	annotationPostCloneHint   = "vm.cocoonstack.io/post-clone-hint"
+	annotationPostCloneState  = "vm.cocoonstack.io/post-clone-state"
+	annotationPostCloneErrors = "vm.cocoonstack.io/post-clone-errors"
 
 	postCloneStateRunning = "running"
 	postCloneStateDone    = "done"
 	postCloneStateFailed  = "failed"
 
-	postCloneAgentBudget   = 180 * time.Second
-	postCloneRetryInterval = 3 * time.Second
+	postCloneAgentBudget    = 180 * time.Second
+	postCloneRetryInterval  = 3 * time.Second
+	postCloneErrorsMaxBytes = 4096
+
+	postCloneKindWindows     = "windows"
+	postCloneKindLinuxStatic = "linux_static"
+	postCloneKindLinuxFC     = "linux_fc"
 
 	sacEnumRetries  = 60 // polls SAC `i` until Windows PnP lists every NIC
 	sacIPSetRetries = 10 // per-NIC retry until SAC `i` reflects the assigned IP
@@ -51,9 +58,10 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
+	kind := postCloneKind(spec)
 	t0 := time.Now()
-	logger.Infof(ctx, "post-clone setup starting for %s/%s vm=%s os=%q backend=%q",
-		pod.Namespace, pod.Name, v.ID, spec.OS, spec.Backend)
+	logger.Infof(ctx, "post-clone setup starting for %s/%s vm=%s kind=%s",
+		pod.Namespace, pod.Name, v.ID, kind)
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
 	// SIGKILL to the sudo wrapper from exec.CommandContext doesn't
@@ -64,7 +72,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
 	defer cancel()
 
-	var lastErr error
+	var attemptErrs []error
 	for attempt := 1; ; attempt++ {
 		attemptStart := time.Now()
 		done := make(chan error, 1)
@@ -74,17 +82,20 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		select {
 		case execErr := <-done:
 			if execErr == nil {
+				metrics.PostCloneTotal.WithLabelValues(kind, "ok").Inc()
+				metrics.PostCloneRetryAttempts.WithLabelValues("ok").Observe(float64(attempt))
 				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 				return
 			}
-			lastErr = execErr
+			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, execErr))
+			p.emitWarningf(pod, "PostCloneExecAttemptFailed", "attempt %d: %v", attempt, execErr)
 			logger.Warnf(ctx, "post-clone exec attempt %d failed for %s/%s after %s: %v",
 				attempt, pod.Namespace, pod.Name, time.Since(attemptStart).Round(time.Millisecond), execErr)
 		case <-loopCtx.Done():
-			lastErr = loopCtx.Err()
+			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, loopCtx.Err()))
 		}
 		if loopCtx.Err() != nil {
 			break
@@ -93,7 +104,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 			break
 		}
 	}
-	if errors.Is(lastErr, context.Canceled) {
+	joinedErr := errors.Join(attemptErrs...)
+	if errors.Is(joinedErr, context.Canceled) {
 		// Provider shutdown canceled lifecycleCtx; the pod will be re-
 		// reconciled on next start. Skip the failed-state + hint writes
 		// because their patch ctx is the same canceled one.
@@ -101,11 +113,22 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 			pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond))
 		return
 	}
-	logger.Errorf(ctx, lastErr, "post-clone setup timed out for %s/%s after %s (budget %s); falling back to manual hint",
-		pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond), postCloneAgentBudget)
+	metrics.PostCloneTotal.WithLabelValues(kind, "failed").Inc()
+	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
-	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, lastErr.Error())
-	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage)
+	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, attemptErrs)
+	p.failOp(ctx, pod, "PostCloneExecExhausted", "create", joinedErr)
+}
+
+// postCloneKind classifies a clone for the postclone_total{kind} label.
+func postCloneKind(spec meta.VMSpec) string {
+	if spec.OS == string(cocoonv1.OSWindows) {
+		return postCloneKindWindows
+	}
+	if spec.Backend == vm.BackendFirecracker {
+		return postCloneKindLinuxFC
+	}
+	return postCloneKindLinuxStatic
 }
 
 // postClonePlan carries both the agent-side argv and a shell-runnable
@@ -139,19 +162,29 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
 }
 
-// emitPostCloneHint records a manual-recovery script in pod annotations
-// when runPostCloneSetup gives up. Operators decode and run it from a
-// cocoon vm console session.
-func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
+// emitPostCloneHint records the manual-recovery script and the joined per-
+// attempt error chain so operators can both retry from the cocoon console
+// and inspect what each attempt actually failed on.
+func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string, attemptErrs []error) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(plan.hint))
 	p.setPodAnnotation(ctx, pod, annotationPostCloneHint, encoded)
+	if joined := errors.Join(attemptErrs...); joined != nil {
+		p.setPodAnnotation(ctx, pod, annotationPostCloneErrors, truncate(joined.Error(), postCloneErrorsMaxBytes))
+	}
 	log.WithFunc("Provider.emitPostCloneHint").Warnf(ctx,
 		"manual post-clone setup required for %s/%s; hint at annotation %s",
 		pod.Namespace, pod.Name, annotationPostCloneHint)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }
 
 // setPodAnnotation writes one annotation locally (under p.mu to serialize
