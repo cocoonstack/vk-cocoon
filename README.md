@@ -24,7 +24,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 ### CreatePod
 
 1. Parse `meta.VMSpec` from the pod annotations.
-2. If a VM with `spec.VMName` already exists locally, adopt it (idempotent on restart).
+2. If a VM with `spec.VMName` already exists locally, adopt it (idempotent on restart). Adoption hinges on `StartupReconcile` having populated `vmsByName`; before reconcile completes, CreatePod treats the pod as new and may collide on VM name.
 3. Otherwise branch on `spec.Managed` first, then `spec.Mode`:
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from epoch via `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend` validates the snapshot's recorded hypervisor matches `spec.Backend` — a CH snapshot cannot be cloned onto a FC target and vice-versa. When the snapshot carries a base image, `Pull: true` is passed to `CloneOptions`, which translates to `cocoon vm clone --pull`; cocoon constructs a digest reference (`repo@sha256:xxx`) from the snapshot metadata and pulls the exact image version recorded at snapshot time. Then `Runtime.Clone(from=<local>, to=spec.VMName)`. Pod-side CPU/memory/storage are not plumbed into clone — cocoon clone inherits all guest resources from the snapshot. Only the `vm run` path translates pod resources into VM resources.
@@ -51,7 +51,7 @@ The only update vk-cocoon honors is a `HibernateState` transition. Anything else
 
 | Transition | Behavior |
 |---|---|
-| `false → true` | `Runtime.SnapshotSave` → `Pusher.PushSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Remove`. Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag so the operator does not observe `Hibernated` while the local VM is still running. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
+| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from epoch. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by polling `epoch.GetManifest(vmName, "hibernate")`.
