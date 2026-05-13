@@ -129,7 +129,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Network:    spec.Network,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   true,
+		OnDemand:   useOnDemandClone(spec.OS),
 	}
 	if dropNIC {
 		opts.NICs = ptr.To(1)
@@ -143,6 +143,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.applyRuntime(ctx, pod, v)
+	p.cleanupWakeImport(spec.VMName, sourceName)
 	if dropNIC {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	} else {
@@ -183,6 +184,17 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
 		spec.OS == string(cocoonv1.OSWindows)
+}
+
+// cleanupWakeImport drops the cross-node import; same-node keeps the
+// local snapshot live for the next wake.
+func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
+	if sourceName == vmName {
+		return
+	}
+	p.goBackground(func() {
+		p.removeSnapshotDetached("Provider.cleanupWakeImport", sourceName)
+	})
 }
 
 // forgetVMOnly clears the VM record but keeps the pod.

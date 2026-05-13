@@ -9,6 +9,20 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
+const snapshotCleanupTimeout = 10 * time.Second
+
+// removeSnapshotDetached drops a local snapshot under a fresh timed
+// context so caller cancel (vk shutdown, kubelet deadline) can't abort
+// the rm mid-flight. Per-call timeout, so a slow first remove can't
+// starve a follow-up one in the same cleanup pass.
+func (p *Provider) removeSnapshotDetached(funcLabel, name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
+	defer cancel()
+	if err := p.Runtime.SnapshotRemoveIfExists(ctx, name); err != nil {
+		log.WithFunc(funcLabel).Warnf(ctx, "remove snapshot %s: %v", name, err)
+	}
+}
+
 // saveAndPushSnapshot saves a snapshot and pushes it to epoch, recording
 // timing metrics. Errors are logged and counted but not returned — the
 // delete path treats snapshot failures as non-fatal.

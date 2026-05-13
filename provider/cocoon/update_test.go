@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -9,6 +10,26 @@ import (
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+func TestUseOnDemandClone(t *testing.T) {
+	cases := []struct {
+		name string
+		os   string
+		want bool
+	}{
+		{"linux", string(cocoonv1.OSLinux), true},
+		{"windows off", string(cocoonv1.OSWindows), false},
+		{"android counts as non-windows", string(cocoonv1.OSAndroid), true},
+		{"empty OS defaults to on", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := useOnDemandClone(tc.os); got != tc.want {
+				t.Errorf("useOnDemandClone(%q) = %v, want %v", tc.os, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestShouldDropNICBeforeHibernate(t *testing.T) {
 	cases := []struct {
@@ -149,6 +170,34 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	}
 	if meta.ReadLifecycleState(pod) != meta.LifecycleStateFailed {
 		t.Errorf("lifecycle state = %q, want %q", meta.ReadLifecycleState(pod), meta.LifecycleStateFailed)
+	}
+}
+
+func TestCleanupWakeImportSkipsLocalHit(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	p.cleanupWakeImport("vk-ns-demo-0", "vk-ns-demo-0")
+	p.Close() // drain bg goroutines (none expected)
+
+	if len(rt.snapshotRemoveCalls) != 0 {
+		t.Errorf("same-node wake must keep the local snapshot; got removes %v", rt.snapshotRemoveCalls)
+	}
+}
+
+func TestCleanupWakeImportDropsCrossNodeImport(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	importName := "vk-ns-demo-0" + hibernateImportSuffix
+	p.cleanupWakeImport("vk-ns-demo-0", importName)
+	p.Close() // drain bg goroutines
+
+	want := []string{importName}
+	if !reflect.DeepEqual(rt.snapshotRemoveCalls, want) {
+		t.Errorf("snapshot removes = %v, want %v", rt.snapshotRemoveCalls, want)
 	}
 }
 

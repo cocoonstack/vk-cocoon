@@ -35,6 +35,12 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
+	if v.Name != "" {
+		for _, name := range []string{v.Name, forkSnapshotName(v.Name)} {
+			p.removeSnapshotDetached("Provider.DeletePod", name)
+		}
+	}
+
 	p.forgetPod(pod.Namespace, pod.Name)
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
