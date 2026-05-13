@@ -19,6 +19,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -242,13 +243,14 @@ func isCloudimgVM(vmID string) bool {
 
 // applyWindowsStaticIP uses SAC to set static IPs on Windows VMs.
 // Called for both run and clone when the network uses IPAM.
-// DHCP NICs (no assigned IP) are skipped.
-func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+// DHCP NICs (no assigned IP) are skipped. Returns nil when no static NICs
+// are configured or no SAC client is wired.
+func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
-		return
+		return nil
 	}
 	if !slices.ContainsFunc(v.NetworkConfigs, isStaticNIC) {
-		return
+		return nil
 	}
 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
@@ -256,12 +258,32 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 
 	sess, err := p.GuestSAC.Dial(ctx, sockPath)
 	if err != nil {
-		logger.Errorf(ctx, err, "sac dial %s/%s", pod.Namespace, pod.Name)
-		return
+		p.emitWarningf(pod, "PostCloneSACDialFailed", "%v", err)
+		return fmt.Errorf("sac dial: %w", err)
 	}
 	defer func() { _ = sess.Close() }()
 
-	// Query net numbers; retry until all NICs are enumerated.
+	netNums, err := p.sacEnumerateNICs(ctx, pod, sess, len(v.NetworkConfigs))
+	if err != nil {
+		return err
+	}
+
+	for i, nc := range v.NetworkConfigs {
+		if !isStaticNIC(nc) {
+			continue
+		}
+		if err := p.sacSetNICIP(ctx, pod, sess, netNums[i], nc); err != nil {
+			return err
+		}
+	}
+	logger.Infof(ctx, "sac configured static IPs for %s/%s", pod.Namespace, pod.Name)
+	return nil
+}
+
+// sacEnumerateNICs polls SAC `i` until Windows PnP lists every NIC, or
+// returns an error when the budget is exhausted.
+func (p *Provider) sacEnumerateNICs(ctx context.Context, pod *corev1.Pod, sess guest.Session, wantNICs int) ([]int, error) {
+	logger := log.WithFunc("Provider.sacEnumerateNICs")
 	var out bytes.Buffer
 	var netNums []int
 	for attempt := range sacEnumRetries {
@@ -270,52 +292,49 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			logger.Debugf(ctx, "sac query: %v", queryErr)
 		} else {
 			netNums = sac.ParseNetEntries(out.String())
-			if len(netNums) >= len(v.NetworkConfigs) {
-				break
+			if len(netNums) >= wantNICs {
+				return netNums, nil
 			}
 		}
 		if attempt == sacEnumRetries-1 {
-			logger.Warnf(ctx, "sac: found %d net entries but need %d for %s/%s after retries",
-				len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
-			return
+			err := fmt.Errorf("sac enum exhausted: found %d need %d", len(netNums), wantNICs)
+			p.emitWarningf(pod, "PostCloneSACEnumFailed", "%v", err)
+			return nil, err
 		}
 		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
-			return
+			return nil, ctx.Err()
 		}
 	}
+	return netNums, nil
+}
 
-	// Set IP on each static NIC with verify+retry.
-	for i, nc := range v.NetworkConfigs {
-		if !isStaticNIC(nc) {
-			continue
+// sacSetNICIP issues the SAC set command and verifies the result with a
+// bounded retry loop.
+func (p *Provider) sacSetNICIP(ctx context.Context, pod *corev1.Pod, sess guest.Session, netNum int, nc *vm.NetworkConfig) error {
+	logger := log.WithFunc("Provider.sacSetNICIP")
+	cmd := []string{"i", strconv.Itoa(netNum), nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway}
+	var out bytes.Buffer
+	for attempt := range sacIPSetRetries {
+		if setErr := sess.Run(ctx, cmd, nil); setErr != nil {
+			p.emitWarningf(pod, "PostCloneSACSetFailed", "net %d: %v", netNum, setErr)
+			return fmt.Errorf("sac set ip net %d: %w", netNum, setErr)
 		}
-		cmd := []string{
-			"i", strconv.Itoa(netNums[i]),
-			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
+		out.Reset()
+		if verifyErr := sess.Run(ctx, []string{"i"}, &out); verifyErr != nil {
+			logger.Debugf(ctx, "sac verify: %v", verifyErr)
+		} else if sac.NetHasIP(out.String(), netNum, nc.Network.IP) {
+			return nil
 		}
-		for attempt := range sacIPSetRetries {
-			if setErr := sess.Run(ctx, cmd, nil); setErr != nil {
-				logger.Errorf(ctx, setErr, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
-				return
-			}
-			out.Reset()
-			if verifyErr := sess.Run(ctx, []string{"i"}, &out); verifyErr != nil {
-				logger.Debugf(ctx, "sac verify: %v", verifyErr)
-			} else if sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
-				break
-			}
-			if attempt == sacIPSetRetries-1 {
-				logger.Warnf(ctx, "sac: net %d did not accept ip %s after retries for %s/%s",
-					netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
-				return
-			}
-			logger.Debugf(ctx, "sac: net %d ip not yet effective, retrying in 2s", netNums[i])
-			if !commonk8s.SleepCtx(ctx, 2*time.Second) {
-				return
-			}
+		if attempt == sacIPSetRetries-1 {
+			err := fmt.Errorf("sac verify exhausted: net %d ip %s did not take effect", netNum, nc.Network.IP)
+			p.emitWarningf(pod, "PostCloneSACVerifyFailed", "%v", err)
+			return err
+		}
+		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
+			return ctx.Err()
 		}
 	}
-	logger.Infof(ctx, "sac configured static IPs for %s/%s", pod.Namespace, pod.Name)
+	return nil
 }
 
 func isStaticNIC(nc *vm.NetworkConfig) bool {

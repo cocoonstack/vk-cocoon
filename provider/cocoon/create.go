@@ -67,7 +67,13 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, v)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {
-			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
+			if err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v); err != nil {
+				metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
+				p.markPostCloneState(p.lifecycleCtx, pod, postCloneStateFailed)
+				p.failOp(p.lifecycleCtx, pod, "WindowsStaticIPFailed", "create", err)
+				return
+			}
+			metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
 		})
 	}
 	if cloned {
