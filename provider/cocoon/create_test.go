@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1002,6 +1003,10 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	}
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Errorf("DeletePod should drop the pod from the in-memory table")
+	}
+	wantSnapRemovals := []string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")}
+	if !reflect.DeepEqual(rt.snapshotRemoveCalls, wantSnapRemovals) {
+		t.Errorf("snapshot removes = %v, want %v", rt.snapshotRemoveCalls, wantSnapRemovals)
 	}
 }
 
