@@ -339,7 +339,7 @@ func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) erro
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {
 		if isNetResizeUnsupported(out) {
-			return fmt.Errorf("cocoon vm net %s: %w (output: %s)", vmID, ErrNetResizeUnsupported, strings.TrimSpace(string(out)))
+			return cocoonCmdError("vm net", vmID, ErrNetResizeUnsupported, out)
 		}
 		return cocoonCmdError("vm net", vmID, err, out)
 	}
