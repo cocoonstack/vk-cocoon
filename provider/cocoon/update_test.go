@@ -117,7 +117,7 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 	}
 }
 
-func TestHibernateClearsVMIDBeforeSnapshotSave(t *testing.T) {
+func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -131,9 +131,9 @@ func TestHibernateClearsVMIDBeforeSnapshotSave(t *testing.T) {
 	pod.Annotations[meta.AnnotationVMID] = "vmid-pre"
 	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
 
-	var atSave map[string]string
-	rt.onSnapshotSave = func() {
-		atSave = maps.Clone(pod.Annotations)
+	var atRemove map[string]string
+	rt.onRemove = func() {
+		atRemove = maps.Clone(pod.Annotations)
 	}
 
 	v := &vm.VM{ID: "vmid-pre", Name: "vk-ns-demo-0"}
@@ -141,17 +141,68 @@ func TestHibernateClearsVMIDBeforeSnapshotSave(t *testing.T) {
 		t.Fatalf("hibernate: %v", err)
 	}
 
-	if atSave == nil {
-		t.Fatalf("SnapshotSave was never invoked")
+	if atRemove == nil {
+		t.Fatalf("Remove was never invoked")
 	}
-	if got, ok := atSave[meta.AnnotationVMID]; ok && got != "" {
-		t.Errorf("VMID annotation must be cleared before SnapshotSave; got %q", got)
+	if got, ok := atRemove[meta.AnnotationVMID]; ok && got != "" {
+		t.Errorf("VMID annotation must be cleared before Remove; got %q", got)
 	}
-	if got, ok := atSave[meta.AnnotationIP]; ok && got != "" {
-		t.Errorf("IP annotation must be cleared before SnapshotSave; got %q", got)
+	if got, ok := atRemove[meta.AnnotationIP]; ok && got != "" {
+		t.Errorf("IP annotation must be cleared before Remove; got %q", got)
 	}
 	if got := pod.Annotations[meta.AnnotationVMID]; got != "" {
 		t.Errorf("VMID annotation must remain cleared post-hibernate; got %q", got)
+	}
+}
+
+func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
+	rmErr := errors.New("remove boom")
+	rt := &fakeRuntime{removeErr: rmErr}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	pod.Annotations[meta.AnnotationVMID] = "vmid-live"
+	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+
+	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
+	err := p.hibernate(t.Context(), pod, v)
+	if !errors.Is(err, rmErr) {
+		t.Fatalf("hibernate must wrap removeErr, got %v", err)
+	}
+	if got := pod.Annotations[meta.AnnotationVMID]; got != "vmid-live" {
+		t.Errorf("VMID annotation must be restored after Remove failure; got %q want vmid-live", got)
+	}
+	if got := pod.Annotations[meta.AnnotationIP]; got != "10.0.0.7" {
+		t.Errorf("IP annotation must be restored after Remove failure; got %q want 10.0.0.7", got)
+	}
+}
+
+func TestHibernateKeepsVMIDOnSaveFailure(t *testing.T) {
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	pod.Annotations[meta.AnnotationVMID] = "vmid-live"
+	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+
+	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
+	if err := p.hibernate(t.Context(), pod, v); err == nil {
+		t.Fatalf("hibernate must fail when SnapshotSave fails")
+	}
+	if got := pod.Annotations[meta.AnnotationVMID]; got != "vmid-live" {
+		t.Errorf("VMID annotation must stay intact when hibernate aborts pre-Push; got %q", got)
 	}
 }
 

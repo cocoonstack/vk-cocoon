@@ -58,14 +58,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 // hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
 // so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
-// VMID clears pre-Save so operator never sees manifest+VMID together.
+// VMID clears between Push and Remove so operator never sees
+// manifest+VMID together; failures before that point keep VMID intact
+// so the pod stays recoverable.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
-	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
-		logger.Warnf(ctx, "clear pre-hibernate annotations %s/%s: %v", pod.Namespace, pod.Name, err)
-	}
 	if shouldDropNICBeforeHibernate(spec) {
 		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 			err = fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
@@ -93,17 +92,22 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 	}
+	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		logger.Warnf(ctx, "clear pre-remove annotations %s/%s: %v", pod.Namespace, pod.Name, err)
+	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
+		// VM is still live; restore VMID/IP so the pod can retry hibernate.
+		p.applyRuntime(ctx, pod, v)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	// Safety-net for the rare pre-Save patch failure.
+	// Safety-net for the rare pre-remove patch failure.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
 	}
