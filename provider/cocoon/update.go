@@ -143,6 +143,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	p.applyRuntime(ctx, pod, v)
+	p.cleanupWakeImport(spec.VMName, sourceName)
 	if dropNIC {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	} else {
@@ -183,6 +184,20 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
 		spec.OS == string(cocoonv1.OSWindows)
+}
+
+// cleanupWakeImport drops the per-wake import snapshot when wake pulled
+// it from epoch (cross-node case). Same-node wake clones from the pod's
+// local snapshot which must stay live for subsequent wakes.
+func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
+	if sourceName == vmName {
+		return
+	}
+	p.goBackground(func() {
+		if err := p.Runtime.SnapshotRemoveIfExists(p.lifecycleCtx, sourceName); err != nil {
+			log.WithFunc("Provider.wake").Warnf(p.lifecycleCtx, "remove hibernate-import %s: %v", sourceName, err)
+		}
+	})
 }
 
 // forgetVMOnly clears the VM record but keeps the pod.

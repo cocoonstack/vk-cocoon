@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -169,6 +170,34 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	}
 	if meta.ReadLifecycleState(pod) != meta.LifecycleStateFailed {
 		t.Errorf("lifecycle state = %q, want %q", meta.ReadLifecycleState(pod), meta.LifecycleStateFailed)
+	}
+}
+
+func TestCleanupWakeImportSkipsLocalHit(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	p.cleanupWakeImport("vk-ns-demo-0", "vk-ns-demo-0")
+	p.Close() // drain bg goroutines (none expected)
+
+	if len(rt.snapshotRemoveCalls) != 0 {
+		t.Errorf("same-node wake must keep the local snapshot; got removes %v", rt.snapshotRemoveCalls)
+	}
+}
+
+func TestCleanupWakeImportDropsCrossNodeImport(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	importName := "vk-ns-demo-0" + hibernateImportSuffix
+	p.cleanupWakeImport("vk-ns-demo-0", importName)
+	p.Close() // drain bg goroutines
+
+	want := []string{importName}
+	if !reflect.DeepEqual(rt.snapshotRemoveCalls, want) {
+		t.Errorf("snapshot removes = %v, want %v", rt.snapshotRemoveCalls, want)
 	}
 }
 
