@@ -34,6 +34,14 @@ const (
 
 	postCloneAgentBudget   = 180 * time.Second
 	postCloneRetryInterval = 3 * time.Second
+
+	// sacEnumRetries bounds how long applyWindowsStaticIP waits for
+	// SAC's net enum to surface every NIC after Windows finishes
+	// PnP-binding the synthetic adapters.
+	sacEnumRetries = 60
+	// sacIPSetRetries bounds the per-NIC retry loop verifying that
+	// `i <num> ...` actually took on the guest side.
+	sacIPSetRetries = 10
 )
 
 // runPostCloneSetup auto-executes the post-clone fixup inside the cloned
@@ -233,7 +241,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	// Query net numbers; retry until all NICs are enumerated.
 	var out bytes.Buffer
 	var netNums []int
-	for attempt := range 60 {
+	for attempt := range sacEnumRetries {
 		out.Reset()
 		if queryErr := sess.Run(ctx, []string{"i"}, &out); queryErr != nil {
 			logger.Debugf(ctx, "sac query: %v", queryErr)
@@ -243,7 +251,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 				break
 			}
 		}
-		if attempt == 59 {
+		if attempt == sacEnumRetries-1 {
 			logger.Warnf(ctx, "sac: found %d net entries but need %d for %s/%s after retries",
 				len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
 			return
@@ -262,7 +270,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			"i", strconv.Itoa(netNums[i]),
 			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
 		}
-		for attempt := range 10 {
+		for attempt := range sacIPSetRetries {
 			if setErr := sess.Run(ctx, cmd, nil); setErr != nil {
 				logger.Errorf(ctx, setErr, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
 				return
@@ -273,7 +281,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			} else if sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
 				break
 			}
-			if attempt == 9 {
+			if attempt == sacIPSetRetries-1 {
 				logger.Warnf(ctx, "sac: net %d did not accept ip %s after retries for %s/%s",
 					netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
 				return
