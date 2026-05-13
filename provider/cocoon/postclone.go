@@ -35,8 +35,8 @@ const (
 	postCloneAgentBudget   = 180 * time.Second
 	postCloneRetryInterval = 3 * time.Second
 
-	sacEnumRetries  = 60 // waits for Windows PnP to surface every NIC
-	sacIPSetRetries = 10 // per-NIC retry verifying `i <n>...` took
+	sacEnumRetries  = 60 // polls SAC `i` until Windows PnP lists every NIC
+	sacIPSetRetries = 10 // per-NIC retry until SAC `i` reflects the assigned IP
 )
 
 // runPostCloneSetup auto-executes the post-clone fixup inside the cloned
