@@ -69,9 +69,7 @@ type fakeRuntime struct {
 	netResizeCalls []netResizeCall
 	netResizeErr   error
 
-	// onSnapshotSave fires at the start of SnapshotSave; tests use it to
-	// capture caller-side state (e.g. pod annotations) at the moment Save
-	// is invoked, to assert ordering against earlier mutations.
+	// onSnapshotSave, when set, fires at SnapshotSave entry — for ordering tests.
 	onSnapshotSave func()
 
 	// inspectSeq, when non-empty, is consumed in order by Inspect before

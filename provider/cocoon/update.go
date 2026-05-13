@@ -58,15 +58,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 // hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
 // so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
-//
-// VMID is cleared before Save+Push so an operator scan never sees
-// epoch-manifest + pod-VMID together (would falsely flip CR to Active).
+// VMID clears pre-Save so operator never sees manifest+VMID together.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
-		logger.Warnf(ctx, "clear runtime annotations pre-hibernate %s/%s: %v", pod.Namespace, pod.Name, err)
+		logger.Warnf(ctx, "clear pre-hibernate annotations %s/%s: %v", pod.Namespace, pod.Name, err)
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
@@ -105,8 +103,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	// Re-clear in case the pre-Save patch failed; bounds the race window
-	// to (push-done → remove-done) instead of the whole hibernate.
+	// Safety-net for the rare pre-Save patch failure.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
 	}
