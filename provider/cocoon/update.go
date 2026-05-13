@@ -92,7 +92,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 	}
+	preCleared := true
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		preCleared = false
 		logger.Warnf(ctx, "clear pre-remove annotations %s/%s: %v", pod.Namespace, pod.Name, err)
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
@@ -107,9 +109,11 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	// Safety-net for the rare pre-remove patch failure.
-	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
-		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
+	if !preCleared {
+		// VM is gone; reconcileStaleHibernate is the last fallback if this also fails.
+		if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+			logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
+		}
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")

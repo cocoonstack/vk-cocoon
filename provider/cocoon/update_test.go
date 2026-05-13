@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/probes"
@@ -117,19 +119,26 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 	}
 }
 
-func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
-	rt := &fakeRuntime{}
+// newHibernateFixture builds a Provider+pod pre-loaded with VMID/IP
+// annotations, ready for hibernate-flow assertions.
+func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
+	t.Helper()
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
-
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSLinux),
 	})
-	pod.Annotations[meta.AnnotationVMID] = "vmid-pre"
-	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+	pod.Annotations[meta.AnnotationVMID] = vmID
+	pod.Annotations[meta.AnnotationIP] = ip
+	return p, pod
+}
+
+func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
+	rt := &fakeRuntime{}
+	p, pod := newHibernateFixture(t, rt, "vmid-pre", "10.0.0.7")
 
 	var atRemove map[string]string
 	rt.onRemove = func() {
@@ -158,17 +167,7 @@ func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
 func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 	rmErr := errors.New("remove boom")
 	rt := &fakeRuntime{removeErr: rmErr}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSLinux),
-	})
-	pod.Annotations[meta.AnnotationVMID] = "vmid-live"
-	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
 
 	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
 	err := p.hibernate(t.Context(), pod, v)
@@ -185,17 +184,7 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 
 func TestHibernateKeepsVMIDOnSaveFailure(t *testing.T) {
 	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSLinux),
-	})
-	pod.Annotations[meta.AnnotationVMID] = "vmid-live"
-	pod.Annotations[meta.AnnotationIP] = "10.0.0.7"
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
 
 	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
 	if err := p.hibernate(t.Context(), pod, v); err == nil {
