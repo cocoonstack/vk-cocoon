@@ -35,13 +35,8 @@ const (
 	postCloneAgentBudget   = 180 * time.Second
 	postCloneRetryInterval = 3 * time.Second
 
-	// sacEnumRetries bounds how long applyWindowsStaticIP waits for
-	// SAC's net enum to surface every NIC after Windows finishes
-	// PnP-binding the synthetic adapters.
-	sacEnumRetries = 60
-	// sacIPSetRetries bounds the per-NIC retry loop verifying that
-	// `i <num> ...` actually took on the guest side.
-	sacIPSetRetries = 10
+	sacEnumRetries  = 60 // waits for Windows PnP to surface every NIC
+	sacIPSetRetries = 10 // per-NIC retry verifying `i <n>...` took
 )
 
 // runPostCloneSetup auto-executes the post-clone fixup inside the cloned
@@ -140,8 +135,6 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
-// markPostCloneState writes the state annotation locally and patches it
-// to the apiserver. Best-effort: a failed patch logs and continues.
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
 	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
 }
@@ -161,10 +154,8 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, annotationPostCloneHint)
 }
 
-// setPodAnnotation writes a single annotation locally under p.mu — to
-// serialize with GetPod's DeepCopy under RLock — and patches it to the
-// apiserver. Patch failures log and are ignored; callers treat the write
-// as best-effort.
+// setPodAnnotation writes one annotation locally (under p.mu to serialize
+// with GetPod's DeepCopy) and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
 	if pod.Annotations == nil {
@@ -230,7 +221,6 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
 	sockPath := fmt.Sprintf("%s/run/%s/%s/console.sock", provider.CocoonRootDir(), runDirCH, v.ID)
 
-	// Open a persistent SAC session — all commands share one connection.
 	sess, err := p.GuestSAC.Dial(ctx, sockPath)
 	if err != nil {
 		logger.Errorf(ctx, err, "sac dial %s/%s", pod.Namespace, pod.Name)

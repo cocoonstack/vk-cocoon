@@ -40,7 +40,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// defaultNodeName and related constants configure CLI flag defaults.
 const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"

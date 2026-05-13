@@ -64,9 +64,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(ctx, pod, v)
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
-	// Track before spawning goroutines: both applyWindowsStaticIP and
-	// runPostCloneSetup invoke markLifecycleState, which reads
-	// p.pods[key] for the tracked-gen invariant — staging would break.
+	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
 	p.trackPod(pod, v)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {

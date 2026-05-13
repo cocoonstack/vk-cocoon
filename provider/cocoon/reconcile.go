@@ -113,10 +113,8 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 	return list.Items
 }
 
-// reconcileStaleHibernate clears stale VMID/IP annotations from a
-// hibernated pod whose VM was already removed. This happens when the
-// annotation patch in hibernate() failed — the pod kept stale runtime
-// annotations. We patch them away so wake can proceed normally.
+// reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
+// VM is already gone, so wake can start clean.
 func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
 	logger := log.WithFunc("Provider.reconcileStaleHibernate")
 	logger.Infof(ctx, "pod %s/%s is hibernated with stale VMID, clearing annotations", pod.Namespace, pod.Name)
