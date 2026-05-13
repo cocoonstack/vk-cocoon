@@ -19,7 +19,7 @@ func (p *Provider) removeSnapshotDetached(funcLabel, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
 	defer cancel()
 	if err := p.Runtime.SnapshotRemoveIfExists(ctx, name); err != nil {
-		log.WithFunc(funcLabel).Warnf(ctx, "remove snapshot %s: %v", name, err)
+		log.WithFunc(funcLabel).Errorf(ctx, err, "remove snapshot %s", name)
 	}
 }
 

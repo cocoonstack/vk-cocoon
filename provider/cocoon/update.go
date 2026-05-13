@@ -95,7 +95,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	preCleared := true
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		preCleared = false
-		logger.Warnf(ctx, "clear pre-remove annotations %s/%s: %v", pod.Namespace, pod.Name, err)
+		logger.Errorf(ctx, err, "clear pre-remove annotations %s/%s", pod.Namespace, pod.Name)
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {

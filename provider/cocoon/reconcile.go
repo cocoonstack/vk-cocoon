@@ -54,12 +54,12 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		return err
 	}
 
-	vmByID := make(map[string]int, len(vms))
-	vmByName := make(map[string]int, len(vms))
+	vmByID := make(map[string]*vm.VM, len(vms))
+	vmByName := make(map[string]*vm.VM, len(vms))
 	for i := range vms {
-		vmByID[vms[i].ID] = i
+		vmByID[vms[i].ID] = &vms[i]
 		if vms[i].Name != "" {
-			vmByName[vms[i].Name] = i
+			vmByName[vms[i].Name] = &vms[i]
 		}
 	}
 	matched := make(map[string]bool, len(vms))
@@ -68,14 +68,14 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		pod := &pods.Items[i]
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" {
-			if v := p.adoptByVMName(ctx, pod, vms, vmByName); v != nil {
+			if v := p.adoptByVMName(ctx, pod, vmByName); v != nil {
 				matched[v.ID] = true
 				continue
 			}
 			p.reconcileNoVMID(ctx, pod)
 			continue
 		}
-		idx, ok := vmByID[runtime.VMID]
+		v, ok := vmByID[runtime.VMID]
 		if !ok {
 			// Hibernated pod with stale VMID — the VM was removed during
 			// hibernate but the annotation patch failed. Clear the stale
@@ -88,8 +88,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 				pod.Namespace, pod.Name, runtime.VMID)
 			continue
 		}
-		v := vms[idx]
-		p.trackPod(pod, &v)
+		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
 		p.startProbeIfEnabled(pod)
@@ -114,10 +113,8 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 	return list.Items
 }
 
-// reconcileStaleHibernate clears stale VMID/IP annotations from a
-// hibernated pod whose VM was already removed. This happens when the
-// annotation patch in hibernate() failed — the pod kept stale runtime
-// annotations. We patch them away so wake can proceed normally.
+// reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
+// VM is already gone, so wake can start clean.
 func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
 	logger := log.WithFunc("Provider.reconcileStaleHibernate")
 	logger.Infof(ctx, "pod %s/%s is hibernated with stale VMID, clearing annotations", pod.Namespace, pod.Name)
@@ -131,27 +128,24 @@ func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod)
 // adoptByVMName re-adopts a live VM whose matching pod has no VMID
 // annotation, re-runs the runtime-annotation write, and starts probes —
 // the same sequence CreatePod runs on its adopt branch.
-func (p *Provider) adoptByVMName(
-	ctx context.Context, pod *corev1.Pod, vms []vm.VM, idx map[string]int,
-) *vm.VM {
+func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[string]*vm.VM) *vm.VM {
 	logger := log.WithFunc("Provider.adoptByVMName")
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
 		return nil
 	}
-	i, ok := idx[spec.VMName]
+	v, ok := idx[spec.VMName]
 	if !ok {
 		return nil
 	}
-	v := vms[i]
 	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing)",
 		v.Name, pod.Namespace, pod.Name)
-	p.applyRuntime(ctx, pod, &v)
-	p.trackPod(pod, &v)
+	p.applyRuntime(ctx, pod, v)
+	p.trackPod(pod, v)
 	p.seedLifecycleIntentFromPod(pod)
 	p.startProbeIfEnabled(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
-	return &v
+	return v
 }
 
 // reconcileNoVMID handles a pod with no VMID during startup reconcile.

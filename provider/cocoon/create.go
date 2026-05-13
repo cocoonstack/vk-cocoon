@@ -64,6 +64,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(ctx, pod, v)
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
+	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
+	p.trackPod(pod, v)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {
 			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
@@ -74,7 +76,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
 		})
 	}
-	p.trackPod(pod, v)
 	// First probe is synchronous so refreshStatus below sees its result.
 	p.startProbeIfEnabled(pod)
 
@@ -374,15 +375,18 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
 	}
+	var lastErr error
 	for range 3 {
-		if err := p.patchPodAnnotations(ctx, namespace, name, annos); err == nil {
+		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		if err == nil {
 			return
 		}
+		lastErr = err
 		if !commonk8s.SleepCtx(ctx, 500*time.Millisecond) {
 			return
 		}
 	}
-	logger.Warnf(ctx, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
+	logger.Errorf(ctx, lastErr, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

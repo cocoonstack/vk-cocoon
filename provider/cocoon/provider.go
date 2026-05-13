@@ -225,7 +225,6 @@ func (p *Provider) pushInitialStatus(ctx context.Context) {
 	}
 }
 
-// notify pushes a pod status update through the kubelet callback.
 func (p *Provider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
 	hook := p.notifyHook
@@ -235,7 +234,6 @@ func (p *Provider) notify(pod *corev1.Pod) {
 	}
 }
 
-// trackPod stores the pod and its VM in the in-memory tables.
 func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -268,14 +266,11 @@ func (p *Provider) gcStaleRestarts() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cutoff := time.Now().Add(-restartCooldown * 2)
-	for id, t := range p.lastRestart {
-		if t.Before(cutoff) {
-			delete(p.lastRestart, id)
-		}
-	}
+	maps.DeleteFunc(p.lastRestart, func(_ string, t time.Time) bool {
+		return t.Before(cutoff)
+	})
 }
 
-// forgetPod drops the pod, VM, and probe from the in-memory tables.
 func (p *Provider) forgetPod(namespace, name string) {
 	key := meta.PodKey(namespace, name)
 	p.mu.Lock()
@@ -289,7 +284,6 @@ func (p *Provider) forgetPod(namespace, name string) {
 	}
 }
 
-// vmForPod returns the VM associated with a pod, or nil.
 func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -447,8 +441,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		// Still transient after inline retries. Spawn a deferred recheck so
 		// a genuinely gone VM does not leave the pod stuck indefinitely —
 		// cocoon does not re-emit DELETED, and probes only ping IPs.
-		logger.Warnf(ctx, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s: %v",
-			trackedID, affectedPod.Namespace, affectedPod.Name, err)
+		logger.Errorf(ctx, err, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
 		metrics.VMInspectTransientFailTotal.Inc()
 		p.scheduleDeferredRecheck(trackedID)
 

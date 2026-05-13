@@ -34,6 +34,9 @@ const (
 
 	postCloneAgentBudget   = 180 * time.Second
 	postCloneRetryInterval = 3 * time.Second
+
+	sacEnumRetries  = 60 // polls SAC `i` until Windows PnP lists every NIC
+	sacIPSetRetries = 10 // per-NIC retry until SAC `i` reflects the assigned IP
 )
 
 // runPostCloneSetup auto-executes the post-clone fixup inside the cloned
@@ -132,8 +135,6 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
-// markPostCloneState writes the state annotation locally and patches it
-// to the apiserver. Best-effort: a failed patch logs and continues.
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
 	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
 }
@@ -153,10 +154,8 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, annotationPostCloneHint)
 }
 
-// setPodAnnotation writes a single annotation locally under p.mu — to
-// serialize with GetPod's DeepCopy under RLock — and patches it to the
-// apiserver. Patch failures log and are ignored; callers treat the write
-// as best-effort.
+// setPodAnnotation writes one annotation locally (under p.mu to serialize
+// with GetPod's DeepCopy) and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
 	if pod.Annotations == nil {
@@ -165,8 +164,8 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	pod.Annotations[key] = val
 	p.mu.Unlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{key: val}); err != nil {
-		log.WithFunc("Provider.setPodAnnotation").Warnf(ctx,
-			"patch annotation %s for %s/%s: %v", key, pod.Namespace, pod.Name, err)
+		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
+			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}
 }
 
@@ -222,7 +221,6 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
 	sockPath := fmt.Sprintf("%s/run/%s/%s/console.sock", provider.CocoonRootDir(), runDirCH, v.ID)
 
-	// Open a persistent SAC session — all commands share one connection.
 	sess, err := p.GuestSAC.Dial(ctx, sockPath)
 	if err != nil {
 		logger.Errorf(ctx, err, "sac dial %s/%s", pod.Namespace, pod.Name)
@@ -233,7 +231,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	// Query net numbers; retry until all NICs are enumerated.
 	var out bytes.Buffer
 	var netNums []int
-	for attempt := range 60 {
+	for attempt := range sacEnumRetries {
 		out.Reset()
 		if queryErr := sess.Run(ctx, []string{"i"}, &out); queryErr != nil {
 			logger.Debugf(ctx, "sac query: %v", queryErr)
@@ -243,7 +241,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 				break
 			}
 		}
-		if attempt == 59 {
+		if attempt == sacEnumRetries-1 {
 			logger.Warnf(ctx, "sac: found %d net entries but need %d for %s/%s after retries",
 				len(netNums), len(v.NetworkConfigs), pod.Namespace, pod.Name)
 			return
@@ -262,7 +260,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			"i", strconv.Itoa(netNums[i]),
 			nc.Network.IP, prefixToSubnet(nc.Network.Prefix), nc.Network.Gateway,
 		}
-		for attempt := range 10 {
+		for attempt := range sacIPSetRetries {
 			if setErr := sess.Run(ctx, cmd, nil); setErr != nil {
 				logger.Errorf(ctx, setErr, "sac set ip net %d for %s/%s", netNums[i], pod.Namespace, pod.Name)
 				return
@@ -273,7 +271,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			} else if sac.NetHasIP(out.String(), netNums[i], nc.Network.IP) {
 				break
 			}
-			if attempt == 9 {
+			if attempt == sacIPSetRetries-1 {
 				logger.Warnf(ctx, "sac: net %d did not accept ip %s after retries for %s/%s",
 					netNums[i], nc.Network.IP, pod.Namespace, pod.Name)
 				return
