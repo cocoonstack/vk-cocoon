@@ -187,14 +187,17 @@ func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 }
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the
-// local snapshot live for the next wake.
+// local snapshot live for the next wake. Detached ctx so Close cancel
+// can't abort the rm mid-flight.
 func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
 	if sourceName == vmName {
 		return
 	}
 	p.goBackground(func() {
-		if err := p.Runtime.SnapshotRemoveIfExists(p.lifecycleCtx, sourceName); err != nil {
-			log.WithFunc("Provider.cleanupWakeImport").Warnf(p.lifecycleCtx, "remove hibernate-import %s: %v", sourceName, err)
+		ctx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
+		defer cancel()
+		if err := p.Runtime.SnapshotRemoveIfExists(ctx, sourceName); err != nil {
+			log.WithFunc("Provider.cleanupWakeImport").Warnf(ctx, "remove hibernate-import %s: %v", sourceName, err)
 		}
 	})
 }
