@@ -58,6 +58,9 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 // hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
 // so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
+// VMID clears between Push and Remove so the operator's manifest+VMID
+// race window collapses to one patch RTT; failures before that point
+// keep VMID intact so the pod stays recoverable.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
@@ -89,20 +92,28 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 	}
+	preCleared := true
+	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		preCleared = false
+		logger.Warnf(ctx, "clear pre-remove annotations %s/%s: %v", pod.Namespace, pod.Name, err)
+	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
 		if p.Registry != nil {
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
+		// VM is still live; restore VMID/IP so the pod can retry hibernate.
+		p.applyRuntime(ctx, pod, v)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
 		return err
 	}
-	// VM already removed: retrying hibernate would hit "VM not found".
-	// Startup reconcile recovers via VMID + hibernate annotation.
-	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
-		logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
+	if !preCleared {
+		// VM is gone; reconcileStaleHibernate is the last fallback if this also fails.
+		if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+			logger.Errorf(ctx, err, "clear hibernate annotations %s/%s (VM already removed)", pod.Namespace, pod.Name)
+		}
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")

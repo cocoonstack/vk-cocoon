@@ -69,6 +69,13 @@ type fakeRuntime struct {
 	netResizeCalls []netResizeCall
 	netResizeErr   error
 
+	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
+	onRemove func()
+	// removeErr, when set, makes Remove fail with this error.
+	removeErr error
+	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
+	snapshotSaveErr error
+
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
 	// of transient failures followed by a definitive result.
@@ -127,11 +134,20 @@ func (f *fakeRuntime) Inspect(_ context.Context, _ string) (*vm.VM, error) {
 func (f *fakeRuntime) List(_ context.Context) ([]vm.VM, error) { return f.listVMs, nil }
 
 func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
+	if f.onRemove != nil {
+		f.onRemove()
+	}
+	if f.removeErr != nil {
+		return f.removeErr
+	}
 	f.removedID = vmID
 	return nil
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+	if f.snapshotSaveErr != nil {
+		return f.snapshotSaveErr
+	}
 	f.savedSnapshot.name = name
 	f.savedSnapshot.vmID = vmID
 	f.snapshotSaveCount++
