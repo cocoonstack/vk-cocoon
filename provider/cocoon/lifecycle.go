@@ -32,9 +32,7 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
 	if tracked != nil {
-		if g := meta.ReadCocoonSetGeneration(tracked); g > gen {
-			gen = g
-		}
+		gen = max(gen, meta.ReadCocoonSetGeneration(tracked))
 	}
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
