@@ -104,6 +104,39 @@ func TestBuildPostCloneCommands(t *testing.T) {
 	})
 }
 
+func TestPostCloneKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec meta.VMSpec
+		want string
+	}{
+		{"windows is windows", meta.VMSpec{OS: "windows"}, postCloneKindWindows},
+		{"linux+fc is linux_fc", meta.VMSpec{Backend: vm.BackendFirecracker}, postCloneKindLinuxFC},
+		{"linux+ch is linux_static", meta.VMSpec{Backend: "cloud-hypervisor"}, postCloneKindLinuxStatic},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postCloneKind(tc.spec); got != tc.want {
+				t.Errorf("postCloneKind = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	t.Parallel()
+	if got := truncate("abc", 10); got != "abc" {
+		t.Errorf("short string mutated: %q", got)
+	}
+	if got := truncate("abcdef", 3); got != "abc" {
+		t.Errorf("truncate failed: %q", got)
+	}
+	if got := truncate("", 10); got != "" {
+		t.Errorf("empty mutated: %q", got)
+	}
+}
+
 func TestPlanPostClone(t *testing.T) {
 	t.Parallel()
 
