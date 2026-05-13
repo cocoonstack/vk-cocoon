@@ -10,6 +10,26 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+func TestUseOnDemandClone(t *testing.T) {
+	cases := []struct {
+		name string
+		spec meta.VMSpec
+		want bool
+	}{
+		{"linux", meta.VMSpec{OS: string(cocoonv1.OSLinux)}, true},
+		{"windows off", meta.VMSpec{OS: string(cocoonv1.OSWindows)}, false},
+		{"android counts as non-windows", meta.VMSpec{OS: string(cocoonv1.OSAndroid)}, true},
+		{"empty OS defaults to on", meta.VMSpec{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := useOnDemandClone(tc.spec); got != tc.want {
+				t.Errorf("useOnDemandClone(%+v) = %v, want %v", tc.spec, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestShouldDropNICBeforeHibernate(t *testing.T) {
 	cases := []struct {
 		name string

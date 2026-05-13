@@ -129,7 +129,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		Network:    spec.Network,
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   true,
+		OnDemand:   useOnDemandClone(spec),
 	}
 	if dropNIC {
 		opts.NICs = ptr.To(1)
