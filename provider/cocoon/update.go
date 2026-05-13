@@ -33,18 +33,14 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	switch {
 	case wantHibernate && v != nil:
 		if err := p.hibernate(ctx, pod, v); err != nil {
-			metrics.PodLifecycleTotal.WithLabelValues("update", "hibernate_failed").Inc()
-			logger.Errorf(ctx, err, "hibernate %s/%s", pod.Namespace, pod.Name)
 			return err
 		}
-		metrics.PodLifecycleTotal.WithLabelValues("update", "hibernated").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("update", "ok").Inc()
 	case !wantHibernate && v == nil:
 		if err := p.wake(ctx, pod); err != nil {
-			metrics.PodLifecycleTotal.WithLabelValues("update", "wake_failed").Inc()
-			logger.Errorf(ctx, err, "wake %s/%s", pod.Namespace, pod.Name)
 			return err
 		}
-		metrics.PodLifecycleTotal.WithLabelValues("update", "woken").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("update", "ok").Inc()
 	default:
 		// Skip refresh+notify so we don't echo the incoming pod back.
 		p.republishLifecycleOnGenerationBump(ctx, pod)
@@ -65,32 +61,41 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
-	if shouldDropNICBeforeHibernate(spec) {
+	dropNIC := shouldDropNICBeforeHibernate(spec)
+	if dropNIC {
 		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
+			metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
 			err = fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
-			p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+			p.failOp(ctx, pod, "HibernateNetResizeFailed", "update", err)
 			return err
 		}
+		metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
 	}
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
+		metrics.HibernateTotal.WithLabelValues("snapshot", "failed").Inc()
+		p.rollbackHibernateNIC(ctx, v, dropNIC)
 		err = fmt.Errorf("snapshot save %s: %w", v.Name, err)
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		p.failOp(ctx, pod, "HibernateSnapshotFailed", "update", err)
 		return err
 	}
 	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
+	metrics.HibernateTotal.WithLabelValues("snapshot", "ok").Inc()
 	if p.Pusher != nil {
 		pushStart := time.Now()
 		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
+			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
+			p.rollbackHibernateNIC(ctx, v, dropNIC)
 			err = fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
-			p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+			p.failOp(ctx, pod, "HibernatePushFailed", "update", err)
 			return err
 		}
 		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
+		metrics.HibernateTotal.WithLabelValues("push", "ok").Inc()
 	}
 	preCleared := true
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
@@ -98,6 +103,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		logger.Errorf(ctx, err, "clear pre-remove annotations %s/%s", pod.Namespace, pod.Name)
 	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+		metrics.HibernateTotal.WithLabelValues("remove", "failed").Inc()
 		if p.Registry != nil {
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
@@ -106,9 +112,10 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		// VM is still live; restore VMID/IP so the pod can retry hibernate.
 		p.applyRuntime(ctx, pod, v)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
 		return err
 	}
+	metrics.HibernateTotal.WithLabelValues("remove", "ok").Inc()
 	if !preCleared {
 		// VM is gone; reconcileStaleHibernate is the last fallback if this also fails.
 		if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
@@ -117,7 +124,19 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
+	p.emitNormalf(pod, "Hibernated", "snapshot pushed to epoch")
 	return nil
+}
+
+// rollbackHibernateNIC re-adds the NIC dropped pre-snapshot so the VM keeps
+// serving traffic after a hibernate failure.
+func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
+	if !dropped {
+		return
+	}
+	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
+		log.WithFunc("Provider.rollbackHibernateNIC").Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
+	}
 }
 
 // wake restores the VM from the hibernation snapshot. CH+Windows clones
@@ -130,7 +149,8 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 	sourceName, err := p.resolveWakeSource(ctx, spec.VMName)
 	if err != nil {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+		p.failOp(ctx, pod, "WakePullFailed", "update", err)
 		return err
 	}
 	dropNIC := shouldDropNICBeforeHibernate(spec)
@@ -148,11 +168,13 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	cloneStart := time.Now()
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, sourceName, err)
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
+		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
 		return err
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
+	metrics.WakeTotal.WithLabelValues("ok").Inc()
 	p.applyRuntime(ctx, pod, v)
 	p.cleanupWakeImport(spec.VMName, sourceName)
 	if dropNIC {
@@ -164,6 +186,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	}
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
+	p.emitNormalf(pod, "Woken", "cloned from %s", sourceName)
 	return nil
 }
 

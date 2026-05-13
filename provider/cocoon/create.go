@@ -49,8 +49,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
-		metrics.PodLifecycleTotal.WithLabelValues("create", "failed").Inc()
+		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
 		return err
 	}
 	metrics.VMBootDuration.WithLabelValues(spec.Mode, spec.Backend).Observe(time.Since(bootStart).Seconds())

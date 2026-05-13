@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/record"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -92,6 +93,7 @@ type Provider struct {
 	GuestRDP    guest.Executor
 	GuestSAC    guest.Dialer
 	Probes      *probes.Manager
+	Recorder    record.EventRecorder
 
 	// runtime state
 	startTime time.Time
