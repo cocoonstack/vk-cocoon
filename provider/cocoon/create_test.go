@@ -65,6 +65,9 @@ type fakeRuntime struct {
 	imagesPresent     map[string]bool // names that Image() reports as cached
 	imageInspectCalls []string
 
+	netResizeCalls []netResizeCall
+	netResizeErr   error
+
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
 	// of transient failures followed by a definitive result.
@@ -153,7 +156,7 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 			return snapshot, nil
 		}
 	}
-	return nil, errors.New("not found")
+	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
 }
 
 func (f *fakeRuntime) SnapshotImport(_ context.Context, _ vm.ImportOptions) (io.WriteCloser, func() error, error) {
@@ -185,6 +188,16 @@ func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (i
 }
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+
+type netResizeCall struct {
+	vmID   string
+	target int
+}
+
+func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
+	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
+	return f.netResizeErr
+}
 
 type fakeExecCall struct {
 	vmID  string
@@ -302,6 +315,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 		t.Errorf("clone Pull = false, want true (base image should be auto-pulled)")
 	}
 
+	p.Close()
 	runtime := meta.ParseVMRuntime(pod)
 	if runtime.VMID == "" {
 		t.Errorf("VMID annotation was not written back")
@@ -360,11 +374,6 @@ func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
 }
 
 func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
-	// A cached fork snapshot from a previous sub-agent creation must
-	// short-circuit the save; `snapshot save` pauses the source VM
-	// and costs ~2s for a 1GiB guest, so hot-scale would be 4-5× slower
-	// if we resnapshotted for every sub-agent. Fork invalidation is the
-	// main VM's responsibility (see bringUpVM for mode=run).
 	rt := &fakeRuntime{
 		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},
 		snapshots: map[string]*vm.Snapshot{
@@ -828,7 +837,6 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestEnsureRunImageFallback locks in the empty / URL / no-Puller branches.
 func TestEnsureRunImageFallback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -865,10 +873,6 @@ func TestEnsureRunImageFallback(t *testing.T) {
 	}
 }
 
-// TestEnsureRunImageDispatch covers the manifest-classification branches:
-// cloud-image artifacts route through Puller (skipping cocoon image pull),
-// snapshot artifacts hard-error, and classify / fetch failures fall back to
-// Runtime.EnsureImage.
 func TestEnsureRunImageDispatch(t *testing.T) {
 	const repo = "ubuntu"
 

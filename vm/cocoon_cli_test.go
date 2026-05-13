@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"k8s.io/utils/ptr"
 )
 
 func TestIsCocoonNotFound(t *testing.T) {
@@ -27,6 +29,30 @@ func TestIsCocoonNotFound(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isCocoonNotFound(tc.err); got != tc.want {
 				t.Fatalf("isCocoonNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsCocoonSnapshotNotFound(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "snapshot not found", err: errors.New("exit status 1 (stderr: snapshot not found)"), want: true},
+		{name: "no such snapshot", err: errors.New("exit status 2 (stderr: no such snapshot)"), want: true},
+		{name: "case-insensitive Snapshot Not Found", err: errors.New("Snapshot Not Found"), want: true},
+		{name: "vm not found must not match", err: errors.New("vm not found"), want: false},
+		{name: "config not found must not match", err: errors.New("config file not found"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCocoonSnapshotNotFound(tc.err); got != tc.want {
+				t.Fatalf("isCocoonSnapshotNotFound(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -94,6 +120,26 @@ func TestBuildCloneArgs(t *testing.T) {
 			name: "from-dir emits --pull only once when caller also set Pull",
 			opts: CloneOptions{To: "vm-j", FromDir: "/snaps/qux", Pull: true},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-j", "--pull", "--from-dir", "/snaps/qux"},
+		},
+		{
+			name: "nics override appended before positional snapshot",
+			opts: CloneOptions{From: "snap-a", To: "vm-k", NICs: ptr.To(1)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-k", "--nics", "1", "snap-a"},
+		},
+		{
+			name: "nics zero override emits --nics 0",
+			opts: CloneOptions{From: "snap-a", To: "vm-l", NICs: ptr.To(0)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-l", "--nics", "0", "snap-a"},
+		},
+		{
+			name: "nics combines with on-demand on CH",
+			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", OnDemand: true, NICs: ptr.To(2)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--on-demand", "--nics", "2", "snap-a"},
+		},
+		{
+			name: "firecracker clone strips --nics",
+			opts: CloneOptions{From: "snap-a", To: "vm-n", Backend: "firecracker", NICs: ptr.To(1)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-n", "snap-a"},
 		},
 	}
 	for _, tc := range cases {

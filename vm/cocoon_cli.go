@@ -24,13 +24,14 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 )
 
-// cocoon CLI binary path and backend name constants.
 const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
 
 	// BackendFirecracker matches cocoonv1.BackendFirecracker. Exported so
 	// provider/cocoon can reuse it without importing CRD types.
 	BackendFirecracker = "firecracker"
+
+	netResizeUnsupportedMarker = "backend does not support net resize"
 )
 
 var _ Runtime = (*CocoonCLI)(nil)
@@ -248,10 +249,13 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	return nil
 }
 
-// Snapshot runs `cocoon snapshot inspect`.
+// Snapshot runs `cocoon snapshot inspect`; "snapshot not found" maps to ErrSnapshotNotFound.
 func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error) {
 	out, err := c.runJSON(ctx, "snapshot", "inspect", name)
 	if err != nil {
+		if isCocoonSnapshotNotFound(err) {
+			return nil, fmt.Errorf("cocoon snapshot inspect %s: %w", name, ErrSnapshotNotFound)
+		}
 		return nil, fmt.Errorf("cocoon snapshot inspect %s: %w", name, err)
 	}
 	return parseSnapshotJSON(out)
@@ -314,10 +318,11 @@ func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) err
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(string(out), "snapshot not found") {
+	wrapped := cocoonCmdError("snapshot rm", name, err, out)
+	if isCocoonSnapshotNotFound(wrapped) {
 		return nil
 	}
-	return cocoonCmdError("snapshot rm", name, err, out)
+	return wrapped
 }
 
 // Start runs `cocoon vm start`.
@@ -325,6 +330,18 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	out, err := c.command(ctx, "vm", "start", vmID).CombinedOutput()
 	if err != nil {
 		return cocoonCmdError("vm start", vmID, err, out)
+	}
+	return nil
+}
+
+// NetResize runs `cocoon vm net --nics N`.
+func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
+	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
+	if err != nil {
+		if isNetResizeUnsupported(out) {
+			return cocoonCmdError("vm net", vmID, ErrNetResizeUnsupported, out)
+		}
+		return cocoonCmdError("vm net", vmID, err, out)
 	}
 	return nil
 }
@@ -389,6 +406,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 		// UFFD lazy memory restore is CH-only; skipping on FC keeps the
 		// same CloneOptions usable for both backends.
 		args = append(args, "--on-demand")
+	}
+	if opts.NICs != nil && opts.Backend != BackendFirecracker {
+		args = append(args, "--nics", strconv.Itoa(*opts.NICs))
 	}
 	if opts.FromDir != "" {
 		return append(args, "--from-dir", opts.FromDir)
@@ -514,6 +534,19 @@ func isCocoonNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "vm not found") ||
 		strings.Contains(s, "no such vm")
+}
+
+func isCocoonSnapshotNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "snapshot not found") ||
+		strings.Contains(s, "no such snapshot")
+}
+
+func isNetResizeUnsupported(out []byte) bool {
+	return strings.Contains(strings.ToLower(string(out)), netResizeUnsupportedMarker)
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.
