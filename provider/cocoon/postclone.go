@@ -38,6 +38,7 @@ const (
 	postCloneAgentBudget    = 180 * time.Second
 	postCloneRetryInterval  = 3 * time.Second
 	postCloneErrorsMaxBytes = 4096
+	postCloneEventMaxBytes  = 512
 
 	postCloneKindWindows     = "windows"
 	postCloneKindLinuxStatic = "linux_static"
@@ -122,10 +123,13 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, attemptErrs)
-	// Don't touch pod_lifecycle_total — postclone is async to the parent op
-	// (Create/Update returned ok long ago); postclone_total carries the failure.
-	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %v", op, joinedErr)
-	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, joinedErr.Error())
+	// Async to the parent op (Create/Update returned ok long ago) — postclone
+	// failure stays on postclone_total + the hint annotation, not on
+	// pod_lifecycle_total. Trim joinedErr aggressively for Event/annotation
+	// payloads; the full chain is in post-clone-errors (capped at 4 KiB).
+	joinedMsg := joinedErr.Error()
+	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %s", op, truncate(joinedMsg, postCloneEventMaxBytes))
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, postCloneErrorsMaxBytes))
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
