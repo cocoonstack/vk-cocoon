@@ -279,6 +279,15 @@ func isCloudimgVM(vmID string) bool {
 	return err == nil
 }
 
+// willRunSAC mirrors applyWindowsStaticIP's early-return guard so CreatePod
+// can defer the lifecycle=Ready transition until SAC actually finishes.
+func (p *Provider) willRunSAC(spec meta.VMSpec, v *vm.VM) bool {
+	if spec.OS != string(cocoonv1.OSWindows) || p.GuestSAC == nil {
+		return false
+	}
+	return slices.ContainsFunc(v.NetworkConfigs, isStaticNIC)
+}
+
 // applyWindowsStaticIP uses SAC to set static IPs on Windows VMs.
 // Called for both run and clone when the network uses IPAM. ran=true only
 // when SAC actually executed; the skipped cases (no SAC client, no NICs,

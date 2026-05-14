@@ -65,6 +65,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	cloned := isClonedBoot(pod, spec)
 	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
 	p.trackPod(pod, v)
+	willRunSAC := p.willRunSAC(spec, v)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {
 			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
@@ -81,6 +82,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			}
 			if ran {
 				metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
+				// Non-clone Ready transition was deferred to here so watchers
+				// don't see a transient Ready while SAC is still running.
+				if !cloned && !p.lifecycleAlreadyFailed(pod) {
+					p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
+				}
 			}
 		})
 	}
@@ -97,8 +103,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
-	if !cloned && !p.lifecycleAlreadyFailed(pod) {
-		// Cloned boots stay `creating` until runPostCloneSetup finishes.
+	if !cloned && !willRunSAC && !p.lifecycleAlreadyFailed(pod) {
+		// Cloned boots stay `creating` until runPostCloneSetup finishes;
+		// Windows+static stays `creating` until applyWindowsStaticIP finishes.
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
