@@ -164,9 +164,7 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
-	// Check + write under p.mu so the read can't race a concurrent goroutine
-	// writing pod.Annotations (Go maps fatal on concurrent r/w). Don't
-	// clobber a prior failed write (e.g. applyWindowsStaticIP race).
+	// Read+write under p.mu — Go maps fatal on concurrent r/w.
 	p.mu.Lock()
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}

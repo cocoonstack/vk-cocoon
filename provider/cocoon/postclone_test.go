@@ -198,21 +198,18 @@ func TestPlanPostClone(t *testing.T) {
 	})
 }
 
-// failingSACDialer always fails on Dial — used to drive applyWindowsStaticIP
-// down its error path without setting up a real Unix-socket SAC fixture.
 type failingSACDialer struct{}
 
 func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
 	return nil, errors.New("simulated SAC dial failure")
 }
 
-// TestCreatePodWindowsRunModeSACFailureKeepsFailed pins the Codex finding:
-// the !cloned Ready write in CreatePod must not clobber a Failed state that
-// applyWindowsStaticIP's background goroutine already recorded.
 func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	rt := &fakeRuntime{
-		runVM: &vm.VM{ID: "vmid", Name: "vk-ns-win-0",
-			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}},
+		runVM: &vm.VM{
+			ID: "vmid", Name: "vk-ns-win-0",
+			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}},
+		},
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
