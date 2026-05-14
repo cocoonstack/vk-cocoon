@@ -92,8 +92,10 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
-	if !cloned {
+	if !cloned && !p.lifecycleAlreadyFailed(pod) {
 		// Cloned boots stay `creating` until runPostCloneSetup finishes.
+		// Skip when an async path (e.g. Windows applyWindowsStaticIP) already
+		// raced to Failed, so SAC failure isn't silently overwritten by Ready.
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()

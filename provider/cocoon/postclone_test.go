@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/guest"
+	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -193,6 +196,46 @@ func TestPlanPostClone(t *testing.T) {
 			t.Errorf("Windows hint should single-quote the script body, got %q", plan.hint)
 		}
 	})
+}
+
+// failingSACDialer always fails on Dial — used to drive applyWindowsStaticIP
+// down its error path without setting up a real Unix-socket SAC fixture.
+type failingSACDialer struct{}
+
+func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
+	return nil, errors.New("simulated SAC dial failure")
+}
+
+// TestCreatePodWindowsRunModeSACFailureKeepsFailed pins the Codex finding:
+// the !cloned Ready write in CreatePod must not clobber a Failed state that
+// applyWindowsStaticIP's background goroutine already recorded.
+func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
+	rt := &fakeRuntime{
+		runVM: &vm.VM{ID: "vmid", Name: "vk-ns-win-0",
+			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}},
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.GuestSAC = failingSACDialer{}
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-win-0",
+		OS:     "windows",
+		Mode:   "run",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p.Close() // drain bgWG so the SAC goroutine completes
+
+	if got := pod.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateFailed) {
+		t.Errorf("lifecycle-state = %q, want %q (SAC Failed must not be clobbered by !cloned Ready)",
+			got, meta.LifecycleStateFailed)
+	}
+	if got := pod.Annotations[annotationPostCloneState]; got != postCloneStateFailed {
+		t.Errorf("post-clone-state = %q, want %q", got, postCloneStateFailed)
+	}
 }
 
 func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {

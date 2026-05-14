@@ -164,12 +164,23 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
-	// Don't clobber a concurrent failed write (e.g. applyWindowsStaticIP race).
-	// The lifecycle annotation has its own gate via lifecycleAlreadyFailed.
+	// Check + write under p.mu so the read can't race a concurrent goroutine
+	// writing pod.Annotations (Go maps fatal on concurrent r/w). Don't
+	// clobber a prior failed write (e.g. applyWindowsStaticIP race).
+	p.mu.Lock()
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
 	if state != postCloneStateFailed && pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
+		p.mu.Unlock()
 		return
 	}
-	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
+	pod.Annotations[annotationPostCloneState] = state
+	p.mu.Unlock()
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
+		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
+			"patch annotation %s for %s/%s", annotationPostCloneState, pod.Namespace, pod.Name)
+	}
 }
 
 // emitPostCloneHint records the manual-recovery script and the joined per-
