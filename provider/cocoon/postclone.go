@@ -35,10 +35,8 @@ const (
 	postCloneStateDone    = "done"
 	postCloneStateFailed  = "failed"
 
-	postCloneAgentBudget    = 180 * time.Second
-	postCloneRetryInterval  = 3 * time.Second
-	postCloneErrorsMaxBytes = 4096
-	postCloneEventMaxBytes  = 512
+	postCloneAgentBudget   = 180 * time.Second
+	postCloneRetryInterval = 3 * time.Second
 
 	postCloneKindWindows     = "windows"
 	postCloneKindLinuxStatic = "linux_static"
@@ -128,8 +126,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	// pod_lifecycle_total. Trim joinedErr aggressively for Event/annotation
 	// payloads; the full chain is in post-clone-errors (capped at 4 KiB).
 	joinedMsg := joinedErr.Error()
-	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %s", op, truncate(joinedMsg, postCloneEventMaxBytes))
-	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, postCloneErrorsMaxBytes))
+	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %s", op, truncate(joinedMsg, eventMessageMaxBytes))
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, lifecycleMessageMaxBytes))
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
@@ -172,8 +170,9 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	target := p.pods[meta.PodKey(pod.Namespace, pod.Name)]
+	target := p.pods[key]
 	if target == nil {
 		target = pod
 	}
@@ -186,11 +185,15 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
-	// Re-read under lock right before patching so a concurrent failed-write
-	// after our unlock takes precedence — the in-memory map is the sticky
-	// source of truth, the patch just mirrors it to the apiserver.
+	// Re-lookup the tracked pod by key — trackPod may have swapped p.pods[key]
+	// between our unlock and re-read, and the new pod's annotations are the
+	// sticky source of truth for any concurrent failed-write.
 	p.mu.RLock()
-	toPatch := target.Annotations[annotationPostCloneState]
+	fresh := p.pods[key]
+	if fresh == nil {
+		fresh = target
+	}
+	toPatch := fresh.Annotations[annotationPostCloneState]
 	p.mu.RUnlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: toPatch}); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
@@ -209,7 +212,7 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 	encoded := base64.StdEncoding.EncodeToString([]byte(plan.hint))
 	p.setPodAnnotation(ctx, pod, annotationPostCloneHint, encoded)
 	if joined := errors.Join(attemptErrs...); joined != nil {
-		p.setPodAnnotation(ctx, pod, annotationPostCloneErrors, truncate(joined.Error(), postCloneErrorsMaxBytes))
+		p.setPodAnnotation(ctx, pod, annotationPostCloneErrors, truncate(joined.Error(), lifecycleMessageMaxBytes))
 	}
 	log.WithFunc("Provider.emitPostCloneHint").Warnf(ctx,
 		"manual post-clone setup required for %s/%s; hint at annotation %s",

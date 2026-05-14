@@ -251,11 +251,11 @@ func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
 	if got == "" {
 		t.Fatal("post-clone-errors annotation not written")
 	}
-	if len(got) > postCloneErrorsMaxBytes {
-		t.Errorf("annotation length %d exceeds cap %d", len(got), postCloneErrorsMaxBytes)
+	if len(got) > lifecycleMessageMaxBytes {
+		t.Errorf("annotation length %d exceeds cap %d", len(got), lifecycleMessageMaxBytes)
 	}
-	if len(got) != postCloneErrorsMaxBytes {
-		t.Errorf("expected exact cap %d, got %d", postCloneErrorsMaxBytes, len(got))
+	if len(got) != lifecycleMessageMaxBytes {
+		t.Errorf("expected exact cap %d, got %d", lifecycleMessageMaxBytes, len(got))
 	}
 }
 
