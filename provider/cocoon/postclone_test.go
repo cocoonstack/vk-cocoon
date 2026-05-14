@@ -245,7 +245,7 @@ func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
 	for i := range 80 {
 		errs = append(errs, fmt.Errorf("attempt %d: %s", i, strings.Repeat("x", 100)))
 	}
-	p.emitPostCloneHint(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", errs)
+	p.emitPostCloneHint(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", errors.Join(errs...))
 
 	got := pod.Annotations[annotationPostCloneErrors]
 	if got == "" {

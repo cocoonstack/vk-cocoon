@@ -64,11 +64,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, v.ID, kind)
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
-	// SIGKILL to the sudo wrapper from exec.CommandContext doesn't
-	// propagate to the grandchild cocoon process, so cmd.Wait can block
-	// on its open stdout pipe. Drive each Exec in a worker and select
-	// on the deadline so we abandon stuck workers instead of inheriting
-	// their hang.
+	// sudo grandchild won't die from exec.CommandContext SIGKILL; run each
+	// Exec in a worker and abandon stuck ones on deadline.
 	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
 	defer cancel()
 
@@ -110,9 +107,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	}
 	joinedErr := errors.Join(attemptErrs...)
 	if errors.Is(joinedErr, context.Canceled) {
-		// Provider shutdown canceled lifecycleCtx; the pod will be re-
-		// reconciled on next start. Skip the failed-state + hint writes
-		// because their patch ctx is the same canceled one.
+		// Provider shutdown canceled the patch ctx too; pod re-reconciles on next start.
 		logger.Infof(ctx, "post-clone setup canceled for %s/%s after %s (provider shutdown)",
 			pod.Namespace, pod.Name, time.Since(t0).Round(time.Millisecond))
 		return
@@ -120,11 +115,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	metrics.PostCloneTotal.WithLabelValues(kind, "failed").Inc()
 	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
-	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, attemptErrs)
-	// Async to the parent op (Create/Update returned ok long ago) — postclone
-	// failure stays on postclone_total + the hint annotation, not on
-	// pod_lifecycle_total. Trim joinedErr aggressively for Event/annotation
-	// payloads; the full chain is in post-clone-errors (capped at 4 KiB).
+	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, joinedErr)
+	// Postclone failures stay on postclone_total, never on pod_lifecycle_total.
 	joinedMsg := joinedErr.Error()
 	p.emitWarningf(pod, "PostCloneExecExhausted", "%s", truncate(op+": "+joinedMsg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, lifecycleMessageMaxBytes))
@@ -179,23 +171,14 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	if target.Annotations == nil {
 		target.Annotations = map[string]string{}
 	}
+	// Sticky-Failed: don't let a later success overwrite a prior Failed.
 	if state != postCloneStateFailed && target.Annotations[annotationPostCloneState] == postCloneStateFailed {
 		p.mu.Unlock()
 		return
 	}
 	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
-	// Re-lookup the tracked pod by key — trackPod may have swapped p.pods[key]
-	// between our unlock and re-read, and the new pod's annotations are the
-	// sticky source of truth for any concurrent failed-write.
-	p.mu.RLock()
-	fresh := p.pods[key]
-	if fresh == nil {
-		fresh = target
-	}
-	toPatch := fresh.Annotations[annotationPostCloneState]
-	p.mu.RUnlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: toPatch}); err != nil {
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", annotationPostCloneState, pod.Namespace, pod.Name)
 	}
@@ -204,26 +187,26 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 // emitPostCloneHint records the manual-recovery script and the joined per-
 // attempt error chain so operators can both retry from the cocoon console
 // and inspect what each attempt actually failed on.
-func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string, attemptErrs []error) {
+func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string, joinedErr error) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(plan.hint))
 	p.setPodAnnotation(ctx, pod, annotationPostCloneHint, encoded)
-	if joined := errors.Join(attemptErrs...); joined != nil {
-		p.setPodAnnotation(ctx, pod, annotationPostCloneErrors, truncate(joined.Error(), lifecycleMessageMaxBytes))
+	if joinedErr != nil {
+		p.setPodAnnotation(ctx, pod, annotationPostCloneErrors, truncate(joinedErr.Error(), lifecycleMessageMaxBytes))
 	}
 	log.WithFunc("Provider.emitPostCloneHint").Warnf(ctx,
 		"manual post-clone setup required for %s/%s; hint at annotation %s",
 		pod.Namespace, pod.Name, annotationPostCloneHint)
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	return s[:max]
+	return s[:n]
 }
 
 // setPodAnnotation writes one annotation locally (under p.mu to serialize
