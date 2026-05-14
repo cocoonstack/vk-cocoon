@@ -172,8 +172,6 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
-	// Operate on the tracked pod so an async goroutine holding a stale
-	// pointer can't bypass the "don't clobber failed" guard.
 	p.mu.Lock()
 	target := p.pods[meta.PodKey(pod.Namespace, pod.Name)]
 	if target == nil {
@@ -188,7 +186,13 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
+	// Re-read under lock right before patching so a concurrent failed-write
+	// after our unlock takes precedence — the in-memory map is the sticky
+	// source of truth, the patch just mirrors it to the apiserver.
+	p.mu.RLock()
+	toPatch := target.Annotations[annotationPostCloneState]
+	p.mu.RUnlock()
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: toPatch}); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", annotationPostCloneState, pod.Namespace, pod.Name)
 	}
