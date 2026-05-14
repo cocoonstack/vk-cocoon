@@ -72,8 +72,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 				// Async failure: track on postclone_total, leave pod_lifecycle_total alone.
 				metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
 				p.markPostCloneState(p.lifecycleCtx, pod, postCloneStateFailed)
-				p.emitWarningf(pod, "WindowsStaticIPFailed", "create: %v", err)
-				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateFailed, err.Error())
+				errMsg := err.Error()
+				p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate("create: "+errMsg, eventMessageMaxBytes))
+				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
 				log.WithFunc("Provider.CreatePod").Errorf(p.lifecycleCtx, err,
 					"%s/%s windows static IP", pod.Namespace, pod.Name)
 				return

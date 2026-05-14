@@ -126,7 +126,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	// pod_lifecycle_total. Trim joinedErr aggressively for Event/annotation
 	// payloads; the full chain is in post-clone-errors (capped at 4 KiB).
 	joinedMsg := joinedErr.Error()
-	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %s", op, truncate(joinedMsg, eventMessageMaxBytes))
+	p.emitWarningf(pod, "PostCloneExecExhausted", "%s", truncate(op+": "+joinedMsg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, lifecycleMessageMaxBytes))
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }

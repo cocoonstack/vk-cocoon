@@ -17,12 +17,12 @@ const (
 
 // failOp records a terminal Pod failure: pod_lifecycle_total counter, Warning
 // Event, lifecycle=Failed annotation, and log. Op must be create|update|delete.
-// Wrapped subprocess output can be unbounded; trim before writing to size-
-// limited destinations so the failure signal isn't dropped by the apiserver.
+// Wrapped subprocess output can be unbounded; trim AFTER prefix concatenation
+// so the apiserver-facing caps actually hold.
 func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op string, err error) {
 	metrics.PodLifecycleTotal.WithLabelValues(op, "failed").Inc()
 	msg := err.Error()
-	p.emitWarningf(pod, reason, "%s: %s", op, truncate(msg, eventMessageMaxBytes))
+	p.emitWarningf(pod, reason, "%s", truncate(op+": "+msg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))
 	log.WithFunc("Provider.failOp").Errorf(ctx, err, "%s/%s %s", pod.Namespace, pod.Name, op)
 }
