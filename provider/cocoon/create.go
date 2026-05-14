@@ -49,8 +49,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, err.Error())
-		metrics.PodLifecycleTotal.WithLabelValues("create", "failed").Inc()
+		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
 		return err
 	}
 	metrics.VMBootDuration.WithLabelValues(spec.Mode, spec.Backend).Observe(time.Since(bootStart).Seconds())
@@ -66,14 +65,32 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	cloned := isClonedBoot(pod, spec)
 	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
 	p.trackPod(pod, v)
+	willRunSAC := p.willRunSAC(spec, v)
 	if spec.OS == string(cocoonv1.OSWindows) {
 		p.goBackground(func() {
-			p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
+			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
+			if err != nil {
+				metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
+				p.markPostCloneState(p.lifecycleCtx, pod, postCloneStateFailed)
+				errMsg := err.Error()
+				p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate("create: "+errMsg, eventMessageMaxBytes))
+				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
+				log.WithFunc("Provider.CreatePod").Errorf(p.lifecycleCtx, err,
+					"%s/%s windows static IP", pod.Namespace, pod.Name)
+				return
+			}
+			if ran {
+				metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
+				// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
+				if !cloned && !p.lifecycleAlreadyFailed(pod) {
+					p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
+				}
+			}
 		})
 	}
 	if cloned {
 		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage)
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create")
 		})
 	}
 	// First probe is synchronous so refreshStatus below sees its result.
@@ -84,8 +101,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
-	if !cloned {
-		// Cloned boots stay `creating` until runPostCloneSetup finishes.
+	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP.
+	if !cloned && !willRunSAC && !p.lifecycleAlreadyFailed(pod) {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()

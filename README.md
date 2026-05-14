@@ -93,8 +93,14 @@ vk-cocoon exposes three metrics surfaces:
 | `vk_cocoon_pod_lifecycle_total{op,result}` | Counter | Pod lifecycle operations |
 | `vk_cocoon_snapshot_pull_total{result}` / `push_total` | Counter | Snapshot pull/push counts |
 | `vk_cocoon_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
+| `vk_cocoon_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=netresize\|snapshot\|push\|remove`) |
+| `vk_cocoon_wake_total{result}` | Counter | Wake operation outcomes |
+| `vk_cocoon_postclone_total{kind,result}` | Counter | Post-clone fixup outcomes (`kind=linux_static\|linux_fc\|windows\|sac`) |
+| `vk_cocoon_postclone_retry_attempts{outcome}` | Histogram | Attempts consumed before post-clone exec succeeded or exhausted |
 | `vk_cocoon_vm_table_size` | Gauge | Tracked VM count |
 | `vk_cocoon_orphan_vm_total` | Counter | Orphan VMs at startup |
+
+In addition to metrics, the hibernate / wake / post-clone failure paths write a K8s Event on the Pod with a typed Reason — `kubectl describe pod` surfaces the same signal that `vm.cocoonstack.io/lifecycle-state-message` carries. Spec validation rejects (e.g. missing `vm.cocoonstack.io/name`) and pod-delete short-circuits stay counter-only on `pod_lifecycle_total`: they're input-validation noise rather than runtime-lifecycle failures, and the rejection is already visible to the caller as the synchronous error return. Warning reasons: `CreateBringUpFailed`, `HibernateNetResizeFailed`, `HibernateSnapshotFailed`, `HibernatePushFailed`, `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`, `WindowsStaticIPFailed`, `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`, `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`, `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`. Normal reasons: `Hibernated`, `Woken`, `PostCloneSucceeded`.
 
 All per-VM stats are read from `/proc` using the hypervisor PID tracked in memory — no shell-out to `cocoon` on each scrape. The tracking table is snapshot-copied under RLock and `/proc` reads happen outside the lock to avoid blocking CreatePod/DeletePod. When a VM is restarted in-place (event watcher → `cocoon vm start`), the PID is re-inspected and refreshed.
 

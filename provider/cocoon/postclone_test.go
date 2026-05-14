@@ -2,6 +2,8 @@ package cocoon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/guest"
+	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -104,6 +108,39 @@ func TestBuildPostCloneCommands(t *testing.T) {
 	})
 }
 
+func TestPostCloneKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec meta.VMSpec
+		want string
+	}{
+		{"windows is windows", meta.VMSpec{OS: "windows"}, postCloneKindWindows},
+		{"linux+fc is linux_fc", meta.VMSpec{Backend: vm.BackendFirecracker}, postCloneKindLinuxFC},
+		{"linux+ch is linux_static", meta.VMSpec{Backend: "cloud-hypervisor"}, postCloneKindLinuxStatic},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postCloneKind(tc.spec); got != tc.want {
+				t.Errorf("postCloneKind = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	t.Parallel()
+	if got := truncate("abc", 10); got != "abc" {
+		t.Errorf("short string mutated: %q", got)
+	}
+	if got := truncate("abcdef", 3); got != "abc" {
+		t.Errorf("truncate failed: %q", got)
+	}
+	if got := truncate("", 10); got != "" {
+		t.Errorf("empty mutated: %q", got)
+	}
+}
+
 func TestPlanPostClone(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +198,67 @@ func TestPlanPostClone(t *testing.T) {
 	})
 }
 
+type failingSACDialer struct{}
+
+func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
+	return nil, errors.New("simulated SAC dial failure")
+}
+
+func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
+	rt := &fakeRuntime{
+		runVM: &vm.VM{
+			ID: "vmid", Name: "vk-ns-win-0",
+			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}},
+		},
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.GuestSAC = failingSACDialer{}
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-win-0",
+		OS:     "windows",
+		Mode:   "run",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p.Close() // drain bgWG so the SAC goroutine completes
+
+	if got := pod.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateFailed) {
+		t.Errorf("lifecycle-state = %q, want %q (SAC Failed must not be clobbered by !cloned Ready)",
+			got, meta.LifecycleStateFailed)
+	}
+	if got := pod.Annotations[annotationPostCloneState]; got != postCloneStateFailed {
+		t.Errorf("post-clone-state = %q, want %q", got, postCloneStateFailed)
+	}
+}
+
+func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{}}}
+	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
+	p := newTestProvider(t)
+
+	// Build enough errors that errors.Join's body comfortably exceeds 4 KiB.
+	errs := make([]error, 0, 80)
+	for i := range 80 {
+		errs = append(errs, fmt.Errorf("attempt %d: %s", i, strings.Repeat("x", 100)))
+	}
+	p.emitPostCloneHint(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", errors.Join(errs...))
+
+	got := pod.Annotations[annotationPostCloneErrors]
+	if got == "" {
+		t.Fatal("post-clone-errors annotation not written")
+	}
+	if len(got) > lifecycleMessageMaxBytes {
+		t.Errorf("annotation length %d exceeds cap %d", len(got), lifecycleMessageMaxBytes)
+	}
+	if len(got) != lifecycleMessageMaxBytes {
+		t.Errorf("expected exact cap %d, got %d", lifecycleMessageMaxBytes, len(got))
+	}
+}
+
 func TestRunPostCloneSetupSuccess(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
@@ -169,7 +267,7 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create")
 
 	if len(rt.execCalls) != 1 {
 		t.Fatalf("expected 1 Exec call, got %d", len(rt.execCalls))
@@ -195,7 +293,7 @@ func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create")
 
 	if pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
 		t.Errorf("cancellation must not write state=failed, got %q", pod.Annotations[annotationPostCloneState])
@@ -247,7 +345,7 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create")
 
 	if len(rt.execCalls) != 0 {
 		t.Errorf("CH+OCI+DHCP no-op path should not call Exec, got %d calls", len(rt.execCalls))

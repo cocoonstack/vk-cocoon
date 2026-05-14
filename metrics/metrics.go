@@ -140,6 +140,43 @@ var (
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
 		},
 	)
+
+	HibernateTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "hibernate_total",
+			Help:      "Number of hibernate stages by result.",
+		},
+		[]string{"phase", "result"}, // phase=netresize|snapshot|push|remove, result=ok|failed
+	)
+
+	WakeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "wake_total",
+			Help:      "Number of wake operations by result.",
+		},
+		[]string{"result"},
+	)
+
+	PostCloneTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "postclone_total",
+			Help:      "Number of post-clone fixups by guest kind and result.",
+		},
+		[]string{"kind", "result"}, // kind=windows|linux_static|linux_fc|sac  result=ok|failed
+	)
+
+	PostCloneRetryAttempts = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Name:      "postclone_retry_attempts",
+			Help:      "Attempts consumed by post-clone vsock exec by outcome.",
+			Buckets:   []float64{1, 2, 5, 10, 20, 40, 60},
+		},
+		[]string{"outcome"}, // outcome=ok|exhausted
+	)
 )
 
 // Register installs all collectors.
@@ -160,5 +197,9 @@ func Register(reg prometheus.Registerer) {
 		SnapshotPushDuration,
 		SnapshotPullDuration,
 		ProbeDuration,
+		HibernateTotal,
+		WakeTotal,
+		PostCloneTotal,
+		PostCloneRetryAttempts,
 	)
 }

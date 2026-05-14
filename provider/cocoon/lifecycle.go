@@ -43,6 +43,16 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 			cur.State, cur.ObservedGeneration)
 		return
 	}
+	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
+	if cur, ok := p.lifecycleIntent[key]; ok &&
+		cur.State == meta.LifecycleStateFailed &&
+		state != meta.LifecycleStateFailed &&
+		status.ObservedGeneration == cur.ObservedGeneration {
+		p.mu.Unlock()
+		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
+			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
+		return
+	}
 	p.lifecycleIntent[key] = status
 	status.Apply(pod)
 	if tracked != nil && tracked != pod {

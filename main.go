@@ -22,6 +22,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 
 	commonhttpx "github.com/cocoonstack/cocoon-common/httpx"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -106,6 +109,13 @@ func main() {
 		logger.Fatalf(signalCtx, err, "node resources")
 	}
 
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{
+		Interface: clientset.CoreV1().Events(""),
+	})
+	defer broadcaster.Shutdown()
+	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vk-cocoon", Host: nodeName})
+
 	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		epochURL:     epochURL,
@@ -114,6 +124,7 @@ func main() {
 		cocoonBin:    cocoonBin,
 		orphanPolicy: orphanPolicy,
 		clientset:    clientset,
+		recorder:     recorder,
 	})
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "build provider")
@@ -209,6 +220,7 @@ type buildOpts struct {
 	cocoonBin    string
 	orphanPolicy string
 	clientset    kubernetes.Interface
+	recorder     record.EventRecorder
 }
 
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
@@ -221,6 +233,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName
 	p.Clientset = opts.clientset
+	p.Recorder = opts.recorder
 	p.Runtime = runtime
 	p.Puller = &snapshots.Puller{Registry: registry, Runtime: runtime}
 	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime}
