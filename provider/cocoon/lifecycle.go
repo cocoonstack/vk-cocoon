@@ -43,9 +43,7 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 			cur.State, cur.ObservedGeneration)
 		return
 	}
-	// Sticky-Failed at same gen: a concurrent failure path (e.g. SAC) may have
-	// just marked Failed while this caller's lifecycleAlreadyFailed read was
-	// still false. Don't let same-gen non-Failed transitions clobber it.
+	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&

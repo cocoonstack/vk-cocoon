@@ -15,10 +15,8 @@ const (
 	lifecycleMessageMaxBytes = 4096
 )
 
-// failOp records a terminal Pod failure: pod_lifecycle_total counter, Warning
-// Event, lifecycle=Failed annotation, and log. Op must be create|update|delete.
-// Wrapped subprocess output can be unbounded; trim AFTER prefix concatenation
-// so the apiserver-facing caps actually hold.
+// failOp records a terminal Pod failure: counter + Warning Event + Failed
+// annotation + log. op ∈ {create,update,delete}. Truncate AFTER prefix concat.
 func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op string, err error) {
 	metrics.PodLifecycleTotal.WithLabelValues(op, "failed").Inc()
 	msg := err.Error()
@@ -39,9 +37,7 @@ func (p *Provider) emitNormalf(pod *corev1.Pod, reason, format string, args ...a
 	}
 }
 
-// lifecycleAlreadyFailed reports whether a concurrent goroutine has marked
-// the tracked pod as Failed. Used to gate Ready transitions so a successful
-// post-clone exec cannot clobber a prior static-IP / SAC failure.
+// lifecycleAlreadyFailed gates Ready transitions when another path already failed.
 func (p *Provider) lifecycleAlreadyFailed(pod *corev1.Pod) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

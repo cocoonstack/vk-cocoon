@@ -133,8 +133,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
-// rollbackHibernateNIC re-adds the NIC dropped pre-snapshot so the VM keeps
-// serving traffic after a hibernate failure.
+// rollbackHibernateNIC re-adds the NIC dropped pre-snapshot.
 func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
 	if !dropped {
 		return

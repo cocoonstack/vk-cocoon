@@ -70,7 +70,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.goBackground(func() {
 			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 			if err != nil {
-				// Async failure: track on postclone_total, leave pod_lifecycle_total alone.
 				metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
 				p.markPostCloneState(p.lifecycleCtx, pod, postCloneStateFailed)
 				errMsg := err.Error()
@@ -82,8 +81,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			}
 			if ran {
 				metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
-				// Non-clone Ready transition was deferred to here so watchers
-				// don't see a transient Ready while SAC is still running.
+				// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
 				if !cloned && !p.lifecycleAlreadyFailed(pod) {
 					p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
 				}
@@ -103,9 +101,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	pod.Status.StartTime = &now
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
+	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP.
 	if !cloned && !willRunSAC && !p.lifecycleAlreadyFailed(pod) {
-		// Cloned boots stay `creating` until runPostCloneSetup finishes;
-		// Windows+static stays `creating` until applyWindowsStaticIP finishes.
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
