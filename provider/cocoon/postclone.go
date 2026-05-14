@@ -122,7 +122,11 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, attemptErrs)
-	p.failOp(ctx, pod, "PostCloneExecExhausted", op, joinedErr)
+	// Don't touch pod_lifecycle_total — postclone is async to the parent op
+	// (Create/Update returned ok long ago); postclone_total carries the failure.
+	p.emitWarningf(pod, "PostCloneExecExhausted", "%s: %v", op, joinedErr)
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, joinedErr.Error())
+	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
 // postCloneKind classifies a clone for the postclone_total{kind} label.
@@ -164,16 +168,21 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
-	// Read+write under p.mu — Go maps fatal on concurrent r/w.
+	// Operate on the tracked pod so an async goroutine holding a stale
+	// pointer can't bypass the "don't clobber failed" guard.
 	p.mu.Lock()
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
+	target := p.pods[meta.PodKey(pod.Namespace, pod.Name)]
+	if target == nil {
+		target = pod
 	}
-	if state != postCloneStateFailed && pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
+	if target.Annotations == nil {
+		target.Annotations = map[string]string{}
+	}
+	if state != postCloneStateFailed && target.Annotations[annotationPostCloneState] == postCloneStateFailed {
 		p.mu.Unlock()
 		return
 	}
-	pod.Annotations[annotationPostCloneState] = state
+	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
 	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
