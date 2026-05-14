@@ -51,7 +51,7 @@ const (
 // guest via cocoon-agent vsock and records the outcome in
 // vm.cocoonstack.io/post-clone-state. On timeout or failure it falls back
 // to writing the post-clone-hint annotation so an operator has a manual path.
-func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string) {
+func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
 		// No fixup required — DHCP self-heals on CH+OCI/cloudimg.
@@ -122,7 +122,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, attemptErrs)
-	p.failOp(ctx, pod, "PostCloneExecExhausted", "create", joinedErr)
+	p.failOp(ctx, pod, "PostCloneExecExhausted", op, joinedErr)
 }
 
 // postCloneKind classifies a clone for the postclone_total{kind} label.
@@ -164,6 +164,11 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
+	// Don't clobber a concurrent failed write (e.g. applyWindowsStaticIP race).
+	// The lifecycle annotation has its own gate via lifecycleAlreadyFailed.
+	if state != postCloneStateFailed && pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
+		return
+	}
 	p.setPodAnnotation(ctx, pod, annotationPostCloneState, state)
 }
 
@@ -246,15 +251,16 @@ func isCloudimgVM(vmID string) bool {
 }
 
 // applyWindowsStaticIP uses SAC to set static IPs on Windows VMs.
-// Called for both run and clone when the network uses IPAM.
-// DHCP NICs (no assigned IP) are skipped. Returns nil when no static NICs
-// are configured or no SAC client is wired.
-func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
+// Called for both run and clone when the network uses IPAM. ran=true only
+// when SAC actually executed; the skipped cases (no SAC client, no NICs,
+// no static NICs) return (false, nil) so the caller can avoid double-counting
+// skips as successes in postclone_total.
+func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) (bool, error) {
 	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
-		return nil
+		return false, nil
 	}
 	if !slices.ContainsFunc(v.NetworkConfigs, isStaticNIC) {
-		return nil
+		return false, nil
 	}
 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
@@ -263,13 +269,13 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	sess, err := p.GuestSAC.Dial(ctx, sockPath)
 	if err != nil {
 		p.emitWarningf(pod, "PostCloneSACDialFailed", "%v", err)
-		return fmt.Errorf("sac dial: %w", err)
+		return true, fmt.Errorf("sac dial: %w", err)
 	}
 	defer func() { _ = sess.Close() }()
 
 	netNums, err := p.sacEnumerateNICs(ctx, pod, sess, len(v.NetworkConfigs))
 	if err != nil {
-		return err
+		return true, err
 	}
 
 	for i, nc := range v.NetworkConfigs {
@@ -277,11 +283,11 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 			continue
 		}
 		if err := p.sacSetNICIP(ctx, pod, sess, netNums[i], nc); err != nil {
-			return err
+			return true, err
 		}
 	}
 	logger.Infof(ctx, "sac configured static IPs for %s/%s", pod.Namespace, pod.Name)
-	return nil
+	return true, nil
 }
 
 // sacEnumerateNICs polls SAC `i` until Windows PnP lists every NIC, or

@@ -109,7 +109,8 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
-		// VM is still live; restore VMID/IP so the pod can retry hibernate.
+		// VM is still live; restore NIC + VMID/IP so the pod can retry hibernate.
+		p.rollbackHibernateNIC(ctx, v, dropNIC)
 		p.applyRuntime(ctx, pod, v)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
 		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
@@ -185,7 +186,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	} else {
 		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "")
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "update")
 		})
 	}
 	p.trackPod(pod, v)

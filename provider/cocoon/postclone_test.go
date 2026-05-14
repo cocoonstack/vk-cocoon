@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -194,6 +195,30 @@ func TestPlanPostClone(t *testing.T) {
 	})
 }
 
+func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{}}}
+	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
+	p := newTestProvider(t)
+
+	// Build enough errors that errors.Join's body comfortably exceeds 4 KiB.
+	errs := make([]error, 0, 80)
+	for i := range 80 {
+		errs = append(errs, fmt.Errorf("attempt %d: %s", i, strings.Repeat("x", 100)))
+	}
+	p.emitPostCloneHint(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", errs)
+
+	got := pod.Annotations[annotationPostCloneErrors]
+	if got == "" {
+		t.Fatal("post-clone-errors annotation not written")
+	}
+	if len(got) > postCloneErrorsMaxBytes {
+		t.Errorf("annotation length %d exceeds cap %d", len(got), postCloneErrorsMaxBytes)
+	}
+	if len(got) != postCloneErrorsMaxBytes {
+		t.Errorf("expected exact cap %d, got %d", postCloneErrorsMaxBytes, len(got))
+	}
+}
+
 func TestRunPostCloneSetupSuccess(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
@@ -202,7 +227,7 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create")
 
 	if len(rt.execCalls) != 1 {
 		t.Fatalf("expected 1 Exec call, got %d", len(rt.execCalls))
@@ -228,7 +253,7 @@ func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create")
 
 	if pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
 		t.Errorf("cancellation must not write state=failed, got %q", pod.Annotations[annotationPostCloneState])
@@ -280,7 +305,7 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create")
 
 	if len(rt.execCalls) != 0 {
 		t.Errorf("CH+OCI+DHCP no-op path should not call Exec, got %d calls", len(rt.execCalls))
