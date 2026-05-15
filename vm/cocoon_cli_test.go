@@ -22,7 +22,7 @@ func TestIsCocoonNotFound(t *testing.T) {
 		{name: "case-insensitive VM Not Found", err: errors.New("VM Not Found"), want: true},
 		{name: "unrelated binary not found must not match", err: errors.New("exec: \"cocoon\": executable file not found in $PATH"), want: false},
 		{name: "config file not found must not match", err: errors.New("config file not found"), want: false},
-		{name: "transient sudo failure", err: errors.New("exec: sudo: broken pipe"), want: false},
+		{name: "broken pipe must not match", err: errors.New("exec: broken pipe"), want: false},
 		{name: "permission denied", err: errors.New("permission denied"), want: false},
 	}
 	for _, tc := range cases {

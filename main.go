@@ -229,7 +229,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
 	}
-	runtime := vm.NewCocoonCLI(opts.cocoonBin, true)
+	runtime := vm.NewCocoonCLI(opts.cocoonBin)
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName
 	p.Clientset = opts.clientset

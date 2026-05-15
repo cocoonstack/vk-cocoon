@@ -61,8 +61,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, v.ID, kind)
 	p.markPostCloneState(ctx, pod, postCloneStateRunning)
 
-	// sudo grandchild won't die from exec.CommandContext SIGKILL; run each
-	// Exec in a worker and abandon stuck ones on deadline.
+	// `vm exec` can hang on a wedged guest; abandon stuck workers on deadline.
 	loopCtx, cancel := context.WithTimeout(ctx, postCloneAgentBudget)
 	defer cancel()
 

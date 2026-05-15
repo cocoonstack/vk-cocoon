@@ -39,15 +39,14 @@ var _ Runtime = (*CocoonCLI)(nil)
 // CocoonCLI is the production Runtime that shells out to `cocoon`.
 type CocoonCLI struct {
 	binary string
-	sudo   bool
 }
 
-// NewCocoonCLI returns a CocoonCLI; empty binary resolves to defaultCocoonBinary.
-func NewCocoonCLI(binary string, sudo bool) *CocoonCLI {
+// NewCocoonCLI returns a CocoonCLI; empty binary → defaultCocoonBinary. For non-root setups, point binary at a wrapper or setcap the cocoon binary.
+func NewCocoonCLI(binary string) *CocoonCLI {
 	if binary == "" {
 		binary = defaultCocoonBinary
 	}
-	return &CocoonCLI{binary: binary, sudo: sudo}
+	return &CocoonCLI{binary: binary}
 }
 
 // Clone runs `cocoon vm clone --output json` and parses the emitted VM
@@ -461,17 +460,10 @@ func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
 	return args
 }
 
-// command builds an exec.Cmd, optionally wrapped in sudo.
-// Every invocation is logged at debug so operators can see the external
-// binary surface — see the package doc for why the subprocess boundary
-// exists.
+// command builds an exec.Cmd; logged at debug for operator visibility into the external binary surface.
 func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	log.WithFunc("vm.CocoonCLI.command").Debugf(ctx, "exec cocoon: %v", args)
-	if c.sudo {
-		full := append([]string{c.binary}, args...)
-		return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // path comes from operator config, not untrusted input
-	}
-	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // see above
+	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // path comes from operator config, not untrusted input
 }
 
 // parseVMFromStatusJSON extracts ID, Name, State from the vm status JSON.
