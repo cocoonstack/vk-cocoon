@@ -47,7 +47,7 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultEpochURL     = "http://epoch.cocoon-system.svc:8080"
-	defaultOrphanPolicy = string(provider.OrphanAlert)
+	defaultOrphanPolicy = string(provider.OrphanDestroy)
 
 	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
 	defaultTLSKey      = "/etc/cocoon/vk/tls/vk-kubelet.key"

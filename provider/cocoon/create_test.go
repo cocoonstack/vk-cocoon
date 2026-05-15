@@ -1099,7 +1099,7 @@ func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset() // no pods — the force-deleted state
-	// Default OrphanAlert: keep the VM, just warn.
+	p.OrphanPolicy = provider.OrphanAlert
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)

@@ -126,8 +126,8 @@ Cluster state is the source of truth. There is **no** persistent `pods.json` fil
 2. Lists every VM the cocoon runtime knows about via `Runtime.List`.
 3. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching the VMID against the runtime list.
 4. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
-   - `alert` (default): log + bump `vk_cocoon_orphan_vm_total`, leave the VM alone.
-   - `destroy`: remove the VM.
+   - `destroy` (default): remove the VM so pod-less VMs don't accumulate after restart or pod chaos.
+   - `alert`: log + bump `vk_cocoon_orphan_vm_total`, leave the VM alone.
    - `keep`: no log, no metric.
 
 A pod whose annotated VMID does **not** appear in the local runtime list logs a warning and is left to `CreatePod` to recreate on the next reconcile.
@@ -182,7 +182,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against epoch. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
-| `VK_ORPHAN_POLICY` | `alert` | `alert`, `destroy`, or `keep`. |
+| `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
 | `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
 | `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |
 | `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |
