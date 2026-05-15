@@ -175,7 +175,7 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 		p.indexOrphanByName(v)
 	default: // provider.OrphanAlert
 		metrics.OrphanVMTotal.Inc()
-		logger.Warnf(ctx, "orphan VM detected: name=%s id=%s state=%s ip=%s — apply policy=destroy to clean up automatically",
+		logger.Warnf(ctx, "orphan VM detected: name=%s id=%s state=%s ip=%s (set VK_ORPHAN_POLICY=destroy to auto-clean)",
 			v.Name, v.ID, v.State, v.IP)
 		p.indexOrphanByName(v)
 	}

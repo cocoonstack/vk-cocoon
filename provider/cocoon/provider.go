@@ -130,7 +130,7 @@ func NewProvider() *Provider {
 		startTime:        time.Now(),
 		lifecycleCtx:     lifecycleCtx,
 		lifecycleStop:    lifecycleStop,
-		OrphanPolicy:     provider.OrphanAlert,
+		OrphanPolicy:     provider.OrphanDestroy,
 		Pinger:           network.NopPinger{},
 		pods:             map[string]*corev1.Pod{},
 		vmsByPod:         map[string]*vm.VM{},
