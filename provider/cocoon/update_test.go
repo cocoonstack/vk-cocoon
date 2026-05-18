@@ -5,6 +5,7 @@ import (
 	"maps"
 	"reflect"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -301,5 +302,109 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 
 	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
+	}
+}
+
+func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provider, *corev1.Pod, *vm.VM) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	p.Probes = probes.NewManager(t.Context())
+	p.wakeFreshIPBudget = budget
+	p.wakeFreshIPInterval = interval
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
+	p.trackPod(pod, v)
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
+	return p, pod, v
+}
+
+func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
+	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true, Live: true})
+
+	done := make(chan struct{})
+	go func() {
+		p.finalizeDropNICWake(t.Context(), pod, v)
+		close(done)
+	}()
+
+	time.AfterFunc(10*time.Millisecond, func() {
+		p.setVMIP("ns", "demo-0", "172.20.1.228")
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finalizeDropNICWake did not return within budget")
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateReady)
+	}
+	// Ready bump must coincide with the fresh IP on pod.Status — the original bug.
+	if got := pod.Status.PodIP; got != "172.20.1.228" {
+		t.Fatalf("pod.Status.PodIP = %q, want 172.20.1.228 (must be published before Ready)", got)
+	}
+}
+
+func TestFinalizeDropNICWakeMarksFailedOnTimeout(t *testing.T) {
+	p, pod, v := newDropNICWakeFixture(t, 20*time.Millisecond, 1*time.Millisecond)
+
+	p.finalizeDropNICWake(t.Context(), pod, v)
+
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateFailed {
+		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateFailed)
+	}
+}
+
+func TestFinalizeDropNICWakeSkipsLifecycleWhenVMForgotten(t *testing.T) {
+	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		p.finalizeDropNICWake(t.Context(), pod, v)
+		close(done)
+	}()
+
+	time.AfterFunc(10*time.Millisecond, func() {
+		p.forgetVMOnly("ns", "demo-0")
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finalizeDropNICWake did not return after VM was forgotten")
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateCreating {
+		t.Fatalf("lifecycle = %q, want %q (untouched after VM forget)", got, meta.LifecycleStateCreating)
+	}
+}
+
+func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
+	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		p.finalizeDropNICWake(t.Context(), pod, v)
+		close(done)
+	}()
+
+	time.AfterFunc(10*time.Millisecond, func() {
+		meta.HibernateState(true).Apply(pod)
+		p.setVMIP("ns", "demo-0", "172.20.1.228")
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finalizeDropNICWake did not return after hibernate request")
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateCreating {
+		t.Fatalf("lifecycle = %q, want %q (must not race hibernate)", got, meta.LifecycleStateCreating)
 	}
 }

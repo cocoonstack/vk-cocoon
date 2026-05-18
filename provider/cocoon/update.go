@@ -1,6 +1,7 @@
 package cocoon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,13 +12,20 @@ import (
 	"k8s.io/utils/ptr"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
-const hibernateImportSuffix = "-hibernate-import"
+const (
+	// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
+	hibernateImportSuffix = "-hibernate-import"
+
+	// dropNIC wake caps the wait for the freshly hot-added NIC's DHCP lease.
+	defaultWakeFreshIPBudget   = 15 * time.Second
+	defaultWakeFreshIPInterval = 200 * time.Millisecond
+)
 
 // UpdatePod handles hibernate/wake transitions; other spec changes are no-ops
 // to avoid echoing the patched pod back as another UpdatePod.
@@ -143,8 +151,8 @@ func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped b
 	}
 }
 
-// wake restores the VM from the hibernation snapshot. CH+Windows clones
-// with --nics 1 and skips post-clone setup (NIC-less snapshot invariant).
+// wake restores the VM from the hibernation snapshot. CH+Windows defers
+// Ready to finalizeDropNICWake; other backends fall through to runPostCloneSetup.
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
@@ -178,20 +186,92 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	metrics.WakeTotal.WithLabelValues("ok").Inc()
 	p.applyRuntime(ctx, pod, v)
 	p.cleanupWakeImport(spec.VMName, sourceName)
+	p.trackPod(pod, v)
+	p.startProbeIfEnabled(pod)
 	if dropNIC {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+		p.goBackground(func() {
+			p.finalizeDropNICWake(p.lifecycleCtx, pod, v)
+		})
 	} else {
+		metrics.WakeTotal.WithLabelValues("ok").Inc()
 		p.goBackground(func() {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "update")
 		})
 	}
-	p.trackPod(pod, v)
-	p.startProbeIfEnabled(pod)
 	p.emitNormalf(pod, "Woken", "cloned from %s", sourceName)
 	return nil
+}
+
+// finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
+func (p *Provider) finalizeDropNICWake(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
+	if ctx.Err() != nil {
+		return
+	}
+	if gotIP {
+		p.refreshStatus(ctx, pod)
+		p.notify(pod)
+		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
+			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
+			metrics.WakeTotal.WithLabelValues("ok").Inc()
+		}
+		return
+	}
+	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+	err := fmt.Errorf("wake %s: dhcp lease for fresh NIC not observed within %s", v.Name, budget)
+	msg := err.Error()
+	if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
+		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+		p.emitWarningf(pod, "WakeIPWaitTimeout", "%s", truncate("update: "+msg, eventMessageMaxBytes))
+		log.WithFunc("Provider.finalizeDropNICWake").Errorf(ctx, err, "%s/%s update", pod.Namespace, pod.Name)
+	}
+}
+
+// markLifecycleStateForWake gates on (pod tracked) ∧ (hibernate not requested) ∧ (VM
+// matches wakeVMID) and writes atomically; callers gate side effects on the return.
+func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	tracked, ok := p.pods[key]
+	if !ok || bool(meta.ReadHibernateState(tracked)) {
+		p.mu.Unlock()
+		return false
+	}
+	if cur, ok := p.vmsByPod[key]; !ok || cur.ID != wakeVMID {
+		p.mu.Unlock()
+		return false
+	}
+	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
+	p.mu.Unlock()
+	if !applied {
+		return false
+	}
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	return true
+}
+
+func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) bool {
+	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
+	deadline := time.Now().Add(budget)
+	for {
+		v := p.vmForPod(namespace, name)
+		if v == nil {
+			return false
+		}
+		if ip := p.resolveVMIP(namespace, name, v); ip != "" {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		if !commonk8s.SleepCtx(ctx, interval) {
+			return false
+		}
+	}
 }
 
 // resolveWakeSource returns the local snapshot when present, else pulls.

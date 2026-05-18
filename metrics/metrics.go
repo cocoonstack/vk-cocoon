@@ -159,6 +159,15 @@ var (
 		[]string{"result"},
 	)
 
+	WakeIPWaitTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Name:      "wake_ip_wait_total",
+			Help:      "Outcomes of the CH+Windows dropNIC wake's post-clone DHCP lease wait.",
+		},
+		[]string{"result"}, // result=ok|timeout
+	)
+
 	PostCloneTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -199,6 +208,7 @@ func Register(reg prometheus.Registerer) {
 		ProbeDuration,
 		HibernateTotal,
 		WakeTotal,
+		WakeIPWaitTotal,
 		PostCloneTotal,
 		PostCloneRetryAttempts,
 	)
