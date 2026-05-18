@@ -120,6 +120,10 @@ type Provider struct {
 	deferredRecheckInitialDelay time.Duration
 	deferredRecheckMaxDelay     time.Duration
 	deferredRecheckBudget       time.Duration
+
+	// dropNIC wake tunables; defaults live in update.go.
+	wakeFreshIPBudget   time.Duration
+	wakeFreshIPInterval time.Duration
 }
 
 // NewProvider constructs a Provider with empty tables.

@@ -26,8 +26,18 @@ func (p *Provider) StartLifecycleReconciler() {
 }
 
 func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
-	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
+	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
+	p.mu.Unlock()
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	}
+}
+
+// applyLifecycleLocked is the markLifecycleState body without the lock;
+// caller holds p.mu and flushes the returned status outside the lock when applied.
+func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
@@ -36,22 +46,20 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
-		p.mu.Unlock()
 		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
 			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
 			cur.State, cur.ObservedGeneration)
-		return
+		return status, false
 	}
 	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
 		status.ObservedGeneration == cur.ObservedGeneration {
-		p.mu.Unlock()
 		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
-		return
+		return status, false
 	}
 	p.lifecycleIntent[key] = status
 	status.Apply(pod)
@@ -59,9 +67,7 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 		// Keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
 		status.Apply(tracked)
 	}
-	p.mu.Unlock()
-
-	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	return status, true
 }
 
 func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
