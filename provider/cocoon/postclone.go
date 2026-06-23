@@ -51,7 +51,7 @@ const (
 func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+		p.markReadyAfterIP(ctx, pod, v)
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
@@ -81,8 +81,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				if !p.lifecycleAlreadyFailed(pod) {
-					p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
+					p.markReadyAfterIP(ctx, pod, v)
 				}
 				return
 			}
@@ -115,6 +115,35 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	p.emitWarningf(pod, "PostCloneExecExhausted", "%s", truncate(op+": "+joinedMsg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, lifecycleMessageMaxBytes))
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
+}
+
+// markReadyAfterIP gates lifecycle-state=ready on the clone's DHCP lease, the same
+// contract the wake path enforces (finalizeDropNICWake). A cloned VM's ready is the
+// signal vm-service reads the pod IP on, but the post-clone exec runs over vsock and
+// can finish before a slow guest's lease lands — publishing ready then would promise
+// an IP resolveVMIP can't yet return. Wait for the lease and flush status first; on
+// timeout mark failed, never ready-without-IP.
+func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
+	if ctx.Err() != nil {
+		return
+	}
+	if p.lifecycleAlreadyFailed(pod) {
+		return
+	}
+	if !gotIP {
+		budget := p.wakeFreshIPBudget
+		if budget == 0 {
+			budget = defaultWakeFreshIPBudget
+		}
+		msg := fmt.Sprintf("clone %s: dhcp lease not observed within %s", v.Name, budget)
+		p.emitWarningf(pod, "PostCloneIPWaitTimeout", "%s", truncate(msg, eventMessageMaxBytes))
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))
+		return
+	}
+	p.refreshStatus(ctx, pod)
+	p.notify(pod)
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
