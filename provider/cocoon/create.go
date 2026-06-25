@@ -63,10 +63,17 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(ctx, pod, v)
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
+	// Migration restore reuses wake()'s post-restore path (CH+Windows waits on the
+	// fresh NIC's lease; others run runPostCloneSetup) and skips the base-image
+	// post-clone setup below.
+	restoring := meta.ReadRestoreFromHibernate(pod)
 	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
 	p.trackPod(pod, v)
 	willRunSAC := p.willRunSAC(spec, v)
-	if spec.OS == string(cocoonv1.OSWindows) {
+	if restoring {
+		p.dispatchHibernateRestore(pod, spec, v, "create")
+	}
+	if spec.OS == string(cocoonv1.OSWindows) && !restoring {
 		p.goBackground(func() {
 			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 			if err != nil {
@@ -88,7 +95,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			}
 		})
 	}
-	if cloned {
+	if cloned && !restoring {
 		p.goBackground(func() {
 			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create")
 		})
@@ -105,8 +112,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.Unlock()
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
-	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP.
-	if !cloned && !willRunSAC && !p.lifecycleAlreadyFailed(pod) {
+	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP;
+	// restore defers to dispatchHibernateRestore.
+	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
@@ -132,6 +140,17 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return nil, "", err
 	}
 	switch {
+	case meta.ReadRestoreFromHibernate(pod):
+		sourceName, err := p.resolveWakeSource(ctx, spec.VMName)
+		if err != nil {
+			return nil, "", err
+		}
+		v, err := p.cloneFromHibernate(ctx, spec, sourceName)
+		if err != nil {
+			return nil, "", err
+		}
+		return v, "", nil
+
 	case fromDir != "":
 		if mode == string(cocoonv1.AgentModeRun) {
 			return nil, "", fmt.Errorf("annotation %s is incompatible with mode=run", meta.AnnotationCloneFromDir)
