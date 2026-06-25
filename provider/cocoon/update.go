@@ -165,7 +165,27 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
 		return err
 	}
-	dropNIC := shouldDropNICBeforeHibernate(spec)
+	cloneStart := time.Now()
+	v, err := p.cloneFromHibernate(ctx, spec, sourceName)
+	if err != nil {
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
+		return err
+	}
+	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
+	p.applyRuntime(ctx, pod, v)
+	p.trackPod(pod, v)
+	p.startProbeIfEnabled(pod)
+	p.dispatchHibernateRestore(pod, spec, v, "update")
+	p.emitNormalf(pod, "Woken", "cloned from %s", sourceName)
+	return nil
+}
+
+// cloneFromHibernate clones the VM from an already-resolved hibernate snapshot
+// source. CH+Windows hibernate snapshots are captured NIC-less, so the clone
+// hot-adds a fresh NIC that Windows enumerates as new hardware. The local import
+// copy (cross-node pull) is dropped once the clone succeeds.
+func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string) (*vm.VM, error) {
 	opts := vm.CloneOptions{
 		From:       sourceName,
 		To:         spec.VMName,
@@ -174,34 +194,33 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		NoDirectIO: spec.NoDirectIO,
 		OnDemand:   useOnDemandClone(spec.OS),
 	}
-	if dropNIC {
+	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = ptr.To(1)
 	}
-	cloneStart := time.Now()
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
-		metrics.WakeTotal.WithLabelValues("failed").Inc()
-		err = fmt.Errorf("clone vm %s from %s: %w", spec.VMName, sourceName, err)
-		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
-		return err
+		return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, sourceName, err)
 	}
-	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	p.applyRuntime(ctx, pod, v)
 	p.cleanupWakeImport(spec.VMName, sourceName)
-	p.trackPod(pod, v)
-	p.startProbeIfEnabled(pod)
-	if dropNIC {
+	return v, nil
+}
+
+// dispatchHibernateRestore schedules the post-restore step. A CH+Windows restore
+// hot-added a fresh NIC, so Ready waits on that NIC's DHCP lease (no PnP rebind);
+// other backends re-derive networking via runPostCloneSetup.
+func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, op string) {
+	if shouldDropNICBeforeHibernate(spec) {
 		p.goBackground(func() {
 			p.finalizeDropNICWake(p.lifecycleCtx, pod, v)
 		})
-	} else {
-		metrics.WakeTotal.WithLabelValues("ok").Inc()
-		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "update")
-		})
+		return
 	}
-	p.emitNormalf(pod, "Woken", "cloned from %s", sourceName)
-	return nil
+	if op == "update" {
+		metrics.WakeTotal.WithLabelValues("ok").Inc()
+	}
+	p.goBackground(func() {
+		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", op)
+	})
 }
 
 // finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
