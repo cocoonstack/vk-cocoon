@@ -96,9 +96,13 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// First probe is synchronous so refreshStatus below sees its result.
 	p.startProbeIfEnabled(pod)
 
+	// startProbeIfEnabled launches a background goroutine that reads the tracked
+	// pod via GetPod; guard the status writes so they don't race its DeepCopy.
+	p.mu.Lock()
 	pod.Status.Phase = corev1.PodRunning
 	now := metav1.Now()
 	pod.Status.StartTime = &now
+	p.mu.Unlock()
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
 	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP.
@@ -361,7 +365,12 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	if err != nil || status == nil {
 		return
 	}
+	// The readiness probe reads the tracked pod via GetPod (DeepCopy under
+	// RLock); guard the write so it doesn't race that copy. GetPodStatus is
+	// called before the lock because it RLocks internally.
+	p.mu.Lock()
 	pod.Status = *status
+	p.mu.Unlock()
 }
 
 // parseCloneFromDirAnnotation returns the validated absolute, canonical
