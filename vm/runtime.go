@@ -1,4 +1,3 @@
-// Package vm wraps the cocoon CLI as a Runtime interface. Tests substitute fakes.
 package vm
 
 import (

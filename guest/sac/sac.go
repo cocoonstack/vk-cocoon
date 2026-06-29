@@ -56,6 +56,39 @@ func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error)
 	return &Session{conn: conn}, nil
 }
 
+func (d *Dialer) waitReady() time.Duration {
+	if d.WaitReady > 0 {
+		return d.WaitReady
+	}
+	return defaultWaitReady
+}
+
+func (d *Dialer) dial(ctx context.Context, socketPath string) (net.Conn, error) {
+	deadline := time.Now().Add(d.waitReady())
+	var lastErr error
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return nil, fmt.Errorf("sac dial timeout: %w", lastErr)
+			}
+			return nil, errors.New("sac dial timeout")
+		}
+		conn, err := net.DialTimeout("unix", socketPath, defaultRWTimeout)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
 // Session is a persistent SAC console connection. Commands are sent
 // sequentially over the same serial socket.
 type Session struct {
@@ -106,39 +139,6 @@ func NetHasIP(output string, netNum int, ip string) bool {
 		}
 	}
 	return false
-}
-
-func (d *Dialer) waitReady() time.Duration {
-	if d.WaitReady > 0 {
-		return d.WaitReady
-	}
-	return defaultWaitReady
-}
-
-func (d *Dialer) dial(ctx context.Context, socketPath string) (net.Conn, error) {
-	deadline := time.Now().Add(d.waitReady())
-	var lastErr error
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return nil, fmt.Errorf("sac dial timeout: %w", lastErr)
-			}
-			return nil, errors.New("sac dial timeout")
-		}
-		conn, err := net.DialTimeout("unix", socketPath, defaultRWTimeout)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retryInterval):
-		}
-	}
 }
 
 // waitPrompt sends CR+LF and waits until the SAC> prompt appears.

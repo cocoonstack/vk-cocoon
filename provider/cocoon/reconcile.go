@@ -105,14 +105,6 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	return nil
 }
 
-// podItems returns the Items slice from a PodList, or nil if the list is nil.
-func podItems(list *corev1.PodList) []corev1.Pod {
-	if list == nil {
-		return nil
-	}
-	return list.Items
-}
-
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
 // VM is already gone, so wake can start clean.
 func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
@@ -190,4 +182,12 @@ func (p *Provider) indexOrphanByName(v *vm.VM) {
 	p.mu.Lock()
 	p.vmsByName[v.Name] = v
 	p.mu.Unlock()
+}
+
+// podItems returns the Items slice from a PodList, or nil if the list is nil.
+func podItems(list *corev1.PodList) []corev1.Pod {
+	if list == nil {
+		return nil
+	}
+	return list.Items
 }

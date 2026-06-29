@@ -162,18 +162,6 @@ func (p *Provider) Close() {
 	}
 }
 
-// goBackground spawns f tracked by p.bgWG, taking p.mu so Add cannot
-// race Close's lifecycleStop+Wait. A bgWG.Go after Close's Wait would
-// trip the sync.WaitGroup add-after-wait misuse.
-func (p *Provider) goBackground(f func()) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.lifecycleCtx.Err() != nil {
-		return
-	}
-	p.bgWG.Go(f)
-}
-
 // GetPod returns a deep copy of the stored pod.
 func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Pod, error) {
 	p.mu.RLock()
@@ -209,6 +197,18 @@ func (p *Provider) NotifyPods(ctx context.Context, notifier func(*corev1.Pod)) {
 // VM event stream and reacts to VM state changes in near-real-time.
 func (p *Provider) StartVMWatcher(ctx context.Context) {
 	go p.vmWatchLoop(ctx)
+}
+
+// goBackground spawns f tracked by p.bgWG, taking p.mu so Add cannot
+// race Close's lifecycleStop+Wait. A bgWG.Go after Close's Wait would
+// trip the sync.WaitGroup add-after-wait misuse.
+func (p *Provider) goBackground(f func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lifecycleCtx.Err() != nil {
+		return
+	}
+	p.bgWG.Go(f)
 }
 
 // pushInitialStatus runs once after the cache-sync grace window and

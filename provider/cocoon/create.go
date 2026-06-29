@@ -231,56 +231,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 }
 
-// parseCloneFromDirAnnotation returns the validated absolute, canonical
-// path from the clone-from-dir annotation, or "" when absent.
-func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
-	if pod == nil {
-		return "", nil
-	}
-	raw := strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir])
-	if raw == "" {
-		return "", nil
-	}
-	if !filepath.IsAbs(raw) {
-		return "", fmt.Errorf("annotation %s must be an absolute path, got %q", meta.AnnotationCloneFromDir, raw)
-	}
-	if cleaned := filepath.Clean(raw); cleaned != raw {
-		return "", fmt.Errorf("annotation %s must be a canonical path, got %q (cleaned: %q)", meta.AnnotationCloneFromDir, raw, cleaned)
-	}
-	return raw, nil
-}
-
-// useOnDemandClone is off for Windows: UFFD lazy paging stalls DHCP boot.
-func useOnDemandClone(os string) bool {
-	return os != string(cocoonv1.OSWindows)
-}
-
-// isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
-// is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
-func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
-	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
-		return true
-	}
-	if spec.ForkFrom != "" {
-		return true
-	}
-	return strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
-}
-
-// assertSnapshotBackend rejects a clone when the target backend differs from
-// the backend that produced the snapshot. CH and FC store state incompatibly,
-// so letting this reach cocoon would fail with a harder-to-debug error.
-func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
-	if snapshot == nil || snapshot.Hypervisor == "" || targetBackend == "" {
-		return nil
-	}
-	if snapshot.Hypervisor == targetBackend {
-		return nil
-	}
-	return fmt.Errorf("snapshot %s was taken with %s but CocoonSet requests %s",
-		snapshot.Name, snapshot.Hypervisor, targetBackend)
-}
-
 // ensureRunImage materializes the base image locally and returns the ref
 // `cocoon vm run` should be invoked with. Cloud-image refs canonicalize to
 // the /dl/{repo}/{tag} URL so vmCfg.Image is portable across nodes.
@@ -288,7 +238,7 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	if image == "" {
 		return image, nil
 	}
-	if p.Puller == nil || p.Puller.Registry == nil || isURLImage(image) {
+	if p.Puller == nil || p.Puller.Registry == nil || isHTTPURL(image) {
 		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
 	repo, tag := utils.ParseRef(image)
@@ -310,17 +260,6 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	default:
 		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
-}
-
-// canonicalCloudImgURL builds the /dl/{repo}/{tag} URL cocoon's cloudimg
-// backend can pull via plain http.Get.
-func canonicalCloudImgURL(baseURL, repo, tag string) string {
-	return fmt.Sprintf("%s/dl/%s/%s", strings.TrimRight(baseURL, "/"), repo, tag)
-}
-
-// isURLImage reports whether ref looks like an HTTP(S) cloud-image URL.
-func isURLImage(ref string) bool {
-	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
 }
 
 // ensureSnapshot returns the local snapshot, pulling from epoch if needed.
@@ -423,6 +362,67 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	pod.Status = *status
+}
+
+// parseCloneFromDirAnnotation returns the validated absolute, canonical
+// path from the clone-from-dir annotation, or "" when absent.
+func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
+	if pod == nil {
+		return "", nil
+	}
+	raw := strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir])
+	if raw == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("annotation %s must be an absolute path, got %q", meta.AnnotationCloneFromDir, raw)
+	}
+	if cleaned := filepath.Clean(raw); cleaned != raw {
+		return "", fmt.Errorf("annotation %s must be a canonical path, got %q (cleaned: %q)", meta.AnnotationCloneFromDir, raw, cleaned)
+	}
+	return raw, nil
+}
+
+// useOnDemandClone is off for Windows: UFFD lazy paging stalls DHCP boot.
+func useOnDemandClone(os string) bool {
+	return os != string(cocoonv1.OSWindows)
+}
+
+// isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
+// is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
+func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
+	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
+		return true
+	}
+	if spec.ForkFrom != "" {
+		return true
+	}
+	return strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
+}
+
+// assertSnapshotBackend rejects a clone when the target backend differs from
+// the backend that produced the snapshot. CH and FC store state incompatibly,
+// so letting this reach cocoon would fail with a harder-to-debug error.
+func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
+	if snapshot == nil || snapshot.Hypervisor == "" || targetBackend == "" {
+		return nil
+	}
+	if snapshot.Hypervisor == targetBackend {
+		return nil
+	}
+	return fmt.Errorf("snapshot %s was taken with %s but CocoonSet requests %s",
+		snapshot.Name, snapshot.Hypervisor, targetBackend)
+}
+
+// canonicalCloudImgURL builds the /dl/{repo}/{tag} URL cocoon's cloudimg
+// backend can pull via plain http.Get.
+func canonicalCloudImgURL(baseURL, repo, tag string) string {
+	return fmt.Sprintf("%s/dl/%s/%s", strings.TrimRight(baseURL, "/"), repo, tag)
+}
+
+// isHTTPURL reports whether ref looks like an HTTP(S) cloud-image URL.
+func isHTTPURL(ref string) bool {
+	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
 }
 
 // localSnapshotName omits the default tag for backward compatibility.

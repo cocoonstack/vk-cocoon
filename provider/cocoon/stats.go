@@ -163,10 +163,7 @@ func splitPodKey(key string) (string, string) {
 }
 
 func readNodeUsage() (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	cpuNano := uint64(readNodeCPUSeconds() * 1e9)          //nolint:gosec // cpu seconds read from /proc are always non-negative
-	memBytes := uint64(max(readNodeMemoryWorkingSet(), 0)) //nolint:gosec // clamped to non-negative via max
-	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
-		&statsv1alpha1.MemoryStats{WorkingSetBytes: &memBytes}
+	return cpuMemStats(readNodeCPUSeconds(), readNodeMemoryWorkingSet())
 }
 
 func readNodeCPUSeconds() float64 {
@@ -211,10 +208,16 @@ func readNodeMemoryWorkingSet() int64 {
 }
 
 func readProcessUsage(pid int) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	cpuNano := uint64(readProcessCPUSeconds(pid) * 1e9)          //nolint:gosec // cpu seconds read from /proc are always non-negative
-	memBytes := uint64(max(readProcessMemoryWorkingSet(pid), 0)) //nolint:gosec // clamped to non-negative via max
+	return cpuMemStats(readProcessCPUSeconds(pid), readProcessMemoryWorkingSet(pid))
+}
+
+// cpuMemStats packs raw CPU seconds and working-set bytes into the
+// kubelet stats types, clamping memory to non-negative.
+func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
+	cpuNano := uint64(cpuSeconds * 1e9) //nolint:gosec // cpu seconds read from /proc are always non-negative
+	mem := uint64(max(memBytes, 0))     //nolint:gosec // clamped to non-negative via max
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
-		&statsv1alpha1.MemoryStats{WorkingSetBytes: &memBytes}
+		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
 }
 
 func readProcessCPUSeconds(pid int) float64 {

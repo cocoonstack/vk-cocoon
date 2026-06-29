@@ -152,6 +152,15 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	go m.run(ctx, key, probe, onUpdate, ready)
 }
 
+// applyResult writes one probe outcome into the result map.
+func (m *Manager) applyResult(key string, ready bool, message string) {
+	m.Set(key, Result{
+		Ready:   ready,
+		Live:    ready,
+		Message: message,
+	})
+}
+
 // run is the per-pod agent loop. Starts fast, slows to steady state once Ready.
 // Pre-Ready polling uses exponential backoff so a guest that boots in 200ms
 // flips immediately without paying a fixed 2s wait for the first retry.
@@ -216,13 +225,4 @@ func runProbe(ctx context.Context, probe Probe) (bool, string) {
 	ok, msg := probe(probeCtx)
 	metrics.ProbeDuration.Observe(time.Since(start).Seconds())
 	return ok, msg
-}
-
-// applyResult writes one probe outcome into the result map.
-func (m *Manager) applyResult(key string, ready bool, message string) {
-	m.Set(key, Result{
-		Ready:   ready,
-		Live:    ready,
-		Message: message,
-	})
 }

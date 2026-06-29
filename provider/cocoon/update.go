@@ -297,13 +297,6 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 	return importName, nil
 }
 
-// shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same
-// PCI slot, and only CH implements `vm net --nics`.
-func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
-	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
-		spec.OS == string(cocoonv1.OSWindows)
-}
-
 // cleanupWakeImport drops the cross-node import; same-node keeps the
 // local snapshot live for the next wake.
 func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
@@ -320,4 +313,11 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
+// shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same
+// PCI slot, and only CH implements `vm net --nics`.
+func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
+	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
+		spec.OS == string(cocoonv1.OSWindows)
 }

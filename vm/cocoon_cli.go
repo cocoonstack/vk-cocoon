@@ -112,7 +112,7 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 // Image runs `cocoon image inspect`; "not found in any backend" maps to ErrImageNotFound.
 func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
 	if name == "" {
-		return nil, fmt.Errorf("cocoon image inspect: name is empty")
+		return nil, errors.New("cocoon image inspect: name is empty")
 	}
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {
@@ -128,7 +128,7 @@ func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
 // pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar.
 func (c *CocoonCLI) ImageImport(ctx context.Context, opts ImageImportOptions) (io.WriteCloser, func() error, error) {
 	if opts.Name == "" {
-		return nil, nil, fmt.Errorf("cocoon image import: name is empty")
+		return nil, nil, errors.New("cocoon image import: name is empty")
 	}
 	cmd := c.command(ctx, "image", "import", opts.Name)
 	stdin, err := cmd.StdinPipe()
@@ -385,6 +385,24 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	return ch, nil
 }
 
+// command builds an exec.Cmd; logged at debug for operator visibility into the external binary surface.
+func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
+	log.WithFunc("vm.CocoonCLI.command").Debugf(ctx, "exec cocoon: %v", args)
+	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // path comes from operator config, not untrusted input
+}
+
+// runJSON runs cocoon and returns stdout as raw JSON.
+func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := c.command(ctx, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
 // buildCloneArgs assembles the cocoon vm clone argv.
 func buildCloneArgs(opts CloneOptions) []string {
 	args := []string{"vm", "clone", "--output", "json"}
@@ -460,12 +478,6 @@ func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
 	return args
 }
 
-// command builds an exec.Cmd; logged at debug for operator visibility into the external binary surface.
-func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
-	log.WithFunc("vm.CocoonCLI.command").Debugf(ctx, "exec cocoon: %v", args)
-	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // path comes from operator config, not untrusted input
-}
-
 // parseVMFromStatusJSON extracts ID, Name, State from the vm status JSON.
 func parseVMFromStatusJSON(data []byte) VM {
 	var obj struct {
@@ -496,18 +508,6 @@ func parseVMFromStatusJSON(data []byte) VM {
 		}
 	}
 	return v
-}
-
-// runJSON runs cocoon and returns stdout as raw JSON.
-func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := c.command(ctx, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.Bytes(), nil
 }
 
 // cocoonCmdError formats a consistent error message for cocoon subprocess failures.

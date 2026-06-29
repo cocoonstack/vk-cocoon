@@ -117,36 +117,6 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-func postCloneKind(spec meta.VMSpec) string {
-	if spec.OS == string(cocoonv1.OSWindows) {
-		return postCloneKindWindows
-	}
-	if spec.Backend == vm.BackendFirecracker {
-		return postCloneKindLinuxFC
-	}
-	return postCloneKindLinuxStatic
-}
-
-// postClonePlan pairs cocoon-agent argv with a shell-quoted hint operators can paste.
-type postClonePlan struct {
-	argv []string
-	hint string
-}
-
-// planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
-// on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
-func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
-	if spec.OS == string(cocoonv1.OSWindows) {
-		argv := buildWindowsPostCloneArgv()
-		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
-	}
-	if !needsPostClone(spec.Backend, v.NetworkConfigs) {
-		return postClonePlan{}, false
-	}
-	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
-	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
-}
-
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
@@ -185,13 +155,6 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 		pod.Namespace, pod.Name, annotationPostCloneHint)
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-
 // setPodAnnotation writes one annotation locally under p.mu and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
@@ -204,35 +167,6 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}
-}
-
-// needsPostClone: FC always (MAC re-apply); CH only with a static-IP NIC.
-func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
-	if backend == vm.BackendFirecracker {
-		return true
-	}
-	return slices.ContainsFunc(networkConfigs, isStaticNIC)
-}
-
-// buildWindowsPostCloneArgv: -PresentOnly is load-bearing — ghost Net PnP
-// entries make Disable-PnpDevice return 0x80041001 before the real adapter.
-func buildWindowsPostCloneArgv() []string {
-	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
-		`$x|Disable-PnpDevice -Confirm:$false;` +
-		`$x|Enable-PnpDevice -Confirm:$false`
-	return []string{"powershell", "-nop", "-c", ps}
-}
-
-func isCloudimg(image string) bool {
-	return strings.HasPrefix(image, "http://") || strings.HasPrefix(image, "https://")
-}
-
-// isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).
-func isCloudimgVM(vmID string) bool {
-	rootDir := provider.CocoonRootDir()
-	path := fmt.Sprintf("%s/run/%s/%s/overlay.qcow2", rootDir, runDirCH, vmID)
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // willRunSAC mirrors applyWindowsStaticIP's guard so CreatePod can defer Ready.
@@ -335,6 +269,68 @@ func (p *Provider) sacSetNICIP(ctx context.Context, pod *corev1.Pod, sess guest.
 	return nil
 }
 
+func postCloneKind(spec meta.VMSpec) string {
+	if spec.OS == string(cocoonv1.OSWindows) {
+		return postCloneKindWindows
+	}
+	if spec.Backend == vm.BackendFirecracker {
+		return postCloneKindLinuxFC
+	}
+	return postCloneKindLinuxStatic
+}
+
+// postClonePlan pairs cocoon-agent argv with a shell-quoted hint operators can paste.
+type postClonePlan struct {
+	argv []string
+	hint string
+}
+
+// planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
+// on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
+func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
+	if spec.OS == string(cocoonv1.OSWindows) {
+		argv := buildWindowsPostCloneArgv()
+		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
+	}
+	if !needsPostClone(spec.Backend, v.NetworkConfigs) {
+		return postClonePlan{}, false
+	}
+	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
+	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// needsPostClone: FC always (MAC re-apply); CH only with a static-IP NIC.
+func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
+	if backend == vm.BackendFirecracker {
+		return true
+	}
+	return slices.ContainsFunc(networkConfigs, isStaticNIC)
+}
+
+// buildWindowsPostCloneArgv: -PresentOnly is load-bearing — ghost Net PnP
+// entries make Disable-PnpDevice return 0x80041001 before the real adapter.
+func buildWindowsPostCloneArgv() []string {
+	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
+		`$x|Disable-PnpDevice -Confirm:$false;` +
+		`$x|Enable-PnpDevice -Confirm:$false`
+	return []string{"powershell", "-nop", "-c", ps}
+}
+
+// isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).
+func isCloudimgVM(vmID string) bool {
+	rootDir := provider.CocoonRootDir()
+	path := fmt.Sprintf("%s/run/%s/%s/overlay.qcow2", rootDir, runDirCH, vmID)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func isStaticNIC(nc *vm.NetworkConfig) bool {
 	return nc.Network != nil && nc.Network.IP != ""
 }
@@ -367,7 +363,7 @@ func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkCo
 
 	cmds = append(cmds, "rm -f /etc/systemd/network/10-*.network")
 
-	if isCloudimg(sourceImage) || isCloudimgVM(vmID) {
+	if isHTTPURL(sourceImage) || isCloudimgVM(vmID) {
 		cmds = append(cmds, "cloud-init clean --logs --seed --configs network && cloud-init init --local && cloud-init init")
 		cmds = append(cmds, "cloud-init modules --mode=config && systemctl restart systemd-networkd")
 	} else {
