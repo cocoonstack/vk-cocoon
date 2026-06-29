@@ -163,7 +163,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
 			Name:      "wake_ip_wait_total",
-			Help:      "Outcomes of the CH+Windows dropNIC wake's post-clone DHCP lease wait.",
+			Help:      "Outcomes of the post-clone and wake DHCP lease wait.",
 		},
 		[]string{"result"}, // result=ok|timeout
 	)
