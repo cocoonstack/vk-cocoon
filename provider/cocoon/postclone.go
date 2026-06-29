@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -128,22 +129,23 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 	if ctx.Err() != nil {
 		return
 	}
-	if p.lifecycleAlreadyFailed(pod) {
-		return
-	}
 	if !gotIP {
-		budget := p.wakeFreshIPBudget
-		if budget == 0 {
-			budget = defaultWakeFreshIPBudget
+		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
+		budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+		err := fmt.Errorf("clone %s: dhcp lease not observed within %s", v.Name, budget)
+		msg := err.Error()
+		// wake marker: don't clobber a concurrent hibernate/delete with a clone failure.
+		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
+			p.emitWarningf(pod, "PostCloneIPWaitTimeout", "%s", truncate(msg, eventMessageMaxBytes))
+			log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s post-clone ip wait timeout", pod.Namespace, pod.Name)
 		}
-		msg := fmt.Sprintf("clone %s: dhcp lease not observed within %s", v.Name, budget)
-		p.emitWarningf(pod, "PostCloneIPWaitTimeout", "%s", truncate(msg, eventMessageMaxBytes))
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))
 		return
 	}
+	metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
-	p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	// wake marker: don't publish Ready over a VM hibernated/replaced mid-wait.
+	p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "")
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
