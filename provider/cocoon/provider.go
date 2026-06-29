@@ -468,10 +468,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		if !cooldownElapsed {
 			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
 			if err := p.Runtime.Remove(ctx, trackedID); err != nil {
-				// Remove failed — the VM still exists in an unknown state.
-				// Keep the pod so the user/operator can investigate; evicting
-				// would delete the pod while the orphan VM remains, causing
-				// name collisions when the operator recreates.
+				// Remove failed: VM still live in an unknown state. Keep the pod for
+				// investigation — evicting would orphan the live VM and collide on recreate.
 				logger.Errorf(ctx, err, "remove vm %s during cooldown eviction, keeping pod for investigation", trackedID)
 				return
 			}
@@ -482,10 +480,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
 			if removeErr := p.Runtime.Remove(ctx, trackedID); removeErr != nil {
-				// Remove failed — the VM still exists in an unknown state.
-				// Keep the pod so the user/operator can investigate; evicting
-				// would delete the pod while the orphan VM remains, causing
-				// name collisions when the operator recreates.
+				// Remove failed: VM still live in an unknown state. Keep the pod for
+				// investigation — evicting would orphan the live VM and collide on recreate.
 				logger.Errorf(ctx, removeErr, "remove vm %s after failed restart, keeping pod for investigation", trackedID)
 				return
 			}

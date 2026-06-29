@@ -7,8 +7,7 @@ import (
 )
 
 // VMCollector is a prometheus.Collector that reads live VM and node
-// stats on each scrape. The provider supplies a callback that returns
-// the current state.
+// stats from a provider callback on each scrape.
 type VMCollector struct {
 	collectFn func() ([]provider.VMStats, provider.NodeStats)
 
