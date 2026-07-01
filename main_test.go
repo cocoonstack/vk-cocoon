@@ -3,19 +3,19 @@ package main
 import (
 	"testing"
 
+	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/epoch/registryclient"
-	"github.com/cocoonstack/vk-cocoon/snapshots"
 )
 
 func TestBuildRegistryBackend(t *testing.T) {
 	t.Setenv("EPOCH_CA_CERT", "") // keep the epoch client deterministic on dev machines
 
-	oci, err := buildRegistry(buildOpts{ociRegistry: "example.com/proj/repo"})
+	reg, err := buildRegistry(buildOpts{ociRegistry: "example.com/proj/repo"})
 	if err != nil {
 		t.Fatalf("buildRegistry(OCI): %v", err)
 	}
-	if _, ok := oci.(*snapshots.OCIRegistry); !ok {
-		t.Fatalf("OCI_REGISTRY set: got %T, want *snapshots.OCIRegistry", oci)
+	if _, ok := reg.(*oci.OCIRegistry); !ok {
+		t.Fatalf("OCI_REGISTRY set: got %T, want *oci.OCIRegistry", reg)
 	}
 
 	ep, err := buildRegistry(buildOpts{epochURL: "http://epoch.example"})

@@ -8,17 +8,18 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cocoonstack/epoch/snapshot"
+	"github.com/cocoonstack/cocoon-common/oci"
+	"github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Puller streams a snapshot or cloud image from epoch into the local cocoon runtime.
+// Puller streams a snapshot or cloud image from an OCI registry into the local cocoon runtime.
 type Puller struct {
-	Registry Registry
+	Registry oci.Registry
 	Runtime  vm.Runtime
 }
 
-// PullSnapshot fetches and imports a snapshot from epoch. localName defaults to name.
+// PullSnapshot fetches and imports a snapshot from the registry. localName defaults to name.
 func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) error {
 	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
 	if err != nil {

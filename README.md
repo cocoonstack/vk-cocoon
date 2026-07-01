@@ -12,7 +12,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 | Provider | `provider/cocoon/` | `Provider` struct with lifecycle methods (CreatePod / DeletePod / UpdatePod / GetPodStatus), startup reconcile, orphan policy, VM event watcher, pod eviction |
 | Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `cocoon` (including `WatchEvents` via `cocoon vm status --event --format json`) |
-| Snapshot SDK | `snapshots/` | Wraps the [epoch](https://github.com/cocoonstack/epoch) SDK as a `RegistryClient` interface, plus `Puller` and `Pusher` that stream snapshots and cloud images via `epoch/snapshot` and `epoch/cloudimg` |
+| Snapshot SDK | `snapshots/` | `Puller` and `Pusher` stream snapshots and cloud images to any OCI registry through `cocoon-common`'s `oci.Registry` backend (`cocoon-common/snapshot` + `cocoon-common/cloudimg`) |
 | Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
 | Guest exec | `guest/` | RDP help-text shim (Windows) and SAC dialer (Windows static IP). Linux guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/`. |
 | Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
@@ -27,8 +27,8 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 2. If a VM with `spec.VMName` already exists locally, adopt it (idempotent on restart). Adoption hinges on `StartupReconcile` having populated `vmsByName`; before reconcile completes, CreatePod treats the pod as new and may collide on VM name.
 3. Otherwise branch on `spec.Managed` first, then `spec.Mode`:
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
-   - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from epoch via `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend` validates the snapshot's recorded hypervisor matches `spec.Backend` — a CH snapshot cannot be cloned onto a FC target and vice-versa. When the snapshot carries a base image, `Pull: true` is passed to `CloneOptions`, which translates to `cocoon vm clone --pull`; cocoon constructs a digest reference (`repo@sha256:xxx`) from the snapshot metadata and pulls the exact image version recorded at snapshot time. Then `Runtime.Clone(from=<local>, to=spec.VMName)`. Pod-side CPU/memory/storage are not plumbed into clone — cocoon clone inherits all guest resources from the snapshot. Only the `vm run` path translates pod resources into VM resources.
-   - **Mode `run`** (`Managed=true`): `ensureRunImage` makes the image available locally before launching the VM. It peeks the OCI manifest via `Puller.Registry`: cocoonstack cloud-image artifacts (artifactType=`application/vnd.cocoonstack.os-image.v1+json`) take the qcow2 streaming path through `Puller.EnsureCloudImage` → `cocoon image import`, snapshot artifacts are rejected with a "use mode=clone" error, and everything else (HTTP(S) URLs, container images, refs that don't resolve against epoch) falls through to `Runtime.EnsureImage` → `cocoon image pull`. `--force` when `spec.ForcePull` is true. Then `Runtime.Run(image=spec.Image, name=spec.VMName)`. When `spec.Backend` is `firecracker`, `--fc` is passed to select the FC backend; when `spec.OS` is `windows`, `--windows` is passed. When `spec.NoDirectIO` is true, `--no-direct-io` disables O_DIRECT on writable disks (CH only, useful for dev/test).
+   - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from the registry via `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend` validates the snapshot's recorded hypervisor matches `spec.Backend` — a CH snapshot cannot be cloned onto a FC target and vice-versa. When the snapshot carries a base image, `Pull: true` is passed to `CloneOptions`, which translates to `cocoon vm clone --pull`; cocoon constructs a digest reference (`repo@sha256:xxx`) from the snapshot metadata and pulls the exact image version recorded at snapshot time. Then `Runtime.Clone(from=<local>, to=spec.VMName)`. Pod-side CPU/memory/storage are not plumbed into clone — cocoon clone inherits all guest resources from the snapshot. Only the `vm run` path translates pod resources into VM resources.
+   - **Mode `run`** (`Managed=true`): `ensureRunImage` makes the image available locally before launching the VM. It peeks the OCI manifest via `Puller.Registry`: cocoonstack cloud-image artifacts (artifactType=`application/vnd.cocoonstack.os-image.v1+json`) take the qcow2 streaming path through `Puller.EnsureCloudImageFromRaw` → `cocoon image import`, snapshot artifacts are rejected with a "use mode=clone" error, and everything else (HTTP(S) URLs, container images, refs that don't resolve against the registry) falls through to `Runtime.EnsureImage` → `cocoon image pull`. `--force` when `spec.ForcePull` is true. Then `Runtime.Run(image=spec.Image, name=spec.VMName)`. When `spec.Backend` is `firecracker`, `--fc` is passed to select the FC backend; when `spec.OS` is `windows`, `--windows` is passed. When `spec.NoDirectIO` is true, `--no-direct-io` disables O_DIRECT on writable disks (CH only, useful for dev/test).
    - **`vm.cocoonstack.io/clone-from-dir` override** (managed-only, takes precedence over mode/fork-from): clone via `cocoon vm clone --from-dir <abs-path> --pull`, bypassing the local snapshot DB. Pairs with `cocoon snapshot export --to-dir` for cross-node staging. Conflicts with `mode=run` or `fork-from` fast-fail.
 4. For clone/fork/wake paths, check whether the VM needs manual network setup (see [Post-clone hints](#post-clone-hints) below). If so, write the required commands as a base64-encoded annotation (`vm.cocoonstack.io/post-clone-hint`) and log a warning. The pod stays Running but Not Ready until the user executes the commands via `cocoon vm console` and the probe detects network connectivity.
 5. Resolve the IP from the cocoon-net JSON lease file by MAC.
@@ -39,7 +39,7 @@ vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runt
 
 1. Decode `meta.VMSpec`.
 2. `meta.ShouldSnapshotVM(spec)` — the shared cocoon-common decoder — decides whether to snapshot before destroy:
-   - `always`: `Runtime.SnapshotSave` then `Pusher.PushSnapshot(tag=meta.DefaultSnapshotTag)` to epoch.
+   - `always`: `Runtime.SnapshotSave` then `Pusher.PushSnapshot(tag=meta.DefaultSnapshotTag)` to the registry.
    - `main-only`: same, but only when the VM name ends in `-0` (slot 0 = main agent).
    - `never`: skip snapshots entirely.
 3. `Runtime.Remove(vmID)` to destroy the VM.
@@ -52,7 +52,7 @@ The only update vk-cocoon honors is a `HibernateState` transition. Anything else
 | Transition | Behavior |
 |---|---|
 | `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
-| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from epoch. |
+| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from the registry. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by polling `epoch.GetManifest(vmName, "hibernate")`.
 
@@ -87,8 +87,8 @@ vk-cocoon exposes three metrics surfaces:
 | `vk_cocoon_node_storage_available_bytes` / `total_bytes` | Gauge | Cocoon root filesystem |
 | `vk_cocoon_vm_boot_duration_seconds{mode,backend}` | Histogram | VM creation time (run or clone) |
 | `vk_cocoon_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
-| `vk_cocoon_snapshot_push_duration_seconds` | Histogram | Epoch push time |
-| `vk_cocoon_snapshot_pull_duration_seconds` | Histogram | Epoch pull time |
+| `vk_cocoon_snapshot_push_duration_seconds` | Histogram | Registry push time |
+| `vk_cocoon_snapshot_pull_duration_seconds` | Histogram | Registry pull time |
 | `vk_cocoon_probe_duration_seconds` | Histogram | Per-probe health check time (ICMP or TCP) |
 | `vk_cocoon_pod_lifecycle_total{op,result}` | Counter | Pod lifecycle operations |
 | `vk_cocoon_snapshot_pull_total{result}` / `push_total` | Counter | Snapshot pull/push counts |
@@ -178,9 +178,10 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `KUBECONFIG` | unset | Path to kubeconfig (in-cluster used otherwise). |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name registered with the K8s API. |
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
-| `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Epoch base URL. |
-| `EPOCH_TOKEN` | unset | Bearer token (only needed for `/v2/` pushes; `/dl/` is anonymous). |
-| `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against epoch. |
+| `OCI_REGISTRY` | unset | OCI registry base (e.g. an Artifact Registry repo). When set, snapshots and cloud images use it instead of the epoch backend below. |
+| `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Epoch backend base URL (used when `OCI_REGISTRY` is unset). |
+| `EPOCH_TOKEN` | unset | Bearer token for the epoch backend's `/v2/` API. |
+| `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against the epoch backend. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
@@ -235,7 +236,7 @@ The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy`
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers. |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers. |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation. |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; vk-cocoon pulls and pushes via `epoch/snapshot` + `epoch/cloudimg`. |
+| [epoch](https://github.com/cocoonstack/epoch) | Transitional registry backend (`registryclient`); the snapshot/cloud-image code now lives in `cocoon-common`. |
 | [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file. |
 
 ## License

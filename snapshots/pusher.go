@@ -6,17 +6,18 @@ import (
 	"fmt"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/epoch/snapshot"
+	"github.com/cocoonstack/cocoon-common/oci"
+	"github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Pusher streams a local snapshot up into epoch.
+// Pusher streams a local snapshot up into an OCI registry.
 type Pusher struct {
-	Registry Registry
+	Registry oci.Registry
 	Runtime  vm.Runtime
 }
 
-// PushSnapshot uploads a snapshot to epoch at the given repo/tag.
+// PushSnapshot uploads a snapshot to the registry at the given repo/tag.
 func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) (*snapshot.PushResult, error) {
 	repo = cmp.Or(repo, vmName)
 	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
