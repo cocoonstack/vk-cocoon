@@ -31,8 +31,8 @@ type OCIRegistry struct {
 	opts []remote.Option
 }
 
-// NewOCIRegistry roots a client at base, authenticating via keychain (use
-// authn.DefaultKeychain for docker config / GCP application-default credentials).
+// NewOCIRegistry roots a client at base, authenticating via keychain (e.g.
+// authn.DefaultKeychain, or a MultiKeychain with google.Keychain for GCP AR).
 func NewOCIRegistry(base string, keychain authn.Keychain) *OCIRegistry {
 	return &OCIRegistry{base: base, opts: []remote.Option{remote.WithAuthFromKeychain(keychain)}}
 }
