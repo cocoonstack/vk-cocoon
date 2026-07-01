@@ -74,6 +74,8 @@ type fakeRuntime struct {
 	removeErr error
 	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
 	snapshotSaveErr error
+	// snapshotSaveHook runs at SnapshotSave entry so a test can hold it in-flight.
+	snapshotSaveHook func()
 
 	// inspectSeq, when non-empty, is consumed in order by Inspect before
 	// falling back to inspectErr/inspectVM. Lets tests script a sequence
@@ -144,6 +146,9 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+	if f.snapshotSaveHook != nil {
+		f.snapshotSaveHook()
+	}
 	if f.snapshotSaveErr != nil {
 		return f.snapshotSaveErr
 	}
@@ -364,6 +369,48 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	}
 	if len(rt.ensuredImages) != 0 {
 		t.Fatalf("EnsureImage should not run for local VM fork, got %#v", rt.ensuredImages)
+	}
+}
+
+func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
+	const n = 6
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	rt := &fakeRuntime{snapshotSaveHook: func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}}
+	p := &Provider{
+		Runtime:   rt,
+		vmsByName: map[string]*vm.VM{"vk-ns-demo-0": {ID: "src", Name: "vk-ns-demo-0"}},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	names := make([]string, n)
+	errs := make([]error, n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			names[i], errs[i] = p.ensureForkSnapshot(t.Context(), "vk-ns-demo-0")
+		}(i)
+	}
+	<-entered // leader is parked in SnapshotSave; release it and let followers dedup or reuse
+	close(release)
+	wg.Wait()
+
+	if rt.snapshotSaveCount != 1 {
+		t.Errorf("concurrent forks saved the shared snapshot %d times, want 1", rt.snapshotSaveCount)
+	}
+	want := forkSnapshotName("vk-ns-demo-0")
+	for i := range n {
+		if errs[i] != nil {
+			t.Errorf("caller %d: %v", i, errs[i])
+		}
+		if names[i] != want {
+			t.Errorf("caller %d = %q, want %q", i, names[i], want)
+		}
 	}
 }
 

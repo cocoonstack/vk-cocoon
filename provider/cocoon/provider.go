@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -108,6 +109,7 @@ type Provider struct {
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
 	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
+	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
 	notifyHook     func(*corev1.Pod)
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
