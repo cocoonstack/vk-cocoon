@@ -91,7 +91,7 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 }
 
 // EnsureImage shells `cocoon image pull`; force=true adds --force.
-// Cocoonstack cloud-image artifacts must go through Puller.EnsureCloudImage
+// Cocoonstack cloud-image artifacts must go through Puller.EnsureCloudImageFromRaw
 // instead — `cocoon image pull` mistakes them for container images.
 func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) error {
 	if image == "" {
