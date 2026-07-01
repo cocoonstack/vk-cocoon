@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/projecteru2/core/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -72,6 +74,7 @@ func main() {
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
 	epochURL := commonk8s.EnvOrDefault("EPOCH_URL", defaultEpochURL)
 	epochToken := os.Getenv("EPOCH_TOKEN")
+	ociRegistry := os.Getenv("OCI_REGISTRY")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
@@ -120,6 +123,7 @@ func main() {
 		nodeName:     nodeName,
 		epochURL:     epochURL,
 		epochToken:   epochToken,
+		ociRegistry:  ociRegistry,
 		leasesPath:   leasesPath,
 		cocoonBin:    cocoonBin,
 		orphanPolicy: orphanPolicy,
@@ -216,6 +220,7 @@ type buildOpts struct {
 	nodeName     string
 	epochURL     string
 	epochToken   string
+	ociRegistry  string
 	leasesPath   string
 	cocoonBin    string
 	orphanPolicy string
@@ -223,12 +228,32 @@ type buildOpts struct {
 	recorder     record.EventRecorder
 }
 
+// buildRegistry selects the registry backend: an OCI Distribution registry
+// when OCI_REGISTRY is set, else epoch's server. The OCI keychain resolves GCP
+// ADC (google.Keychain) before falling back to docker config.
+func buildRegistry(opts buildOpts) (snapshots.Registry, error) {
+	if opts.ociRegistry != "" {
+		keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
+		return snapshots.NewOCIRegistry(opts.ociRegistry, keychain), nil
+	}
+	client, err := registryclient.NewFromEnv(opts.epochURL, opts.epochToken)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
 	logger := log.WithFunc("buildProvider")
-	registry, err := registryclient.NewFromEnv(opts.epochURL, opts.epochToken)
+	registry, err := buildRegistry(opts)
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
 	}
+	backend := "epoch " + opts.epochURL
+	if opts.ociRegistry != "" {
+		backend = "OCI " + opts.ociRegistry
+	}
+	logger.Infof(ctx, "registry backend: %s", backend)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin)
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName

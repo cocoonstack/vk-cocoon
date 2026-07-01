@@ -22,6 +22,7 @@ require (
 
 require (
 	cel.dev/expr v0.24.0 // indirect
+	cloud.google.com/go/compute/metadata v0.7.0 // indirect
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
 	github.com/alphadose/haxmap v1.2.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
@@ -137,3 +138,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+exclude cloud.google.com/go v0.26.0
