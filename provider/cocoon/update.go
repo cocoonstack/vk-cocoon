@@ -186,8 +186,6 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 // hot-adds a fresh NIC that Windows enumerates as new hardware. The local import
 // copy (cross-node pull) is dropped whether the clone succeeds or fails.
 func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string) (*vm.VM, error) {
-	// The imported copy is only the Clone source; drop it either way so a failed
-	// clone doesn't leak it.
 	defer p.cleanupWakeImport(spec.VMName, sourceName)
 	opts := vm.CloneOptions{
 		From:       sourceName,

@@ -46,9 +46,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 
-	// Migration restore reuses wake()'s post-restore path (CH+Windows waits on the
-	// fresh NIC's lease; others run runPostCloneSetup) and skips the base-image
-	// post-clone setup below.
+	// A restore reuses wake()'s post-restore path (CH+Windows waits on the fresh
+	// NIC's lease; others run runPostCloneSetup) and skips the base-image post-clone.
 	restoring := meta.ReadRestoreFromHibernate(pod)
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
