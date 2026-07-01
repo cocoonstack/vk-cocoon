@@ -9,14 +9,13 @@ import (
 	"io"
 
 	"github.com/cocoonstack/epoch/manifest"
-	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/epoch/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 // Puller streams a snapshot or cloud image from epoch into the local cocoon runtime.
 type Puller struct {
-	Registry *registryclient.Client
+	Registry Registry
 	Runtime  vm.Runtime
 }
 
@@ -57,7 +56,7 @@ func (p *Puller) PullCloudImage(ctx context.Context, name, tag string, w io.Writ
 	if err != nil {
 		return err
 	}
-	adapter := blobReader{client: p.Registry, name: name}
+	adapter := blobReader{registry: p.Registry, name: name}
 	return cloudimgStream(ctx, raw, adapter, w)
 }
 
@@ -91,7 +90,7 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 	if err != nil {
 		return fmt.Errorf("open cocoon image import: %w", err)
 	}
-	adapter := blobReader{client: p.Registry, name: name}
+	adapter := blobReader{registry: p.Registry, name: name}
 	if err := cloudimgStream(ctx, raw, adapter, importer); err != nil {
 		_ = importer.Close()
 		_ = wait()
