@@ -46,13 +46,26 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 
+	// Migration restore reuses wake()'s post-restore path (CH+Windows waits on the
+	// fresh NIC's lease; others run runPostCloneSetup) and skips the base-image
+	// post-clone setup below.
+	restoring := meta.ReadRestoreFromHibernate(pod)
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
+		// A restore is a wake: count its failure like wake() does, not just create.
+		if restoring {
+			metrics.WakeTotal.WithLabelValues("failed").Inc()
+		}
 		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
 		return err
 	}
-	metrics.VMBootDuration.WithLabelValues(spec.Mode, spec.Backend).Observe(time.Since(bootStart).Seconds())
+	// A restore is a clone-from-hibernate; label its boot "clone" like wake does.
+	bootMode := spec.Mode
+	if restoring {
+		bootMode = "clone"
+	}
+	metrics.VMBootDuration.WithLabelValues(bootMode, spec.Backend).Observe(time.Since(bootStart).Seconds())
 
 	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
 		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
@@ -63,10 +76,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.applyRuntime(ctx, pod, v)
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
-	// Migration restore reuses wake()'s post-restore path (CH+Windows waits on the
-	// fresh NIC's lease; others run runPostCloneSetup) and skips the base-image
-	// post-clone setup below.
-	restoring := meta.ReadRestoreFromHibernate(pod)
 	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
 	p.trackPod(pod, v)
 	willRunSAC := p.willRunSAC(spec, v)
