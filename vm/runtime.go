@@ -17,8 +17,8 @@ var (
 	ErrVMNotFound = errors.New("vm not found")
 
 	// ErrImageNotFound signals the cocoon CLI has authoritatively reported
-	// the image is not stored locally. Used by Puller.EnsureCloudImage as
-	// the idempotency probe for `cocoon image inspect`.
+	// the image is not stored locally. Used by Puller.EnsureCloudImageFromRaw
+	// as the idempotency probe for `cocoon image inspect`.
 	ErrImageNotFound = errors.New("image not found")
 
 	// ErrSnapshotNotFound is the sibling of ErrVMNotFound for snapshot inspect.
