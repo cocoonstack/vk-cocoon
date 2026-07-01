@@ -54,7 +54,7 @@ The only update vk-cocoon honors is a `HibernateState` transition. Anything else
 | `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from the registry. |
 
-The operator's `CocoonHibernation` reconciler tracks the transition by polling `epoch.GetManifest(vmName, "hibernate")`.
+The operator's `CocoonHibernation` reconciler tracks the transition by polling the registry for the `hibernate` manifest.
 
 ### Node resources
 
@@ -178,10 +178,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `KUBECONFIG` | unset | Path to kubeconfig (in-cluster used otherwise). |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name registered with the K8s API. |
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
-| `OCI_REGISTRY` | unset | OCI registry base (e.g. an Artifact Registry repo). When set, snapshots and cloud images use it instead of the epoch backend below. |
-| `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Epoch backend base URL (used when `OCI_REGISTRY` is unset). |
-| `EPOCH_TOKEN` | unset | Bearer token for the epoch backend's `/v2/` API. |
-| `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against the epoch backend. |
+| `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
@@ -226,17 +223,16 @@ make fmt            # gofumpt + goimports
 make help           # show all targets
 ```
 
-The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy` when active so cross-module references resolve through `go.work` without forcing a release of cocoon-common or epoch.
+The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy` when active so cross-module references resolve through `go.work` without forcing a release of cocoon-common.
 
 ## Related projects
 
 | Project | Role |
 |---|---|
 | [cocoon](https://github.com/cocoonstack/cocoon) | The MicroVM runtime vk-cocoon shells out to. |
-| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers. |
+| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry + snapshot/cloud-image packages. |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers. |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation. |
-| [epoch](https://github.com/cocoonstack/epoch) | Transitional registry backend (`registryclient`); the snapshot/cloud-image code now lives in `cocoon-common`. |
 | [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file. |
 
 ## License
