@@ -118,12 +118,11 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-// markReadyAfterIP gates lifecycle-state=ready on the clone's DHCP lease, the same
-// contract the wake path enforces (finalizeDropNICWake). A cloned VM's ready is the
-// signal vm-service reads the pod IP on, but the post-clone exec runs over vsock and
-// can finish before a slow guest's lease lands — publishing ready then would promise
-// an IP resolveVMIP can't yet return. Wait for the lease and flush status first; on
-// timeout mark failed, never ready-without-IP.
+// markReadyAfterIP defers lifecycle-state=ready until the clone's DHCP lease lands,
+// the same contract the wake path enforces. ready is the signal vm-service reads the
+// pod IP on, but the post-clone exec runs over vsock and can finish first — marking
+// ready then would promise an IP resolveVMIP can't yet return. On timeout mark
+// failed, never ready-without-IP.
 func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
 	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
 	if ctx.Err() != nil {
