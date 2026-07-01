@@ -4,14 +4,15 @@ import (
 	"context"
 	"io"
 
-	"github.com/cocoonstack/epoch/cloudimg"
+	"github.com/cocoonstack/cocoon-common/cloudimg"
+	"github.com/cocoonstack/cocoon-common/oci"
 )
 
 var _ cloudimg.BlobReader = blobReader{}
 
 // blobReader adapts a Registry to cloudimg.BlobReader.
 type blobReader struct {
-	registry Registry
+	registry oci.Registry
 	name     string
 }
 

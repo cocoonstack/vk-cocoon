@@ -23,7 +23,7 @@ func (p *Provider) removeSnapshotDetached(funcLabel, name string) {
 	}
 }
 
-// saveAndPushSnapshot saves a snapshot and pushes it to epoch, recording
+// saveAndPushSnapshot saves a snapshot and pushes it to the registry, recording
 // timing metrics. Errors are logged and counted but not returned — the
 // delete path treats snapshot failures as non-fatal.
 func (p *Provider) saveAndPushSnapshot(ctx context.Context, vmName, vmID, tag, image string) {

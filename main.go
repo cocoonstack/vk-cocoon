@@ -32,6 +32,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/guest/rdp"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
@@ -231,10 +232,10 @@ type buildOpts struct {
 // buildRegistry selects the registry backend: an OCI Distribution registry
 // when OCI_REGISTRY is set, else epoch's server. The OCI keychain resolves GCP
 // ADC (google.Keychain) before falling back to docker config.
-func buildRegistry(opts buildOpts) (snapshots.Registry, error) {
+func buildRegistry(opts buildOpts) (oci.Registry, error) {
 	if opts.ociRegistry != "" {
 		keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
-		return snapshots.NewOCIRegistry(opts.ociRegistry, keychain), nil
+		return oci.NewOCIRegistry(opts.ociRegistry, keychain), nil
 	}
 	client, err := registryclient.NewFromEnv(opts.epochURL, opts.epochToken)
 	if err != nil {

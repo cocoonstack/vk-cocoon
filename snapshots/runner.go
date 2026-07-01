@@ -4,13 +4,13 @@ import (
 	"context"
 	"io"
 
-	"github.com/cocoonstack/epoch/snapshot"
+	"github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 var _ snapshot.CocoonRunner = runnerAdapter{}
 
-// runnerAdapter wraps vm.Runtime to satisfy epoch's snapshot.CocoonRunner.
+// runnerAdapter wraps vm.Runtime to satisfy snapshot.CocoonRunner.
 type runnerAdapter struct {
 	Runtime vm.Runtime
 }

@@ -23,7 +23,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
 			Name:      "snapshot_pull_total",
-			Help:      "Number of snapshot pulls from epoch by result.",
+			Help:      "Number of snapshot pulls from the registry by result.",
 		},
 		[]string{"result"},
 	)
@@ -41,7 +41,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
 			Name:      "snapshot_push_total",
-			Help:      "Number of snapshot pushes to epoch by result.",
+			Help:      "Number of snapshot pushes to the registry by result.",
 		},
 		[]string{"result"},
 	)
@@ -118,7 +118,7 @@ var (
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Name:      "snapshot_push_duration_seconds",
-			Help:      "Time to push a snapshot to epoch.",
+			Help:      "Time to push a snapshot to the registry.",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
 		},
 	)
@@ -127,7 +127,7 @@ var (
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Name:      "snapshot_pull_duration_seconds",
-			Help:      "Time to pull a snapshot from epoch.",
+			Help:      "Time to pull a snapshot from the registry.",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
 		},
 	)

@@ -15,9 +15,9 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/epoch/manifest"
-	"github.com/cocoonstack/epoch/utils"
+	"github.com/cocoonstack/cocoon-common/ociutil"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -198,7 +198,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, "", nil
 
 	default: // clone is the default
-		repo, tag := utils.ParseRef(spec.Image)
+		repo, tag := ociutil.ParseRef(spec.Image)
 		local := localSnapshotName(repo, tag)
 		snapshot, err := p.ensureSnapshot(ctx, repo, tag, local)
 		if err != nil {
@@ -241,10 +241,10 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	if p.Puller == nil || p.Puller.Registry == nil || isHTTPURL(image) {
 		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
-	repo, tag := utils.ParseRef(image)
+	repo, tag := ociutil.ParseRef(image)
 	raw, _, err := p.Puller.Registry.GetManifest(ctx, repo, tag)
 	if err != nil {
-		// Non-epoch ref or registry hiccup; cocoon image pull handles non-epoch refs natively.
+		// Ref absent from the registry or a hiccup; cocoon image pull handles external refs natively.
 		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
 	kind, classifyErr := manifest.Classify(raw)
@@ -262,7 +262,7 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	}
 }
 
-// ensureSnapshot returns the local snapshot, pulling from epoch if needed.
+// ensureSnapshot returns the local snapshot, pulling from the registry if needed.
 // Local name includes the tag so myvm:v1 and myvm:v2 stay separate.
 func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) (*vm.Snapshot, error) {
 	if repo == "" {
