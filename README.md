@@ -179,6 +179,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name registered with the K8s API. |
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
 | `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | unset | Path to a GCP service-account JSON key with `roles/artifactregistry.writer`, fed to ADC for the snapshot push. Unset falls back to the read-only node instance SA. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
