@@ -324,22 +324,31 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
-	if _, err := p.Runtime.Snapshot(ctx, snapshotName); err == nil {
-		return snapshotName, nil
-	}
-
-	sourceVM := p.vmByName(sourceVMName)
-	if sourceVM == nil {
-		inspected, err := p.Runtime.Inspect(ctx, sourceVMName)
-		if err != nil {
-			return "", fmt.Errorf("inspect fork source vm %s: %w", sourceVMName, err)
+	// singleflight so concurrent sub-agents forking the same main don't race into
+	// SnapshotSave and all but one fail "snapshot name already in use". The shared
+	// save is cancel-detached so one caller's aborted CreatePod can't fail the rest.
+	created, err, _ := p.forkSnapshotSF.Do(snapshotName, func() (any, error) {
+		shared := context.WithoutCancel(ctx)
+		if _, err := p.Runtime.Snapshot(shared, snapshotName); err == nil {
+			return snapshotName, nil
 		}
-		sourceVM = inspected
+		sourceVM := p.vmByName(sourceVMName)
+		if sourceVM == nil {
+			inspected, err := p.Runtime.Inspect(shared, sourceVMName)
+			if err != nil {
+				return "", fmt.Errorf("inspect fork source vm %s: %w", sourceVMName, err)
+			}
+			sourceVM = inspected
+		}
+		if err := p.Runtime.SnapshotSave(shared, snapshotName, sourceVM.ID); err != nil {
+			return "", fmt.Errorf("snapshot fork source vm %s as %s: %w", sourceVMName, snapshotName, err)
+		}
+		return snapshotName, nil
+	})
+	if err != nil {
+		return "", err
 	}
-	if err := p.Runtime.SnapshotSave(ctx, snapshotName, sourceVM.ID); err != nil {
-		return "", fmt.Errorf("snapshot fork source vm %s as %s: %w", sourceVMName, snapshotName, err)
-	}
-	return snapshotName, nil
+	return created.(string), nil
 }
 
 func (p *Provider) vmByName(name string) *vm.VM {
