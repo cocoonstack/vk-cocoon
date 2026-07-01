@@ -480,3 +480,29 @@ func TestForgetPodDropsLifecycleState(t *testing.T) {
 		t.Errorf("forgetPod must drop intent entry")
 	}
 }
+
+// Regression: a bare UpdatePod hands trackPod a framework pod snapshot still
+// carrying lifecycle-state=creating after vk advanced to ready out-of-band.
+// trackPod must re-assert the authoritative intent, else the framework syncs the
+// stale annotation back to the apiserver and strands a healthy VM at creating.
+func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
+	t.Parallel()
+
+	const ns, name = "ns", "demo-0"
+	key := meta.PodKey(ns, name)
+	p := newTestProvider(t)
+	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+
+	stale := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: ns,
+		Annotations: map[string]string{
+			meta.AnnotationCocoonSetGeneration: "1",
+			meta.AnnotationLifecycleState:      string(meta.LifecycleStateCreating),
+		},
+	}}
+	p.trackPod(stale, nil)
+
+	if got := p.pods[key].Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateReady) {
+		t.Errorf("tracked lifecycle-state = %q, want ready (intent must win over stale UpdatePod)", got)
+	}
+}

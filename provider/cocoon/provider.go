@@ -244,6 +244,15 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(pod.Namespace, pod.Name)
+	// The framework hands us a fresh pod snapshot on every UpdatePod; it can carry
+	// a stale lifecycle-state (e.g. creating) captured before vk advanced the state
+	// out-of-band via markLifecycleState. Re-assert the authoritative intent so a
+	// bare UpdatePod doesn't revert the tracked pod — the framework would otherwise
+	// sync that stale annotation back to the apiserver and strand a healthy VM at
+	// creating (vm-service then times out waiting for ready and deletes it).
+	if intent, ok := p.lifecycleIntent[key]; ok {
+		intent.Apply(pod)
+	}
 	p.pods[key] = pod
 	if v != nil {
 		p.vmsByPod[key] = v
