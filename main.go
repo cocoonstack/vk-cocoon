@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,7 +34,6 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
-	"github.com/cocoonstack/epoch/registryclient"
 	"github.com/cocoonstack/vk-cocoon/guest/rdp"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -49,7 +49,6 @@ import (
 const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
-	defaultEpochURL     = "http://epoch.cocoon-system.svc:8080"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
 
 	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
@@ -73,8 +72,6 @@ func main() {
 
 	nodeName := commonk8s.EnvOrDefault("VK_NODE_NAME", defaultNodeName)
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
-	epochURL := commonk8s.EnvOrDefault("EPOCH_URL", defaultEpochURL)
-	epochToken := os.Getenv("EPOCH_TOKEN")
 	ociRegistry := os.Getenv("OCI_REGISTRY")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
@@ -122,8 +119,6 @@ func main() {
 
 	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
-		epochURL:     epochURL,
-		epochToken:   epochToken,
 		ociRegistry:  ociRegistry,
 		leasesPath:   leasesPath,
 		cocoonBin:    cocoonBin,
@@ -219,8 +214,6 @@ func main() {
 
 type buildOpts struct {
 	nodeName     string
-	epochURL     string
-	epochToken   string
 	ociRegistry  string
 	leasesPath   string
 	cocoonBin    string
@@ -229,19 +222,14 @@ type buildOpts struct {
 	recorder     record.EventRecorder
 }
 
-// buildRegistry selects the registry backend: an OCI Distribution registry
-// when OCI_REGISTRY is set, else epoch's server. The OCI keychain resolves GCP
-// ADC (google.Keychain) before falling back to docker config.
+// buildRegistry builds the OCI registry backend from OCI_REGISTRY. The keychain
+// resolves GCP ADC (google.Keychain) before falling back to docker config.
 func buildRegistry(opts buildOpts) (oci.Registry, error) {
-	if opts.ociRegistry != "" {
-		keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
-		return oci.NewOCIRegistry(opts.ociRegistry, keychain), nil
+	if opts.ociRegistry == "" {
+		return nil, errors.New("OCI_REGISTRY must be set")
 	}
-	client, err := registryclient.NewFromEnv(opts.epochURL, opts.epochToken)
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
+	keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
+	return oci.NewOCIRegistry(opts.ociRegistry, keychain), nil
 }
 
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
@@ -250,11 +238,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
 	}
-	backend := "epoch " + opts.epochURL
-	if opts.ociRegistry != "" {
-		backend = "OCI " + opts.ociRegistry
-	}
-	logger.Infof(ctx, "registry backend: %s", backend)
+	logger.Infof(ctx, "registry backend: OCI %s", opts.ociRegistry)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin)
 	p := cocoon.NewProvider()
 	p.NodeName = opts.nodeName

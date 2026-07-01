@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,7 +23,7 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/epoch/registryclient"
+	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -378,7 +377,7 @@ func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName: "vk-ns-demo-0",
-		Image:  "epoch.example/cocoon/ubuntu:24.04",
+		Image:  "registry.example/cocoon/ubuntu:24.04",
 		Mode:   "run",
 		OS:     "linux",
 	})
@@ -426,7 +425,7 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:   "vk-ns-demo-2",
-		Image:    "https://epoch.example.org/dl/windows/win11",
+		Image:    "https://registry.example.org/windows/win11",
 		Mode:     "run",
 		OS:       "windows",
 		ForkFrom: "vk-ns-demo-0",
@@ -890,6 +889,31 @@ func TestEnsureRunImageFallback(t *testing.T) {
 	}
 }
 
+// fakeRegistry is a stub oci.Registry serving a canned GetManifest; the other
+// methods are unused by the ensureRunImage classify dispatch.
+type fakeRegistry struct {
+	manifest []byte
+	err      error
+}
+
+var _ oci.Registry = fakeRegistry{}
+
+func (f fakeRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
+	return f.manifest, "", f.err
+}
+
+func (fakeRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, error) { return nil, nil }
+
+func (fakeRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
+
+func (fakeRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error { return nil }
+
+func (fakeRegistry) PutManifest(context.Context, string, string, []byte, string) error { return nil }
+
+func (fakeRegistry) HasManifest(context.Context, string, string) (bool, error) { return false, nil }
+
+func (fakeRegistry) DeleteManifest(context.Context, string, string) error { return nil }
+
 func TestEnsureRunImageDispatch(t *testing.T) {
 	const repo = "ubuntu"
 
@@ -930,15 +954,9 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(tc.manifestStatus)
-				_, _ = io.WriteString(w, tc.manifestBody)
-			}))
-			defer srv.Close()
-
-			client, err := registryclient.New(srv.URL, "")
-			if err != nil {
-				t.Fatalf("registryclient.New: %v", err)
+			reg := fakeRegistry{manifest: []byte(tc.manifestBody)}
+			if tc.manifestStatus/100 != 2 {
+				reg.err = errors.New("registry error")
 			}
 			// Cloudimg path imports under the local ref (repo:tag), so the
 			// fake runtime's Image lookup must key on the same form.
@@ -949,7 +967,7 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			}
 			p := newTestProvider(t)
 			p.Runtime = rt
-			p.Puller = &snapshots.Puller{Registry: client, Runtime: rt}
+			p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}
 
 			got, err := p.ensureRunImage(t.Context(), repo, false)
 			switch {
