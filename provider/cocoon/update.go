@@ -22,8 +22,14 @@ const (
 	// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
 	hibernateImportSuffix = "-hibernate-import"
 
-	// dropNIC wake caps the wait for the freshly hot-added NIC's DHCP lease.
-	defaultWakeFreshIPBudget   = 15 * time.Second
+	// defaultWakeFreshIPBudget caps the wait for a fresh DHCP lease after a clone
+	// re-DHCPs on a new NIC/MAC: dropNIC wake, and every fork/restore clone routed
+	// through markReadyAfterIP. On-demand clones fault RAM in lazily over UFFD and
+	// concurrent resumes (replicas>1) contend, so the first lease can land many
+	// seconds after resume — long enough to surface as a spurious lifecycle=failed
+	// and an operator sub-agent rebuild. This budget absorbs that; a genuinely dead
+	// VM still fails, just later.
+	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
 )
 
