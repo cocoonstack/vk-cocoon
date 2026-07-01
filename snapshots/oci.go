@@ -37,9 +37,6 @@ func NewOCIRegistry(base string, keychain authn.Keychain) *OCIRegistry {
 	return &OCIRegistry{base: base, opts: []remote.Option{remote.WithAuthFromKeychain(keychain)}}
 }
 
-// BaseURL returns the registry root.
-func (r *OCIRegistry) BaseURL() string { return r.base }
-
 // GetManifest fetches the raw manifest bytes and media type at repo:tag.
 func (r *OCIRegistry) GetManifest(ctx context.Context, repo, tag string) ([]byte, string, error) {
 	ref, err := name.ParseReference(r.base + "/" + repo + ":" + tag)

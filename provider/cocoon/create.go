@@ -232,8 +232,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 }
 
 // ensureRunImage materializes the base image locally and returns the ref
-// `cocoon vm run` should be invoked with. Cloud-image refs canonicalize to
-// the /dl/{repo}/{tag} URL so vmCfg.Image is portable across nodes.
+// `cocoon vm run` should be invoked with. A cloud-image artifact is imported
+// into the local store and booted from there (repo:tag), not the registry.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
@@ -253,8 +253,8 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	}
 	switch kind {
 	case manifest.KindCloudImage:
-		canonical := canonicalCloudImgURL(p.Puller.Registry.BaseURL(), repo, tag)
-		return canonical, p.Puller.EnsureCloudImageFromRaw(ctx, repo, canonical, raw, force)
+		local := repo + ":" + tag
+		return local, p.Puller.EnsureCloudImageFromRaw(ctx, repo, local, raw, force)
 	case manifest.KindSnapshot:
 		return image, fmt.Errorf("image %s is a snapshot artifact; use mode=clone instead of mode=run", image)
 	default:
@@ -412,12 +412,6 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 	}
 	return fmt.Errorf("snapshot %s was taken with %s but CocoonSet requests %s",
 		snapshot.Name, snapshot.Hypervisor, targetBackend)
-}
-
-// canonicalCloudImgURL builds the /dl/{repo}/{tag} URL cocoon's cloudimg
-// backend can pull via plain http.Get.
-func canonicalCloudImgURL(baseURL, repo, tag string) string {
-	return fmt.Sprintf("%s/dl/%s/%s", strings.TrimRight(baseURL, "/"), repo, tag)
 }
 
 // isHTTPURL reports whether ref looks like an HTTP(S) cloud-image URL.

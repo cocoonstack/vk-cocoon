@@ -940,12 +940,12 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("registryclient.New: %v", err)
 			}
-			// Cloudimg path imports under the canonical /dl URL, so the
+			// Cloudimg path imports under the local ref (repo:tag), so the
 			// fake runtime's Image lookup must key on the same form.
-			wantURL := canonicalCloudImgURL(srv.URL, repo, "latest")
+			wantRef := repo + ":latest"
 			rt := &fakeRuntime{}
 			if tc.imagesPresent {
-				rt.imagesPresent = map[string]bool{wantURL: true}
+				rt.imagesPresent = map[string]bool{wantRef: true}
 			}
 			p := newTestProvider(t)
 			p.Runtime = rt
@@ -970,15 +970,14 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 				if len(rt.ensuredImages) != 0 {
 					t.Fatalf("Puller path should not shell EnsureImage, got %v", rt.ensuredImages)
 				}
-				// Cloudimg path returns the canonical URL so vmCfg.Image
-				// stays portable across nodes.
-				if got != wantURL {
-					t.Fatalf("ensureRunImage returned %q, want %q", got, wantURL)
+				// Cloudimg path returns the local ref it imported under.
+				if got != wantRef {
+					t.Fatalf("ensureRunImage returned %q, want %q", got, wantRef)
 				}
-				// Import name must match the returned URL so the subsequent
-				// `cocoon vm run` finds the blob.
-				if len(rt.imageInspectCalls) == 0 || rt.imageInspectCalls[0] != wantURL {
-					t.Fatalf("Puller imported under %v, want first inspect on %q", rt.imageInspectCalls, wantURL)
+				// Import name must match the returned ref so the subsequent
+				// `cocoon vm run` finds the local image.
+				if len(rt.imageInspectCalls) == 0 || rt.imageInspectCalls[0] != wantRef {
+					t.Fatalf("Puller imported under %v, want first inspect on %q", rt.imageInspectCalls, wantRef)
 				}
 			default: // fallthrough to Runtime.EnsureImage
 				if err != nil {
