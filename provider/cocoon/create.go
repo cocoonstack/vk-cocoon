@@ -29,7 +29,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
-		metrics.PodLifecycleTotal.WithLabelValues("create", "missing_vmname").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("create", "skipped", "missing_vmname").Inc()
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
 
@@ -42,7 +42,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.refreshStatus(ctx, pod)
 		p.notify(pod)
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
-		metrics.PodLifecycleTotal.WithLabelValues("create", "adopted").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "adopted").Inc()
 		return nil
 	}
 
@@ -125,7 +125,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	}
-	metrics.PodLifecycleTotal.WithLabelValues("create", "ok").Inc()
+	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
 }
 

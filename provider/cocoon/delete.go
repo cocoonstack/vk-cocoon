@@ -20,7 +20,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	if v == nil {
 		// No VM to tear down; forget and succeed.
 		p.forgetPod(pod.Namespace, pod.Name)
-		metrics.PodLifecycleTotal.WithLabelValues("delete", "no_vm").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "no_vm").Inc()
 		return nil
 	}
 
@@ -31,7 +31,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
-		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
@@ -44,6 +44,6 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	p.forgetPod(pod.Namespace, pod.Name)
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)
-	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok").Inc()
+	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok", "").Inc()
 	return nil
 }

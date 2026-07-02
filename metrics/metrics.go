@@ -5,23 +5,29 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// metricNamespace is the Prometheus namespace prefix for all vk-cocoon metrics.
-const metricNamespace = "vk_cocoon"
+// Metric names are cocoon_vk_* (namespace "cocoon", subsystem "vk").
+const (
+	metricNamespace = "cocoon"
+	metricSubsystem = "vk"
+)
 
 // Prometheus collectors exported for registration in the global registry.
 var (
 	PodLifecycleTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "pod_lifecycle_total",
-			Help:      "Number of pod lifecycle operations by outcome.",
+			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
-		[]string{"op", "result"},
+		// result=ok|failed|skipped; reason=adopted|noop|missing_vmname|no_vm
+		[]string{"op", "result", "reason"},
 	)
 
 	SnapshotPullTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_pull_total",
 			Help:      "Number of snapshot pulls from the registry by result.",
 		},
@@ -31,6 +37,7 @@ var (
 	SnapshotSaveTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_save_total",
 			Help:      "Number of snapshot saves by result.",
 		},
@@ -40,6 +47,7 @@ var (
 	SnapshotPushTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_push_total",
 			Help:      "Number of snapshot pushes to the registry by result.",
 		},
@@ -49,6 +57,7 @@ var (
 	CloneFromDirTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "clone_from_dir_total",
 			Help:      "Number of annotation-driven clone-from-dir attempts by result.",
 		},
@@ -58,6 +67,7 @@ var (
 	VMTableSize = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "vm_table_size",
 			Help:      "Number of VMs vk-cocoon currently tracks.",
 		},
@@ -66,6 +76,7 @@ var (
 	OrphanVMTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "orphan_vm_total",
 			Help:      "Number of orphan VMs detected during startup reconcile.",
 		},
@@ -74,6 +85,7 @@ var (
 	VMInspectTransientFailTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "vm_inspect_transient_fail_total",
 			Help:      "Number of inspect failures after a VM event that were treated as inconclusive rather than VMGone.",
 		},
@@ -82,6 +94,7 @@ var (
 	PodEvictFailureTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "pod_evict_failure_total",
 			Help:      "Number of pod evictions that failed to delete the K8s pod after retries.",
 		},
@@ -90,6 +103,7 @@ var (
 	ReconcileAdoptByNameTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "reconcile_adopt_by_name_total",
 			Help:      "Number of pods re-adopted during startup reconcile by VMName fallback (annotation patch had failed).",
 		},
@@ -98,6 +112,7 @@ var (
 	VMBootDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "vm_boot_duration_seconds",
 			Help:      "Time to create a VM (run or clone), from start to Running.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
@@ -108,6 +123,7 @@ var (
 	SnapshotSaveDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_save_duration_seconds",
 			Help:      "Time to save a VM snapshot (cocoon snapshot save).",
 			Buckets:   []float64{1, 2, 5, 10, 30, 60, 120},
@@ -117,6 +133,7 @@ var (
 	SnapshotPushDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_push_duration_seconds",
 			Help:      "Time to push a snapshot to the registry.",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
@@ -126,6 +143,7 @@ var (
 	SnapshotPullDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "snapshot_pull_duration_seconds",
 			Help:      "Time to pull a snapshot from the registry.",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
@@ -135,6 +153,7 @@ var (
 	ProbeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "probe_duration_seconds",
 			Help:      "Time taken by a single readiness probe (ICMP ping).",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
@@ -144,6 +163,7 @@ var (
 	HibernateTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
@@ -153,6 +173,7 @@ var (
 	WakeTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "wake_total",
 			Help:      "Number of wake operations by result.",
 		},
@@ -162,6 +183,7 @@ var (
 	WakeIPWaitTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "wake_ip_wait_total",
 			Help:      "Outcomes of the post-clone and wake DHCP lease wait.",
 		},
@@ -171,6 +193,7 @@ var (
 	PostCloneTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "postclone_total",
 			Help:      "Number of post-clone fixups by guest kind and result.",
 		},
@@ -180,11 +203,12 @@ var (
 	PostCloneRetryAttempts = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
 			Name:      "postclone_retry_attempts",
-			Help:      "Attempts consumed by post-clone vsock exec by outcome.",
+			Help:      "Attempts consumed by post-clone vsock exec by result.",
 			Buckets:   []float64{1, 2, 5, 10, 20, 40, 60},
 		},
-		[]string{"outcome"}, // outcome=ok|exhausted
+		[]string{"result"}, // result=ok|failed
 	)
 )
 

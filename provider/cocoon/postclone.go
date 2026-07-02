@@ -108,7 +108,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		return
 	}
 	metrics.PostCloneTotal.WithLabelValues(kind, "failed").Inc()
-	metrics.PostCloneRetryAttempts.WithLabelValues("exhausted").Observe(float64(len(attemptErrs)))
+	metrics.PostCloneRetryAttempts.WithLabelValues("failed").Observe(float64(len(attemptErrs)))
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, joinedErr)
 	joinedMsg := joinedErr.Error()

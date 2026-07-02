@@ -18,7 +18,7 @@ const (
 // failOp records a terminal Pod failure: counter + Warning Event + Failed
 // annotation + log. op ∈ {create,update,delete}. Truncate AFTER prefix concat.
 func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op string, err error) {
-	metrics.PodLifecycleTotal.WithLabelValues(op, "failed").Inc()
+	metrics.PodLifecycleTotal.WithLabelValues(op, "failed", "").Inc()
 	msg := err.Error()
 	p.emitWarningf(pod, reason, "%s", truncate(op+": "+msg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))

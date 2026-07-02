@@ -49,16 +49,16 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		if err := p.hibernate(ctx, pod, v); err != nil {
 			return err
 		}
-		metrics.PodLifecycleTotal.WithLabelValues("update", "ok").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	case !wantHibernate && v == nil:
 		if err := p.wake(ctx, pod); err != nil {
 			return err
 		}
-		metrics.PodLifecycleTotal.WithLabelValues("update", "ok").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	default:
 		// Skip refresh+notify so we don't echo the incoming pod back.
 		p.republishLifecycleOnGenerationBump(ctx, pod)
-		metrics.PodLifecycleTotal.WithLabelValues("update", "noop").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
 		return nil
 	}
 	p.refreshStatus(ctx, pod)

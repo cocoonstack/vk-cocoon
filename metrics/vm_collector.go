@@ -25,17 +25,18 @@ type VMCollector struct {
 // NewVMCollector creates a collector. collectFn is called on every scrape.
 func NewVMCollector(collectFn func() ([]provider.VMStats, provider.NodeStats)) *VMCollector {
 	labels := []string{"vm", "pod", "namespace", "backend"}
+	name := func(n string) string { return prometheus.BuildFQName(metricNamespace, metricSubsystem, n) }
 	return &VMCollector{
 		collectFn:     collectFn,
-		vmCPUDesc:     prometheus.NewDesc(metricNamespace+"_vm_cpu_seconds_total", "Cumulative CPU time consumed by the VM in seconds.", labels, nil),
-		vmMemDesc:     prometheus.NewDesc(metricNamespace+"_vm_memory_rss_bytes", "Resident set size of the VM hypervisor process in bytes.", labels, nil),
-		vmDiskDesc:    prometheus.NewDesc(metricNamespace+"_vm_disk_cow_bytes", "Actual size of the VM COW overlay in bytes.", labels, nil),
-		vmNetRxDesc:   prometheus.NewDesc(metricNamespace+"_vm_network_rx_bytes_total", "Total bytes received by the VM TAP device.", labels, nil),
-		vmNetTxDesc:   prometheus.NewDesc(metricNamespace+"_vm_network_tx_bytes_total", "Total bytes transmitted by the VM TAP device.", labels, nil),
-		nodeCPUDesc:   prometheus.NewDesc(metricNamespace+"_node_cpu_seconds_total", "Cumulative CPU time consumed by the node in seconds.", nil, nil),
-		nodeMemDesc:   prometheus.NewDesc(metricNamespace+"_node_memory_used_bytes", "Memory used by the node (MemTotal - MemAvailable) in bytes.", nil, nil),
-		nodeStorAvail: prometheus.NewDesc(metricNamespace+"_node_storage_available_bytes", "Available storage on the cocoon root filesystem in bytes.", nil, nil),
-		nodeStorTotal: prometheus.NewDesc(metricNamespace+"_node_storage_total_bytes", "Total storage on the cocoon root filesystem in bytes.", nil, nil),
+		vmCPUDesc:     prometheus.NewDesc(name("vm_cpu_seconds_total"), "Cumulative CPU time consumed by the VM in seconds.", labels, nil),
+		vmMemDesc:     prometheus.NewDesc(name("vm_memory_rss_bytes"), "Resident set size of the VM hypervisor process in bytes.", labels, nil),
+		vmDiskDesc:    prometheus.NewDesc(name("vm_disk_cow_bytes"), "Actual size of the VM COW overlay in bytes.", labels, nil),
+		vmNetRxDesc:   prometheus.NewDesc(name("vm_network_rx_bytes_total"), "Total bytes received by the VM TAP device.", labels, nil),
+		vmNetTxDesc:   prometheus.NewDesc(name("vm_network_tx_bytes_total"), "Total bytes transmitted by the VM TAP device.", labels, nil),
+		nodeCPUDesc:   prometheus.NewDesc(name("node_cpu_seconds_total"), "Cumulative CPU time consumed by the node in seconds.", nil, nil),
+		nodeMemDesc:   prometheus.NewDesc(name("node_memory_used_bytes"), "Memory used by the node (MemTotal - MemAvailable) in bytes.", nil, nil),
+		nodeStorAvail: prometheus.NewDesc(name("node_storage_available_bytes"), "Available storage on the cocoon root filesystem in bytes.", nil, nil),
+		nodeStorTotal: prometheus.NewDesc(name("node_storage_total_bytes"), "Total storage on the cocoon root filesystem in bytes.", nil, nil),
 	}
 }
 
