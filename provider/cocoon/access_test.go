@@ -18,43 +18,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-type stubAttachIO struct {
-	stdin  io.Reader
-	stdout *bufferCloser
-	stderr *bufferCloser
-}
-
-type bufferCloser struct{ bytes.Buffer }
-
-func (*bufferCloser) Close() error { return nil }
-
-func newStubAttachIO(stdin string) *stubAttachIO {
-	return &stubAttachIO{
-		stdin:  strings.NewReader(stdin),
-		stdout: &bufferCloser{},
-		stderr: &bufferCloser{},
-	}
-}
-
-func (s *stubAttachIO) Stdin() io.Reader          { return s.stdin }
-func (s *stubAttachIO) Stdout() io.WriteCloser    { return s.stdout }
-func (s *stubAttachIO) Stderr() io.WriteCloser    { return s.stderr }
-func (*stubAttachIO) TTY() bool                   { return false }
-func (*stubAttachIO) Resize() <-chan api.TermSize { return nil }
-
-func newRunningPod(t *testing.T, p *Provider, name, vmID, ip string, windows bool) *corev1.Pod {
-	t.Helper()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"}}
-	spec := meta.VMSpec{VMName: "vm-" + name, Managed: true}
-	if windows {
-		spec.OS = "windows"
-	}
-	spec.Apply(pod)
-	v := &vm.VM{ID: vmID, Name: spec.VMName, IP: ip, State: vm.StateRunning}
-	p.trackPod(pod, v)
-	return pod
-}
-
 func TestRunInContainerLinuxRoutesToRuntimeExec(t *testing.T) {
 	rt := &fakeRuntime{execStdout: "hello\n", execExitCode: 0}
 	p := newTestProvider(t)
@@ -136,4 +99,41 @@ func TestRunInContainerNoLiveVMRejected(t *testing.T) {
 	if len(rt.execCalls) != 0 {
 		t.Errorf("Runtime.Exec should not be called when VM is missing, got %d calls", len(rt.execCalls))
 	}
+}
+
+type stubAttachIO struct {
+	stdin  io.Reader
+	stdout *bufferCloser
+	stderr *bufferCloser
+}
+
+type bufferCloser struct{ bytes.Buffer }
+
+func (*bufferCloser) Close() error { return nil }
+
+func newStubAttachIO(stdin string) *stubAttachIO {
+	return &stubAttachIO{
+		stdin:  strings.NewReader(stdin),
+		stdout: &bufferCloser{},
+		stderr: &bufferCloser{},
+	}
+}
+
+func (s *stubAttachIO) Stdin() io.Reader          { return s.stdin }
+func (s *stubAttachIO) Stdout() io.WriteCloser    { return s.stdout }
+func (s *stubAttachIO) Stderr() io.WriteCloser    { return s.stderr }
+func (*stubAttachIO) TTY() bool                   { return false }
+func (*stubAttachIO) Resize() <-chan api.TermSize { return nil }
+
+func newRunningPod(t *testing.T, p *Provider, name, vmID, ip string, windows bool) *corev1.Pod {
+	t.Helper()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"}}
+	spec := meta.VMSpec{VMName: "vm-" + name, Managed: true}
+	if windows {
+		spec.OS = "windows"
+	}
+	spec.Apply(pod)
+	v := &vm.VM{ID: vmID, Name: spec.VMName, IP: ip, State: vm.StateRunning}
+	p.trackPod(pod, v)
+	return pod
 }

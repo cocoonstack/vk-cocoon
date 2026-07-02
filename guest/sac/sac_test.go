@@ -13,87 +13,6 @@ import (
 	"time"
 )
 
-// fakeSAC simulates a Windows SAC console over a Unix socket.
-type fakeSAC struct {
-	listener net.Listener
-	ips      map[int]string // net# → current IP
-}
-
-func newFakeSAC(t *testing.T, socketPath string, netNums []int) *fakeSAC {
-	t.Helper()
-	ln, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	ips := map[int]string{}
-	for _, n := range netNums {
-		ips[n] = "169.254.0.1"
-	}
-	f := &fakeSAC{listener: ln, ips: ips}
-	go f.serve()
-	return f
-}
-
-func (f *fakeSAC) close() { _ = f.listener.Close() }
-
-func (f *fakeSAC) serve() {
-	for {
-		conn, err := f.listener.Accept()
-		if err != nil {
-			return
-		}
-		go f.handle(conn)
-	}
-}
-
-func (f *fakeSAC) handle(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-	buf := make([]byte, 4096)
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		n, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-		line := strings.TrimSpace(string(buf[:n]))
-		if line == "" {
-			_, _ = conn.Write([]byte("\r\nSAC>"))
-			continue
-		}
-		if line == "i" {
-			var sb strings.Builder
-			sb.WriteString("\r\nSAC is retrieving IP Addresses...\r\n")
-			keys := slices.Sorted(func(yield func(int) bool) {
-				for k := range f.ips {
-					if !yield(k) {
-						return
-					}
-				}
-			})
-			for _, num := range keys {
-				fmt.Fprintf(&sb, "Net: %d, Ip=%s  Subnet=255.255.255.0  Gateway=10.88.0.1\r\n", num, f.ips[num])
-				fmt.Fprintf(&sb, "Net: %d, Ip=fe80::1\r\n", num)
-			}
-			sb.WriteString("SAC>")
-			_, _ = conn.Write([]byte(sb.String()))
-			continue
-		}
-		if strings.HasPrefix(line, "i ") {
-			parts := strings.Fields(line)
-			if len(parts) == 5 {
-				num := 0
-				fmt.Sscanf(parts[1], "%d", &num)
-				if _, ok := f.ips[num]; ok {
-					f.ips[num] = parts[2]
-				}
-			}
-			_, _ = conn.Write([]byte("\r\nSAC>"))
-			continue
-		}
-		_, _ = conn.Write([]byte("\r\nSAC>"))
-	}
-}
-
 func TestDialAndQuery(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "console.sock")
@@ -225,4 +144,85 @@ func TestNetHasIP(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
+}
+
+// fakeSAC simulates a Windows SAC console over a Unix socket.
+type fakeSAC struct {
+	listener net.Listener
+	ips      map[int]string // net# → current IP
+}
+
+func newFakeSAC(t *testing.T, socketPath string, netNums []int) *fakeSAC {
+	t.Helper()
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ips := map[int]string{}
+	for _, n := range netNums {
+		ips[n] = "169.254.0.1"
+	}
+	f := &fakeSAC{listener: ln, ips: ips}
+	go f.serve()
+	return f
+}
+
+func (f *fakeSAC) close() { _ = f.listener.Close() }
+
+func (f *fakeSAC) serve() {
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			return
+		}
+		go f.handle(conn)
+	}
+}
+
+func (f *fakeSAC) handle(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	buf := make([]byte, 4096)
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		line := strings.TrimSpace(string(buf[:n]))
+		if line == "" {
+			_, _ = conn.Write([]byte("\r\nSAC>"))
+			continue
+		}
+		if line == "i" {
+			var sb strings.Builder
+			sb.WriteString("\r\nSAC is retrieving IP Addresses...\r\n")
+			keys := slices.Sorted(func(yield func(int) bool) {
+				for k := range f.ips {
+					if !yield(k) {
+						return
+					}
+				}
+			})
+			for _, num := range keys {
+				fmt.Fprintf(&sb, "Net: %d, Ip=%s  Subnet=255.255.255.0  Gateway=10.88.0.1\r\n", num, f.ips[num])
+				fmt.Fprintf(&sb, "Net: %d, Ip=fe80::1\r\n", num)
+			}
+			sb.WriteString("SAC>")
+			_, _ = conn.Write([]byte(sb.String()))
+			continue
+		}
+		if strings.HasPrefix(line, "i ") {
+			parts := strings.Fields(line)
+			if len(parts) == 5 {
+				num := 0
+				fmt.Sscanf(parts[1], "%d", &num)
+				if _, ok := f.ips[num]; ok {
+					f.ips[num] = parts[2]
+				}
+			}
+			_, _ = conn.Write([]byte("\r\nSAC>"))
+			continue
+		}
+		_, _ = conn.Write([]byte("\r\nSAC>"))
+	}
 }

@@ -198,12 +198,6 @@ func TestPlanPostClone(t *testing.T) {
 	})
 }
 
-type failingSACDialer struct{}
-
-func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
-	return nil, errors.New("simulated SAC dial failure")
-}
-
 func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	rt := &fakeRuntime{
 		runVM: &vm.VM{
@@ -353,4 +347,10 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	if pod.Annotations[annotationPostCloneState] != "" {
 		t.Errorf("no-op should leave post-clone-state unset, got %q", pod.Annotations[annotationPostCloneState])
 	}
+}
+
+type failingSACDialer struct{}
+
+func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
+	return nil, errors.New("simulated SAC dial failure")
 }

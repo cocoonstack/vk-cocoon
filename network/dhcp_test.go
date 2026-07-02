@@ -12,16 +12,6 @@ const twoLeases = `[
   {"mac":"11:22:33:44:55:66","ip":"172.20.0.11","expiry":"2099-01-01T00:00:00Z"}
 ]`
 
-// newTestParser writes data to a temp leases.json and returns a parser for it.
-func newTestParser(t *testing.T, data string) *LeaseParser {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "leases.json")
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
-		t.Fatalf("write leases: %v", err)
-	}
-	return NewLeaseParser(path)
-}
-
 func TestLeaseParserLookupByMAC(t *testing.T) {
 	t.Parallel()
 	p := newTestParser(t, twoLeases)
@@ -76,4 +66,14 @@ func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
 	if len(leases) != 1 {
 		t.Fatalf("malformed entry should be skipped, got %d leases", len(leases))
 	}
+}
+
+// newTestParser writes data to a temp leases.json and returns a parser for it.
+func newTestParser(t *testing.T, data string) *LeaseParser {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "leases.json")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	return NewLeaseParser(path)
 }

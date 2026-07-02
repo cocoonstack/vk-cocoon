@@ -120,23 +120,6 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 	}
 }
 
-// newHibernateFixture builds a Provider+pod pre-loaded with VMID/IP
-// annotations, ready for hibernate-flow assertions.
-func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSLinux),
-	})
-	pod.Annotations[meta.AnnotationVMID] = vmID
-	pod.Annotations[meta.AnnotationIP] = ip
-	return p, pod
-}
-
 func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
 	rt := &fakeRuntime{}
 	p, pod := newHibernateFixture(t, rt, "vmid-pre", "10.0.0.7")
@@ -305,25 +288,6 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	}
 }
 
-func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provider, *corev1.Pod, *vm.VM) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = &fakeRuntime{}
-	p.Probes = probes.NewManager(t.Context())
-	p.wakeFreshIPBudget = budget
-	p.wakeFreshIPInterval = interval
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSWindows),
-	})
-	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
-	p.trackPod(pod, v)
-	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
-	return p, pod, v
-}
-
 func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
 	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true, Live: true})
@@ -407,4 +371,40 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateCreating {
 		t.Fatalf("lifecycle = %q, want %q (must not race hibernate)", got, meta.LifecycleStateCreating)
 	}
+}
+
+// newHibernateFixture builds a Provider+pod pre-loaded with VMID/IP
+// annotations, ready for hibernate-flow assertions.
+func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	pod.Annotations[meta.AnnotationVMID] = vmID
+	pod.Annotations[meta.AnnotationIP] = ip
+	return p, pod
+}
+
+func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provider, *corev1.Pod, *vm.VM) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	p.Probes = probes.NewManager(t.Context())
+	p.wakeFreshIPBudget = budget
+	p.wakeFreshIPInterval = interval
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
+	p.trackPod(pod, v)
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
+	return p, pod, v
 }

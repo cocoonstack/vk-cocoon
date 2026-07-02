@@ -49,15 +49,19 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 
 // readCOWSize returns the actual disk usage of a VM's writable overlay.
 func readCOWSize(vmID, hypervisor string) int64 {
-	rootDir := provider.CocoonRootDir()
 	dir := hypervisorRunDir(hypervisor)
 	for _, name := range cowFileNames(dir) {
-		path := fmt.Sprintf("%s/run/%s/%s/%s", rootDir, dir, vmID, name)
-		if fi, err := os.Stat(path); err == nil {
+		if fi, err := os.Stat(vmRunPath(dir, vmID, name)); err == nil {
 			return fi.Size()
 		}
 	}
 	return 0
+}
+
+// vmRunPath returns the path to file within a VM's per-backend cocoon runtime
+// directory (<root>/run/<backend-dir>/<vmID>/), the layout cocoon writes on disk.
+func vmRunPath(runDir, vmID, file string) string {
+	return fmt.Sprintf("%s/run/%s/%s/%s", provider.CocoonRootDir(), runDir, vmID, file)
 }
 
 // hypervisorRunDir maps the inspect "hypervisor" field to the actual

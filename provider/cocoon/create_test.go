@@ -31,266 +31,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-type fakeRuntime struct {
-	cloned        *vm.CloneOptions
-	ran           *vm.RunOptions
-	removedID     string
-	savedSnapshot struct {
-		name string
-		vmID string
-	}
-	snapshotSaveCount   int
-	snapshotRemoveCalls []string
-	cloneErr            error
-	runErr              error
-	snapshotErr         error
-	inspectErr          error
-	cloneVM             *vm.VM
-	inspectVM           *vm.VM
-	runVM               *vm.VM
-	snapshots           map[string]*vm.Snapshot
-	listVMs             []vm.VM
-	execCalls           []fakeExecCall
-	execStdout          string
-	execStderr          string
-	execExitCode        int
-	execErr             error
-	logsCalls           []fakeLogsCall
-	logsOut             string
-	logsErr             error
-	ensuredImages       []struct {
-		image string
-		force bool
-	}
-	imagesPresent     map[string]bool // names that Image() reports as cached
-	imageInspectCalls []string
-
-	netResizeCalls []netResizeCall
-	netResizeErr   error
-
-	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
-	onRemove func()
-	// removeErr, when set, makes Remove fail with this error.
-	removeErr error
-	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
-	snapshotSaveErr error
-	// snapshotSaveHook runs at SnapshotSave entry so a test can hold it in-flight.
-	snapshotSaveHook func()
-
-	// inspectSeq, when non-empty, is consumed in order by Inspect before
-	// falling back to inspectErr/inspectVM. Lets tests script a sequence
-	// of transient failures followed by a definitive result.
-	inspectMu  sync.Mutex
-	inspectSeq []fakeInspectStep
-	inspectN   int
-}
-
-type fakeInspectStep struct {
-	vm  *vm.VM
-	err error
-}
-
-func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, error) {
-	o := opts
-	f.cloned = &o
-	if f.cloneErr != nil {
-		return nil, f.cloneErr
-	}
-	if f.cloneVM != nil {
-		return f.cloneVM, nil
-	}
-	return &vm.VM{ID: "vmid-clone", Name: opts.To, IP: "10.0.0.10"}, nil
-}
-
-func (f *fakeRuntime) Run(_ context.Context, opts vm.RunOptions) (*vm.VM, error) {
-	o := opts
-	f.ran = &o
-	if f.runErr != nil {
-		return nil, f.runErr
-	}
-	if f.runVM != nil {
-		return f.runVM, nil
-	}
-	return &vm.VM{ID: "vmid-run", Name: opts.Name, IP: "10.0.0.11"}, nil
-}
-
-func (f *fakeRuntime) Inspect(_ context.Context, _ string) (*vm.VM, error) {
-	f.inspectMu.Lock()
-	if f.inspectN < len(f.inspectSeq) {
-		step := f.inspectSeq[f.inspectN]
-		f.inspectN++
-		f.inspectMu.Unlock()
-		return step.vm, step.err
-	}
-	f.inspectMu.Unlock()
-	if f.inspectErr != nil {
-		return nil, f.inspectErr
-	}
-	if f.inspectVM != nil {
-		return f.inspectVM, nil
-	}
-	return nil, fmt.Errorf("inspect: %w", vm.ErrVMNotFound)
-}
-
-func (f *fakeRuntime) List(_ context.Context) ([]vm.VM, error) { return f.listVMs, nil }
-
-func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
-	if f.onRemove != nil {
-		f.onRemove()
-	}
-	if f.removeErr != nil {
-		return f.removeErr
-	}
-	f.removedID = vmID
-	return nil
-}
-
-func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
-	if f.snapshotSaveHook != nil {
-		f.snapshotSaveHook()
-	}
-	if f.snapshotSaveErr != nil {
-		return f.snapshotSaveErr
-	}
-	f.savedSnapshot.name = name
-	f.savedSnapshot.vmID = vmID
-	f.snapshotSaveCount++
-	if f.snapshots == nil {
-		f.snapshots = map[string]*vm.Snapshot{}
-	}
-	f.snapshots[name] = &vm.Snapshot{Name: name}
-	return nil
-}
-
-func (f *fakeRuntime) SnapshotRemoveIfExists(_ context.Context, name string) error {
-	f.snapshotRemoveCalls = append(f.snapshotRemoveCalls, name)
-	delete(f.snapshots, name)
-	return nil
-}
-
-func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, error) {
-	if f.snapshotErr != nil {
-		return nil, f.snapshotErr
-	}
-	if f.snapshots != nil {
-		if snapshot, ok := f.snapshots[name]; ok {
-			return snapshot, nil
-		}
-	}
-	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
-}
-
-func (f *fakeRuntime) SnapshotImport(_ context.Context, _ vm.ImportOptions) (io.WriteCloser, func() error, error) {
-	return nopWriteCloser{}, func() error { return nil }, nil
-}
-
-func (f *fakeRuntime) SnapshotExport(_ context.Context, _ string) (io.ReadCloser, func() error, error) {
-	return io.NopCloser(nil), func() error { return nil }, nil
-}
-
-func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) error {
-	f.ensuredImages = append(f.ensuredImages, struct {
-		image string
-		force bool
-	}{image, force})
-	return nil
-}
-
-func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
-	f.imageInspectCalls = append(f.imageInspectCalls, name)
-	if f.imagesPresent[name] {
-		return &vm.Image{Name: name}, nil
-	}
-	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
-}
-
-func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
-	return nopWriteCloser{}, func() error { return nil }, nil
-}
-
-func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
-
-type netResizeCall struct {
-	vmID   string
-	target int
-}
-
-func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
-	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
-	return f.netResizeErr
-}
-
-type fakeExecCall struct {
-	vmID  string
-	argv  []string
-	env   map[string]string
-	stdin string
-}
-
-func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
-	call := fakeExecCall{vmID: vmID, argv: argv, env: env}
-	if stdin != nil {
-		buf, _ := io.ReadAll(stdin)
-		call.stdin = string(buf)
-	}
-	f.execCalls = append(f.execCalls, call)
-	if f.execErr != nil {
-		return f.execErr
-	}
-	if stdout != nil && f.execStdout != "" {
-		_, _ = stdout.Write([]byte(f.execStdout))
-	}
-	if stderr != nil && f.execStderr != "" {
-		_, _ = stderr.Write([]byte(f.execStderr))
-	}
-	if f.execExitCode != 0 {
-		return utilexec.CodeExitError{Err: fmt.Errorf("fake exec: exit %d", f.execExitCode), Code: f.execExitCode}
-	}
-	return nil
-}
-
-type fakeLogsCall struct {
-	vmID string
-	tail int
-}
-
-func (f *fakeRuntime) Logs(_ context.Context, vmID string, tail int) (io.ReadCloser, error) {
-	f.logsCalls = append(f.logsCalls, fakeLogsCall{vmID: vmID, tail: tail})
-	if f.logsErr != nil {
-		return nil, f.logsErr
-	}
-	return io.NopCloser(strings.NewReader(f.logsOut)), nil
-}
-
-func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
-	ch := make(chan vm.VMEvent)
-	close(ch)
-	return ch, nil
-}
-
-type nopWriteCloser struct{}
-
-func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
-func (nopWriteCloser) Close() error                { return nil }
-
-// newTestProvider builds a Provider and registers Close on cleanup so any
-// goroutines spawned via p.bgWG / p.recheckWG drain before the test exits;
-// without this, a CreatePod-launched goroutine can outlive its test and
-// race with the next test on a recycled pod heap address.
-func newTestProvider(t *testing.T) *Provider {
-	t.Helper()
-	p := NewProvider()
-	t.Cleanup(p.Close)
-	return p
-}
-
-func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	spec.Managed = true
-	spec.Apply(pod)
-	return pod
-}
-
 func TestCreatePodMissingVMNameRejected(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
@@ -936,31 +676,6 @@ func TestEnsureRunImageFallback(t *testing.T) {
 	}
 }
 
-// fakeRegistry is a stub oci.Registry serving a canned GetManifest; the other
-// methods are unused by the ensureRunImage classify dispatch.
-type fakeRegistry struct {
-	manifest []byte
-	err      error
-}
-
-var _ oci.Registry = fakeRegistry{}
-
-func (f fakeRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
-	return f.manifest, "", f.err
-}
-
-func (fakeRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, error) { return nil, nil }
-
-func (fakeRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
-
-func (fakeRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error { return nil }
-
-func (fakeRegistry) PutManifest(context.Context, string, string, []byte, string) error { return nil }
-
-func (fakeRegistry) HasManifest(context.Context, string, string) (bool, error) { return false, nil }
-
-func (fakeRegistry) DeleteManifest(context.Context, string, string) error { return nil }
-
 func TestEnsureRunImageDispatch(t *testing.T) {
 	const repo = "ubuntu"
 
@@ -1542,3 +1257,288 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 		t.Fatalf("VM IP = %q, want 172.20.0.88", got.IP)
 	}
 }
+
+type fakeRuntime struct {
+	cloned        *vm.CloneOptions
+	ran           *vm.RunOptions
+	removedID     string
+	savedSnapshot struct {
+		name string
+		vmID string
+	}
+	snapshotSaveCount   int
+	snapshotRemoveCalls []string
+	cloneErr            error
+	runErr              error
+	snapshotErr         error
+	inspectErr          error
+	cloneVM             *vm.VM
+	inspectVM           *vm.VM
+	runVM               *vm.VM
+	snapshots           map[string]*vm.Snapshot
+	listVMs             []vm.VM
+	execCalls           []fakeExecCall
+	execStdout          string
+	execStderr          string
+	execExitCode        int
+	execErr             error
+	logsCalls           []fakeLogsCall
+	logsOut             string
+	logsErr             error
+	ensuredImages       []struct {
+		image string
+		force bool
+	}
+	imagesPresent     map[string]bool // names that Image() reports as cached
+	imageInspectCalls []string
+
+	netResizeCalls []netResizeCall
+	netResizeErr   error
+
+	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
+	onRemove func()
+	// removeErr, when set, makes Remove fail with this error.
+	removeErr error
+	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
+	snapshotSaveErr error
+	// snapshotSaveHook runs at SnapshotSave entry so a test can hold it in-flight.
+	snapshotSaveHook func()
+
+	// inspectSeq, when non-empty, is consumed in order by Inspect before
+	// falling back to inspectErr/inspectVM. Lets tests script a sequence
+	// of transient failures followed by a definitive result.
+	inspectMu  sync.Mutex
+	inspectSeq []fakeInspectStep
+	inspectN   int
+}
+
+type fakeInspectStep struct {
+	vm  *vm.VM
+	err error
+}
+
+func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, error) {
+	o := opts
+	f.cloned = &o
+	if f.cloneErr != nil {
+		return nil, f.cloneErr
+	}
+	if f.cloneVM != nil {
+		return f.cloneVM, nil
+	}
+	return &vm.VM{ID: "vmid-clone", Name: opts.To, IP: "10.0.0.10"}, nil
+}
+
+func (f *fakeRuntime) Run(_ context.Context, opts vm.RunOptions) (*vm.VM, error) {
+	o := opts
+	f.ran = &o
+	if f.runErr != nil {
+		return nil, f.runErr
+	}
+	if f.runVM != nil {
+		return f.runVM, nil
+	}
+	return &vm.VM{ID: "vmid-run", Name: opts.Name, IP: "10.0.0.11"}, nil
+}
+
+func (f *fakeRuntime) Inspect(_ context.Context, _ string) (*vm.VM, error) {
+	f.inspectMu.Lock()
+	if f.inspectN < len(f.inspectSeq) {
+		step := f.inspectSeq[f.inspectN]
+		f.inspectN++
+		f.inspectMu.Unlock()
+		return step.vm, step.err
+	}
+	f.inspectMu.Unlock()
+	if f.inspectErr != nil {
+		return nil, f.inspectErr
+	}
+	if f.inspectVM != nil {
+		return f.inspectVM, nil
+	}
+	return nil, fmt.Errorf("inspect: %w", vm.ErrVMNotFound)
+}
+
+func (f *fakeRuntime) List(_ context.Context) ([]vm.VM, error) { return f.listVMs, nil }
+
+func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
+	if f.onRemove != nil {
+		f.onRemove()
+	}
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removedID = vmID
+	return nil
+}
+
+func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+	if f.snapshotSaveHook != nil {
+		f.snapshotSaveHook()
+	}
+	if f.snapshotSaveErr != nil {
+		return f.snapshotSaveErr
+	}
+	f.savedSnapshot.name = name
+	f.savedSnapshot.vmID = vmID
+	f.snapshotSaveCount++
+	if f.snapshots == nil {
+		f.snapshots = map[string]*vm.Snapshot{}
+	}
+	f.snapshots[name] = &vm.Snapshot{Name: name}
+	return nil
+}
+
+func (f *fakeRuntime) SnapshotRemoveIfExists(_ context.Context, name string) error {
+	f.snapshotRemoveCalls = append(f.snapshotRemoveCalls, name)
+	delete(f.snapshots, name)
+	return nil
+}
+
+func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, error) {
+	if f.snapshotErr != nil {
+		return nil, f.snapshotErr
+	}
+	if f.snapshots != nil {
+		if snapshot, ok := f.snapshots[name]; ok {
+			return snapshot, nil
+		}
+	}
+	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
+}
+
+func (f *fakeRuntime) SnapshotImport(_ context.Context, _ vm.ImportOptions) (io.WriteCloser, func() error, error) {
+	return nopWriteCloser{}, func() error { return nil }, nil
+}
+
+func (f *fakeRuntime) SnapshotExport(_ context.Context, _ string) (io.ReadCloser, func() error, error) {
+	return io.NopCloser(nil), func() error { return nil }, nil
+}
+
+func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) error {
+	f.ensuredImages = append(f.ensuredImages, struct {
+		image string
+		force bool
+	}{image, force})
+	return nil
+}
+
+func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
+	f.imageInspectCalls = append(f.imageInspectCalls, name)
+	if f.imagesPresent[name] {
+		return &vm.Image{Name: name}, nil
+	}
+	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
+}
+
+func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
+	return nopWriteCloser{}, func() error { return nil }, nil
+}
+
+func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+
+type netResizeCall struct {
+	vmID   string
+	target int
+}
+
+func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
+	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
+	return f.netResizeErr
+}
+
+type fakeExecCall struct {
+	vmID  string
+	argv  []string
+	env   map[string]string
+	stdin string
+}
+
+func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	call := fakeExecCall{vmID: vmID, argv: argv, env: env}
+	if stdin != nil {
+		buf, _ := io.ReadAll(stdin)
+		call.stdin = string(buf)
+	}
+	f.execCalls = append(f.execCalls, call)
+	if f.execErr != nil {
+		return f.execErr
+	}
+	if stdout != nil && f.execStdout != "" {
+		_, _ = stdout.Write([]byte(f.execStdout))
+	}
+	if stderr != nil && f.execStderr != "" {
+		_, _ = stderr.Write([]byte(f.execStderr))
+	}
+	if f.execExitCode != 0 {
+		return utilexec.CodeExitError{Err: fmt.Errorf("fake exec: exit %d", f.execExitCode), Code: f.execExitCode}
+	}
+	return nil
+}
+
+type fakeLogsCall struct {
+	vmID string
+	tail int
+}
+
+func (f *fakeRuntime) Logs(_ context.Context, vmID string, tail int) (io.ReadCloser, error) {
+	f.logsCalls = append(f.logsCalls, fakeLogsCall{vmID: vmID, tail: tail})
+	if f.logsErr != nil {
+		return nil, f.logsErr
+	}
+	return io.NopCloser(strings.NewReader(f.logsOut)), nil
+}
+
+func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
+	ch := make(chan vm.VMEvent)
+	close(ch)
+	return ch, nil
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWriteCloser) Close() error                { return nil }
+
+// newTestProvider builds a Provider and registers Close on cleanup so any
+// goroutines spawned via p.bgWG / p.recheckWG drain before the test exits;
+// without this, a CreatePod-launched goroutine can outlive its test and
+// race with the next test on a recycled pod heap address.
+func newTestProvider(t *testing.T) *Provider {
+	t.Helper()
+	p := NewProvider()
+	t.Cleanup(p.Close)
+	return p
+}
+
+func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	spec.Managed = true
+	spec.Apply(pod)
+	return pod
+}
+
+// fakeRegistry is a stub oci.Registry serving a canned GetManifest; the other
+// methods are unused by the ensureRunImage classify dispatch.
+type fakeRegistry struct {
+	manifest []byte
+	err      error
+}
+
+var _ oci.Registry = fakeRegistry{}
+
+func (f fakeRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
+	return f.manifest, "", f.err
+}
+
+func (fakeRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, error) { return nil, nil }
+
+func (fakeRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
+
+func (fakeRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error { return nil }
+
+func (fakeRegistry) PutManifest(context.Context, string, string, []byte, string) error { return nil }
+
+func (fakeRegistry) HasManifest(context.Context, string, string) (bool, error) { return false, nil }
+
+func (fakeRegistry) DeleteManifest(context.Context, string, string) error { return nil }

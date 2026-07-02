@@ -77,13 +77,10 @@ var _ provider.Provider = (*Provider)(nil)
 
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
-	// identification
 	NodeName string
 
-	// config / tunables
 	OrphanPolicy provider.OrphanPolicy
 
-	// collaborators / resources
 	Clientset   kubernetes.Interface
 	Runtime     vm.Runtime
 	Puller      *snapshots.Puller
@@ -96,7 +93,6 @@ type Provider struct {
 	Probes      *probes.Manager
 	Recorder    record.EventRecorder
 
-	// runtime state
 	startTime time.Time
 	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
 	lifecycleCtx   context.Context

@@ -12,7 +12,6 @@ import (
 // OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
 type OrphanPolicy string
 
-// OrphanPolicy enum values.
 const (
 	OrphanAlert   OrphanPolicy = "alert"
 	OrphanDestroy OrphanPolicy = "destroy"
