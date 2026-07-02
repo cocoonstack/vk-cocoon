@@ -8,7 +8,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// runDir constants map VMM backends to their runtime directory names.
 const (
 	runDirCH = "cloudhypervisor"
 	runDirFC = "firecracker"
@@ -58,8 +57,7 @@ func readCOWSize(vmID, hypervisor string) int64 {
 	return 0
 }
 
-// vmRunPath returns the path to file within a VM's per-backend cocoon runtime
-// directory (<root>/run/<backend-dir>/<vmID>/), the layout cocoon writes on disk.
+// vmRunPath builds a path inside a VM's runtime directory, the layout cocoon writes on disk.
 func vmRunPath(runDir, vmID, file string) string {
 	return fmt.Sprintf("%s/run/%s/%s/%s", provider.CocoonRootDir(), runDir, vmID, file)
 }
