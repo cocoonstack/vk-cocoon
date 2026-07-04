@@ -26,7 +26,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	spec := meta.ParseVMSpec(pod)
 
-	if meta.ShouldSnapshotVM(spec) && p.Pusher != nil && v.Name != "" {
+	if meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName)) && p.Pusher != nil && v.Name != "" {
 		p.saveAndPushSnapshot(ctx, v.Name, v.ID, meta.DefaultSnapshotTag, spec.Image)
 	}
 
