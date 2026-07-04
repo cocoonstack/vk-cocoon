@@ -28,13 +28,12 @@ const (
 	sacPrompt         = "SAC>"
 )
 
-// compile-time interface checks and package-level helpers.
+// netLineRe matches a SAC "i" output line announcing a NIC IP.
+var netLineRe = regexp.MustCompile(`Net:\s+(\d+),\s+Ip=(\S+)`)
+
 var (
 	_ guest.Dialer  = (*Dialer)(nil)
 	_ guest.Session = (*Session)(nil)
-
-	// netLineRe matches a SAC "i" output line announcing a NIC IP.
-	netLineRe = regexp.MustCompile(`Net:\s+(\d+),\s+Ip=(\S+)`)
 )
 
 // Dialer opens persistent SAC sessions over serial console sockets.

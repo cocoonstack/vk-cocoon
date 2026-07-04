@@ -196,7 +196,7 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 		}
 		result[key] = v
 		if len(result) == len(want) {
-			break // found all requested fields
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {

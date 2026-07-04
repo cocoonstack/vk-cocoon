@@ -478,36 +478,15 @@ func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
 	return args
 }
 
-// parseVMFromStatusJSON extracts ID, Name, State from the vm status JSON.
+// parseVMFromStatusJSON decodes a vm status event using the inspect wire
+// format, since cocoon emits the same shape on both endpoints. Returns a
+// zero VM on decode failure.
 func parseVMFromStatusJSON(data []byte) VM {
-	var obj struct {
-		ID     string `json:"id"`
-		Config struct {
-			Name string `json:"name"`
-		} `json:"config"`
-		State          string `json:"state"`
-		NetworkConfigs []struct {
-			Mac     string `json:"mac"`
-			Network *struct {
-				IP string `json:"ip"`
-			} `json:"network"`
-		} `json:"network_configs"`
-	}
-	if json.Unmarshal(data, &obj) != nil {
+	var d inspectJSON
+	if json.Unmarshal(data, &d) != nil {
 		return VM{}
 	}
-	v := VM{
-		ID:    obj.ID,
-		Name:  obj.Config.Name,
-		State: obj.State,
-	}
-	if len(obj.NetworkConfigs) > 0 {
-		v.MAC = obj.NetworkConfigs[0].Mac
-		if obj.NetworkConfigs[0].Network != nil {
-			v.IP = obj.NetworkConfigs[0].Network.IP
-		}
-	}
-	return v
+	return *inspectJSONToVM(d)
 }
 
 // cocoonCmdError formats a consistent error message for cocoon subprocess failures.
