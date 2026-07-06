@@ -245,6 +245,14 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if snapshot != nil && snapshot.Image != "" {
 			srcImage = snapshot.Image
 		}
+		// cocoon's `vm clone --pull` only fetches http(s) bases; an OCI-ref base
+		// must be materialized here. Dedup by digest — the same bytes may be
+		// local under another name (epoch→AR ref migration).
+		if srcImage != "" && !isHTTPURL(srcImage) && !p.imagePresent(ctx, snapshot.ImageDigest) {
+			if _, imgErr := p.ensureRunImage(ctx, srcImage, false); imgErr != nil {
+				return nil, "", fmt.Errorf("ensure clone base image %s: %w", srcImage, imgErr)
+			}
+		}
 
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
 			From:       local,
@@ -260,6 +268,15 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		return v, srcImage, nil
 	}
+}
+
+// imagePresent reports whether an image with this digest is in the local store under any name.
+func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
+	if digest == "" {
+		return false
+	}
+	_, err := p.Runtime.Image(ctx, digest)
+	return err == nil
 }
 
 // ensureRunImage materializes the base image locally and returns the ref

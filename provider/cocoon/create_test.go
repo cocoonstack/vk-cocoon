@@ -75,12 +75,74 @@ func TestCreatePodCloneMode(t *testing.T) {
 	if !rt.cloned.Pull {
 		t.Errorf("clone Pull = false, want true (base image should be auto-pulled)")
 	}
+	if len(rt.ensuredImages) != 0 {
+		t.Errorf("EnsureImage should not run for an http(s) base image (cocoon --pull handles it), got %#v", rt.ensuredImages)
+	}
 
 	p.Close()
 	runtime := meta.ParseVMRuntime(pod)
 	if runtime.VMID == "" {
 		t.Errorf("VMID annotation was not written back")
 	}
+}
+
+func TestCreatePodCloneModeEnsuresOCIRefBaseImage(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo": {
+				Name:  "snapshot-repo",
+				Image: "simular/win11:25h2-20260625-1", // bare OCI ref: cocoon's --pull refuses these
+			},
+		},
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "snapshot-repo:latest",
+		Mode:   "clone",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatalf("Runtime.Clone was not called")
+	}
+	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != "simular/win11:25h2-20260625-1" {
+		t.Fatalf("OCI-ref base image was not ensured before clone, got %#v", rt.ensuredImages)
+	}
+	p.Close()
+}
+
+func TestCreatePodCloneModeSkipsEnsureWhenDigestPresent(t *testing.T) {
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			"snapshot-repo": {
+				Name:        "snapshot-repo",
+				Image:       "simular/win11:25h2-20260625-1",
+				ImageDigest: "sha256:7b850cd2",
+			},
+		},
+		imagesPresent: map[string]bool{"sha256:7b850cd2": true}, // same bytes under another name
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "snapshot-repo:latest",
+		Mode:   "clone",
+	})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(rt.ensuredImages) != 0 {
+		t.Fatalf("EnsureImage should be skipped when the digest is already local, got %#v", rt.ensuredImages)
+	}
+	p.Close()
 }
 
 func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
