@@ -245,11 +245,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if snapshot != nil && snapshot.Image != "" {
 			srcImage = snapshot.Image
 		}
-		// cocoon's own `vm clone --pull` only fetches http(s) base images; an
-		// OCI-ref base (registry cloudimg artifact) must be materialized here.
-		// Check by content digest first: the same bytes may already be local
-		// under a different name (e.g. the epoch-URL name during the epoch→AR
-		// ref migration), and cocoon resolves the backing file by digest.
+		// cocoon's `vm clone --pull` only fetches http(s) bases; an OCI-ref base
+		// must be materialized here. Dedup by digest — the same bytes may be
+		// local under another name (epoch→AR ref migration).
 		if srcImage != "" && !isHTTPURL(srcImage) && !p.imagePresent(ctx, snapshot.ImageDigest) {
 			if _, imgErr := p.ensureRunImage(ctx, srcImage, false); imgErr != nil {
 				return nil, "", fmt.Errorf("ensure clone base image %s: %w", srcImage, imgErr)
@@ -272,8 +270,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 }
 
-// imagePresent reports whether an image with this content digest is already
-// in the local store under any name (cocoon's inspect resolves digests).
+// imagePresent reports whether an image with this digest is in the local store under any name.
 func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	if digest == "" {
 		return false
