@@ -36,13 +36,6 @@ type LeaseParser struct {
 	byMAC  map[string]*Lease
 }
 
-// cocoonNetLease is the on-disk JSON shape written by cocoon-net.
-type cocoonNetLease struct {
-	MAC    string `json:"mac"`
-	IP     string `json:"ip"`
-	Expiry string `json:"expiry"`
-}
-
 // NewLeaseParser returns a parser; empty path uses the default.
 func NewLeaseParser(path string) *LeaseParser {
 	if path == "" {
@@ -125,4 +118,11 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 		})
 	}
 	return out, nil
+}
+
+// cocoonNetLease is the on-disk JSON shape written by cocoon-net, decoded by parse.
+type cocoonNetLease struct {
+	MAC    string `json:"mac"`
+	IP     string `json:"ip"`
+	Expiry string `json:"expiry"`
 }
