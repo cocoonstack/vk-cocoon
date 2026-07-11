@@ -14,7 +14,6 @@ func NewNodeProvider() *NodeProvider {
 	return &NodeProvider{}
 }
 
-// Ping satisfies node.NodeProvider.
 func (*NodeProvider) Ping(_ context.Context) error {
 	return nil
 }

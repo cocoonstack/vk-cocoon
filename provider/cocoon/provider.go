@@ -735,7 +735,7 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 	return func(ctx context.Context) {
 		pod, err := p.GetPod(ctx, namespace, name)
 		if err != nil {
-			log.WithFunc("Provider.probeUpdate").
+			log.WithFunc("Provider.buildOnUpdate").
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}

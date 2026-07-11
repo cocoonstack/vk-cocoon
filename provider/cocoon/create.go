@@ -213,7 +213,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Storage:    spec.Storage,
 			OS:         spec.OS,
-			Force:      spec.ForcePull,
 			Backend:    backend,
 			NoDirectIO: noDirectIO,
 		})

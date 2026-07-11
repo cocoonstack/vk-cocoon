@@ -46,7 +46,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	}
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
-		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
+		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
 			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
 			cur.State, cur.ObservedGeneration)
@@ -57,7 +57,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
 		status.ObservedGeneration == cur.ObservedGeneration {
-		log.WithFunc("Provider.markLifecycleState").Infof(ctx,
+		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
 		return status, false
 	}

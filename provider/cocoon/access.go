@@ -42,12 +42,10 @@ func (p *Provider) RunInContainer(ctx context.Context, namespace, podName, _ str
 	return p.Runtime.Exec(ctx, v.ID, cmd, nil, attach.Stdin(), attach.Stdout(), attach.Stderr())
 }
 
-// AttachToContainer is not implemented.
 func (p *Provider) AttachToContainer(_ context.Context, _, _, _ string, _ api.AttachIO) error {
 	return errAttachNotImplemented
 }
 
-// PortForward is not implemented.
 func (p *Provider) PortForward(_ context.Context, _, _ string, _ int32, _ io.ReadWriteCloser) error {
 	return errPortForwardNotImplemented
 }

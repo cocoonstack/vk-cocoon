@@ -19,7 +19,6 @@ type Pinger interface {
 // NopPinger always succeeds; used when CAP_NET_RAW is unavailable.
 type NopPinger struct{}
 
-// Ping always returns nil; NopPinger is a no-op fallback.
 func (NopPinger) Ping(_ context.Context, _ string) error { return nil }
 
 // ICMPPinger opens a fresh raw ICMPv4 socket per Ping call for concurrency safety.
@@ -41,7 +40,6 @@ func NewICMPPinger() (*ICMPPinger, error) {
 	return &ICMPPinger{id: os.Getpid() & 0xffff}, nil
 }
 
-// Ping sends a single ICMPv4 echo and waits for the reply within ctx's deadline.
 func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 	addr := &net.IPAddr{IP: net.ParseIP(ip)}
 	if addr.IP == nil {

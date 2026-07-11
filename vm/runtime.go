@@ -103,7 +103,6 @@ type RunOptions struct {
 	Network    string
 	Storage    string
 	OS         string
-	Force      bool
 	Backend    string
 	NoDirectIO bool
 }

@@ -93,7 +93,6 @@ type Session struct {
 	conn net.Conn
 }
 
-// Run sends a SAC command and writes the response to stdout.
 func (s *Session) Run(_ context.Context, cmd []string, stdout io.Writer) error {
 	output, err := sacCommand(s.conn, strings.Join(cmd, " "), defaultCmdTimeout)
 	if err != nil {
@@ -105,7 +104,6 @@ func (s *Session) Run(_ context.Context, cmd []string, stdout io.Writer) error {
 	return nil
 }
 
-// Close releases the underlying socket.
 func (s *Session) Close() error {
 	return s.conn.Close()
 }

@@ -15,7 +15,6 @@ var _ guest.Executor = Executor{}
 // Executor is a Windows guest stand-in that returns "use RDP" help text.
 type Executor struct{}
 
-// Run writes a "use RDP" message to stdout.
 func (Executor) Run(_ context.Context, host string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
 	if stdout != nil {
 		_, _ = fmt.Fprintf(stdout,

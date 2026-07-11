@@ -20,7 +20,6 @@ func (b blobReader) ReadBlob(ctx context.Context, digest string) (io.ReadCloser,
 	return b.registry.GetBlob(ctx, b.name, digest)
 }
 
-// cloudimgStream wraps cloudimg.Stream.
 func cloudimgStream(ctx context.Context, raw []byte, blobs blobReader, w io.Writer) error {
 	return cloudimg.Stream(ctx, raw, blobs, w)
 }

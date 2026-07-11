@@ -48,7 +48,7 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("detect storage: %w", err)
 	}
-	hugepages, err := detectOrOverride("VK_NODE_HUGEPAGES", detectHugepages)
+	hugepages, hugepagesName, err := detectHugepagesResource()
 	if err != nil {
 		return nil, nil, fmt.Errorf("detect hugepages: %w", err)
 	}
@@ -64,7 +64,7 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 		corev1.ResourcePods:             pods,
 	}
 	if !hugepages.IsZero() {
-		capacity[corev1.ResourceHugePagesPrefix+"2Mi"] = hugepages
+		capacity[hugepagesName] = hugepages
 	}
 
 	allocatable = make(corev1.ResourceList, len(capacity))
@@ -103,8 +103,6 @@ func reserveQuantity(q resource.Quantity, pct int) resource.Quantity {
 	return *resource.NewQuantity(alloc, q.Format)
 }
 
-// detectOrOverride returns the env-var override if set, otherwise calls
-// the detect function to probe the host.
 func detectOrOverride(envKey string, detect func() (resource.Quantity, error)) (resource.Quantity, error) {
 	if v := os.Getenv(envKey); v != "" {
 		q, err := resource.ParseQuantity(v)
@@ -132,17 +130,31 @@ func detectMemory() (resource.Quantity, error) {
 	return *resource.NewQuantity(fields["MemTotal"]*1024, resource.BinarySI), nil
 }
 
-func detectHugepages() (resource.Quantity, error) {
+// detectHugepagesResource returns the hugepages quantity and the matching
+// k8s resource name (hugepages-<size>). The page size comes from /proc/meminfo,
+// so a node whose default hugepage size is not 2Mi (e.g. 1Gi) is advertised
+// under the correct key rather than mislabeled. VK_NODE_HUGEPAGES overrides the
+// amount and assumes the conventional 2Mi page size.
+func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
+	if v := os.Getenv("VK_NODE_HUGEPAGES"); v != "" {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			return resource.Quantity{}, "", fmt.Errorf("parse VK_NODE_HUGEPAGES=%q: %w", v, err)
+		}
+		return q, corev1.ResourceHugePagesPrefix + "2Mi", nil
+	}
 	fields, err := readProcMemInfoFields("HugePages_Total", "Hugepagesize")
 	if err != nil {
-		return resource.Quantity{}, nil //nolint:nilerr // missing fields = no hugepages
+		return resource.Quantity{}, "", nil //nolint:nilerr // missing fields = no hugepages
 	}
 	total := fields["HugePages_Total"]
 	pageSizeKB := fields["Hugepagesize"]
 	if total == 0 || pageSizeKB == 0 {
-		return resource.Quantity{}, nil
+		return resource.Quantity{}, "", nil
 	}
-	return *resource.NewQuantity(total*pageSizeKB*1024, resource.BinarySI), nil
+	pageSuffix := resource.NewQuantity(pageSizeKB*1024, resource.BinarySI).String()
+	qty := *resource.NewQuantity(total*pageSizeKB*1024, resource.BinarySI)
+	return qty, corev1.ResourceName(corev1.ResourceHugePagesPrefix + pageSuffix), nil
 }
 
 // detectStorageOrOverride returns filesystem total and available bytes.
