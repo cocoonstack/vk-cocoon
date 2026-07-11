@@ -10,7 +10,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/guest"
 )
 
-// compile-time interface check.
 var _ guest.Executor = Executor{}
 
 // Executor is a Windows guest stand-in that returns "use RDP" help text.

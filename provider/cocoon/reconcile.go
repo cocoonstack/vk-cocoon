@@ -148,7 +148,7 @@ func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 	}
 	p.trackPod(pod, nil)
 	p.seedLifecycleIntentFromPod(pod)
-	log.WithFunc("Provider.StartupReconcile").
+	log.WithFunc("Provider.reconcileNoVMID").
 		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
 

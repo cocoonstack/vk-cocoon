@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -196,13 +197,7 @@ func (f *fakeSAC) handle(conn net.Conn) {
 		if line == "i" {
 			var sb strings.Builder
 			sb.WriteString("\r\nSAC is retrieving IP Addresses...\r\n")
-			keys := slices.Sorted(func(yield func(int) bool) {
-				for k := range f.ips {
-					if !yield(k) {
-						return
-					}
-				}
-			})
+			keys := slices.Sorted(maps.Keys(f.ips))
 			for _, num := range keys {
 				fmt.Fprintf(&sb, "Net: %d, Ip=%s  Subnet=255.255.255.0  Gateway=10.88.0.1\r\n", num, f.ips[num])
 				fmt.Fprintf(&sb, "Net: %d, Ip=fe80::1\r\n", num)

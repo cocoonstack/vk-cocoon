@@ -16,7 +16,6 @@ type blobReader struct {
 	name     string
 }
 
-// ReadBlob fetches a blob by digest.
 func (b blobReader) ReadBlob(ctx context.Context, digest string) (io.ReadCloser, error) {
 	return b.registry.GetBlob(ctx, b.name, digest)
 }

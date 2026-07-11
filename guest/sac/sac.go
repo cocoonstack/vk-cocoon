@@ -31,10 +31,7 @@ const (
 // netLineRe matches a SAC "i" output line announcing a NIC IP.
 var netLineRe = regexp.MustCompile(`Net:\s+(\d+),\s+Ip=(\S+)`)
 
-var (
-	_ guest.Dialer  = (*Dialer)(nil)
-	_ guest.Session = (*Session)(nil)
-)
+var _ guest.Dialer = (*Dialer)(nil)
 
 // Dialer opens persistent SAC sessions over serial console sockets.
 type Dialer struct {
@@ -87,6 +84,8 @@ func (d *Dialer) dial(ctx context.Context, socketPath string) (net.Conn, error) 
 		}
 	}
 }
+
+var _ guest.Session = (*Session)(nil)
 
 // Session is a persistent SAC console connection. Commands are sent
 // sequentially over the same serial socket.

@@ -497,8 +497,13 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		if fresh, inspectErr := p.Runtime.Inspect(ctx, trackedID); inspectErr == nil {
 			p.mu.Lock()
 			if old := p.vmsByPod[affectedKey]; old != nil {
-				old.PID = fresh.PID
-				old.NetworkConfigs = fresh.NetworkConfigs
+				updated := *old
+				updated.PID = fresh.PID
+				updated.NetworkConfigs = fresh.NetworkConfigs
+				p.vmsByPod[affectedKey] = &updated
+				if updated.Name != "" {
+					p.vmsByName[updated.Name] = &updated
+				}
 			}
 			p.mu.Unlock()
 		}

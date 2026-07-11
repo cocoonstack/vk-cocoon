@@ -40,7 +40,6 @@ func NewVMCollector(collectFn func() ([]provider.VMStats, provider.NodeStats)) *
 	}
 }
 
-// Describe implements prometheus.Collector.
 func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.vmCPUDesc
 	ch <- c.vmMemDesc
@@ -53,7 +52,6 @@ func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.nodeStorTotal
 }
 
-// Collect implements prometheus.Collector.
 func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 	vms, node := c.collectFn()
 
