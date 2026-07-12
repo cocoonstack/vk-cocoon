@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,12 +52,12 @@ const (
 	defaultMetricsAddr  = ":9091"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
 
-	defaultTLSCert     = "/etc/cocoon/vk/tls/vk-kubelet.crt"
-	defaultTLSKey      = "/etc/cocoon/vk/tls/vk-kubelet.key"
-	kubeletAPIPort     = 10250
-	endpointPatchWait  = 5 * time.Second
-	endpointPatchRetry = 2 * time.Second
-	shutdownTimeout    = 10 * time.Second
+	defaultTLSCert        = "/etc/cocoon/vk/tls/vk-kubelet.crt"
+	defaultTLSKey         = "/etc/cocoon/vk/tls/vk-kubelet.key"
+	defaultKubeletAPIPort = 10250
+	endpointPatchWait     = 5 * time.Second
+	endpointPatchRetry    = 2 * time.Second
+	shutdownTimeout       = 10 * time.Second
 )
 
 func main() {
@@ -153,7 +154,7 @@ func main() {
 			cfg.Node.Status.Capacity = nodeCapacity
 			cfg.Node.Status.Allocatable = nodeAllocatable
 			cfg.Node.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
-				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
+				KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort()},
 			}
 			if providerID != "" {
 				cfg.Node.Spec.ProviderID = providerID
@@ -195,7 +196,7 @@ func main() {
 	metricsServer := commonhttpx.NewServer(metricsAddr, metricsMux)
 
 	go func() {
-		logger.Infof(signalCtx, "vk-cocoon node %s kubelet API on :%d", nodeName, kubeletAPIPort)
+		logger.Infof(signalCtx, "vk-cocoon node %s kubelet API on :%d", nodeName, kubeletAPIPort())
 		if err := n.Run(signalCtx); err != nil {
 			logger.Fatalf(signalCtx, err, "virtual-kubelet node exited")
 		}
@@ -263,9 +264,18 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	return p, nil
 }
 
+// kubeletAPIPort is overridable via VK_KUBELET_PORT so a co-located kubelet (e.g. k3s) can keep :10250.
+func kubeletAPIPort() int32 {
+	if p, err := strconv.ParseUint(os.Getenv("VK_KUBELET_PORT"), 10, 16); err == nil && p > 0 {
+		return int32(p)
+	}
+	return defaultKubeletAPIPort
+}
+
 func withHandler(h http.Handler) nodeutil.NodeOpt {
 	return func(cfg *nodeutil.NodeConfig) error {
 		cfg.Handler = h
+		cfg.HTTPListenAddr = fmt.Sprintf(":%d", kubeletAPIPort())
 		return nil
 	}
 }
@@ -287,7 +297,7 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 			continue
 		}
 		nodeObj.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
-			KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort},
+			KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort()},
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
 			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
@@ -296,7 +306,7 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 			}
 			continue
 		}
-		logger.Infof(ctx, "node %s kubelet endpoint set to :%d", nodeName, kubeletAPIPort)
+		logger.Infof(ctx, "node %s kubelet endpoint set to :%d", nodeName, kubeletAPIPort())
 		return
 	}
 }

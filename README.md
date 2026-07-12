@@ -191,6 +191,7 @@ If the ICMP raw socket cannot be opened — typically because the binary is runn
 | `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |
 | `VK_TLS_CERT` | `/etc/cocoon/vk/tls/vk-kubelet.crt` | Path to the kubelet serving TLS certificate. |
 | `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |
+| `VK_KUBELET_PORT` | `10250` | Port the virtual node's kubelet API listens on and advertises. Override when a real kubelet on the same host already owns `:10250` (e.g. a co-located k3s server node). |
 | `VK_METRICS_ADDR` | `:9091` | Plain-HTTP prometheus listener. |
 | `VK_RESERVE_PERCENT` | `20` | Percentage of host resources reserved for the host OS (0-100). Allocatable = Capacity × (100 - reserve) / 100. |
 | `VK_NODE_CPU` | auto-detected | Override CPU capacity (auto: `runtime.NumCPU()`). |
