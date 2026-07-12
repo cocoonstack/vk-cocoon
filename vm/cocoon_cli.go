@@ -180,8 +180,10 @@ func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env ma
 	if len(argv) == 0 {
 		return errors.New("cocoon vm exec: argv is empty")
 	}
-	cmd := c.command(ctx, buildExecArgs(vmID, argv, env)...)
-	cmd.Stdin = stdin
+	cmd := c.command(ctx, buildExecArgs(vmID, argv, env, stdin != nil)...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
@@ -464,12 +466,17 @@ func buildRunArgs(opts RunOptions) []string {
 	return args
 }
 
-// buildExecArgs assembles `cocoon vm exec [-e KEY=VAL...] <vmID> -- <argv>...`.
+// buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`.
 // Env keys are sorted so the resulting argv is deterministic (test-friendly,
-// log-friendly); cocoon doesn't care about order.
-func buildExecArgs(vmID string, argv []string, env map[string]string) []string {
-	args := make([]string, 0, 4+2*len(env)+len(argv)) //nolint:mnd
+// log-friendly); cocoon doesn't care about order. Since cocoon v0.5.0 exec
+// stdin is opt-in (docker semantics): -i goes on only when the caller has a
+// stdin to attach, so stdin-less execs don't hold the vsock stream open.
+func buildExecArgs(vmID string, argv []string, env map[string]string, interactive bool) []string {
+	args := make([]string, 0, 5+2*len(env)+len(argv)) //nolint:mnd
 	args = append(args, "vm", "exec")
+	if interactive {
+		args = append(args, "-i")
+	}
 	for _, k := range slices.Sorted(maps.Keys(env)) {
 		args = append(args, "-e", k+"="+env[k])
 	}

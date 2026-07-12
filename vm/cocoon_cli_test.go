@@ -214,11 +214,12 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		vmID string
-		argv []string
-		env  map[string]string
-		want []string
+		name        string
+		vmID        string
+		argv        []string
+		env         map[string]string
+		interactive bool
+		want        []string
 	}{
 		{
 			name: "no env passes through plain argv",
@@ -239,10 +240,18 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 			argv: []string{"--", "ls"},
 			want: []string{"vm", "exec", "vm-3", "--", "--", "ls"},
 		},
+		{
+			name:        "interactive adds -i before env",
+			vmID:        "vm-4",
+			argv:        []string{"cat"},
+			env:         map[string]string{"FOO": "1"},
+			interactive: true,
+			want:        []string{"vm", "exec", "-i", "-e", "FOO=1", "vm-4", "--", "cat"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildExecArgs(tc.vmID, tc.argv, tc.env)
+			got := buildExecArgs(tc.vmID, tc.argv, tc.env, tc.interactive)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("buildExecArgs() = %#v, want %#v", got, tc.want)
 			}
