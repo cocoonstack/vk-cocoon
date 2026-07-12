@@ -466,11 +466,8 @@ func buildRunArgs(opts RunOptions) []string {
 	return args
 }
 
-// buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`.
-// Env keys are sorted so the resulting argv is deterministic (test-friendly,
-// log-friendly); cocoon doesn't care about order. Since cocoon v0.5.0 exec
-// stdin is opt-in (docker semantics): -i goes on only when the caller has a
-// stdin to attach, so stdin-less execs don't hold the vsock stream open.
+// buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`,
+// sorting env keys for a deterministic argv. -i attaches stdin (opt-in, docker semantics).
 func buildExecArgs(vmID string, argv []string, env map[string]string, interactive bool) []string {
 	args := make([]string, 0, 5+2*len(env)+len(argv)) //nolint:mnd
 	args = append(args, "vm", "exec")
