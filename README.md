@@ -1,244 +1,82 @@
 # vk-cocoon
 
-Virtual Kubelet provider that maps Kubernetes pods to [Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs.
+Virtual Kubelet provider that maps Kubernetes pods to
+[Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs.
 
-## Overview
+One vk-cocoon process runs per node. It satisfies the
+[virtual-kubelet](https://github.com/virtual-kubelet/virtual-kubelet)
+provider contract by translating pod CRUD into `cocoon` CLI calls and
+pushing per-VM status back to the kubelet.
 
-vk-cocoon is the host-side bridge between the Kubernetes API and the cocoon runtime running on a single node. It satisfies the [virtual-kubelet](https://github.com/virtual-kubelet/virtual-kubelet) provider contract by translating pod CRUD into cocoon CLI calls and reporting per-VM status back to the kubelet.
+```
+Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
+   pod CRUD    ──► CreatePod / DeletePod / UpdatePod ── cocoon clone/run/snapshot
+   status      ◄── async notify ── per-pod probe loop + real-time VM event watcher
+   snapshots   ──► Puller / Pusher ── OCI registry (cross-node hibernate/wake)
+```
+
+## Architecture
 
 | Layer | Package | Responsibility |
 |---|---|---|
 | Application | `package main` | Entry point, node registration, metrics server, VM event watcher startup |
-| Provider | `provider/cocoon/` | `Provider` struct with lifecycle methods (CreatePod / DeletePod / UpdatePod / GetPodStatus), startup reconcile, orphan policy, VM event watcher, pod eviction |
+| Provider | `provider/cocoon/` | Lifecycle methods, startup reconcile, orphan policy, VM event watcher, pod eviction |
 | Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
-| Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `cocoon` (including `WatchEvents` via `cocoon vm status --event --format json`) |
-| Snapshot SDK | `snapshots/` | `Puller` and `Pusher` stream snapshots and cloud images to any OCI registry through `cocoon-common`'s `oci.Registry` backend (`cocoon-common/snapshot` + `cocoon-common/cloudimg`) |
-| Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
-| Guest exec | `guest/` | RDP help-text shim (Windows) and SAC dialer (Windows static IP). Linux guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/`. |
-| Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
-| Metrics | `metrics/` | Prometheus collectors for pod lifecycle, snapshot pull / push, VM table size, orphans |
-| Build metadata | `version/` | ldflags-injected version / revision / built-at strings |
+| Cocoon CLI | `vm/` | `Runtime` interface + the `CocoonCLI` that shells out to `cocoon` |
+| Snapshot SDK | `snapshots/` | `Puller` / `Pusher` stream snapshots and cloud images to an OCI registry |
+| Network | `network/` | cocoon-net lease parser + the ICMPv4 `Pinger` the probe loop uses |
+| Guest exec | `guest/` | RDP help-text shim + SAC dialer for Windows static IP |
+| Probes | `probes/` | Per-pod probe agents that keep the async provider's pushed status live |
+| Metrics | `metrics/` | Prometheus collectors for lifecycle, snapshots, VM table, orphans |
 
-## Lifecycle
+See [Architecture](docs/architecture.md) for the full layer map and the
+async-provider contract.
 
-### CreatePod
+## Quick start
 
-1. Parse `meta.VMSpec` from the pod annotations.
-2. If a VM with `spec.VMName` already exists locally, adopt it (idempotent on restart). Adoption hinges on `StartupReconcile` having populated `vmsByName`; before reconcile completes, CreatePod treats the pod as new and may collide on VM name.
-3. Otherwise branch on `spec.Managed` first, then `spec.Mode`:
-   - **`Managed=false`** (static / externally-managed VMs, e.g. Windows toolboxes on an external QEMU host): skip the runtime entirely and adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator pre-wrote into the `VMRuntime` annotations. `Managed` is the single source of truth for "vk-cocoon owns this VM's lifecycle".
-   - **Mode `clone`** (default, `Managed=true`): look up the snapshot locally using a **tag-aware name** (`repo:tag`, or bare `repo` when the tag is `latest` for backward compatibility). If the local snapshot does not exist, pull it from the registry via `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend` validates the snapshot's recorded hypervisor matches `spec.Backend` — a CH snapshot cannot be cloned onto a FC target and vice-versa. When the snapshot carries a base image, `Pull: true` is passed to `CloneOptions`, which translates to `cocoon vm clone --pull`; cocoon constructs a digest reference (`repo@sha256:xxx`) from the snapshot metadata and pulls the exact image version recorded at snapshot time. Then `Runtime.Clone(from=<local>, to=spec.VMName)`. Pod-side CPU/memory/storage are not plumbed into clone — cocoon clone inherits all guest resources from the snapshot. Only the `vm run` path translates pod resources into VM resources.
-   - **Mode `run`** (`Managed=true`): `ensureRunImage` makes the image available locally before launching the VM. It peeks the OCI manifest via `Puller.Registry`: cocoonstack cloud-image artifacts (artifactType=`application/vnd.cocoonstack.os-image.v1+json`) take the qcow2 streaming path through `Puller.EnsureCloudImageFromRaw` → `cocoon image import`, snapshot artifacts are rejected with a "use mode=clone" error, and everything else (HTTP(S) URLs, container images, refs that don't resolve against the registry) falls through to `Runtime.EnsureImage` → `cocoon image pull`. `--force` when `spec.ForcePull` is true. Then `Runtime.Run(image=spec.Image, name=spec.VMName)`. When `spec.Backend` is `firecracker`, `--fc` is passed to select the FC backend; when `spec.OS` is `windows`, `--windows` is passed. When `spec.NoDirectIO` is true, `--no-direct-io` disables O_DIRECT on writable disks (CH only, useful for dev/test).
-   - **`vm.cocoonstack.io/clone-from-dir` override** (managed-only, takes precedence over mode/fork-from): clone via `cocoon vm clone --from-dir <abs-path> --pull`, bypassing the local snapshot DB. Pairs with `cocoon snapshot export --to-dir` for cross-node staging. Conflicts with `mode=run` or `fork-from` fast-fail.
-4. For clone/fork/wake paths, check whether the VM needs manual network setup (see [Post-clone hints](#post-clone-hints) below). If so, write the required commands as a base64-encoded annotation (`vm.cocoonstack.io/post-clone-hint`) and log a warning. The pod stays Running but Not Ready until the user executes the commands via `cocoon vm console` and the probe detects network connectivity.
-5. Resolve the IP from the cocoon-net JSON lease file by MAC.
-6. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations back so the operator and other consumers can pick them up. `VNCPort` is intentionally left unset here — cloud-hypervisor has no VNC server, so only the pre-seeded static-toolbox path ever carries a non-zero value.
-7. Launch a per-pod probe agent in `probes/` (see [Readiness probing](#readiness-probing) below). The agent's first probe runs synchronously so the initial `notify` push already reflects reachability; later probes run on a ticker and call back into the provider whenever readiness flips so the async notify hook re-fires.
-
-### DeletePod
-
-1. Decode `meta.VMSpec`.
-2. `meta.ShouldSnapshotVM(spec)` — the shared cocoon-common decoder — decides whether to snapshot before destroy:
-   - `always`: `Runtime.SnapshotSave` then `Pusher.PushSnapshot(tag=meta.DefaultSnapshotTag)` to the registry.
-   - `main-only`: same, but only when the VM name ends in `-0` (slot 0 = main agent).
-   - `never`: skip snapshots entirely.
-3. `Runtime.Remove(vmID)` to destroy the VM.
-4. Forget the pod from the in-memory tables.
-
-### UpdatePod
-
-The only update vk-cocoon honors is a `HibernateState` transition. Anything else is a no-op (the operator deletes and recreates the pod for genuine spec changes).
-
-| Transition | Behavior |
-|---|---|
-| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
-| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from the registry. |
-
-The operator's `CocoonHibernation` reconciler tracks the transition by polling the registry for the `hibernate` manifest.
-
-### Node resources
-
-On startup, vk-cocoon probes the host for real CPU, memory, hugepages, and disk capacity and registers them as the virtual node's `Capacity` and `Allocatable` in the Kubernetes API. This replaces the previous hardcoded defaults (128 CPU / 512Gi) with values the scheduler can trust.
-
-- **Capacity** = raw host resources (`runtime.NumCPU`, `/proc/meminfo` MemTotal, `statfs` total, hugepages-2Mi)
-- **Allocatable** = Capacity minus a reserve fraction (default 20%, override via `VK_RESERVE_PERCENT`)
-- **Storage allocatable** uses `statfs` available bytes (`Bavail`) instead of total — base images, existing COW overlays, and snapshots are naturally excluded from the budget
-- Values are read **once at startup** and do not update while vk-cocoon is running; a restart refreshes them (idempotent)
-- Individual resources can be force-overridden via `VK_NODE_CPU`, `VK_NODE_MEM`, `VK_NODE_STORAGE`, `VK_NODE_HUGEPAGES`, `VK_NODE_PODS`
-
-### Metrics and monitoring
-
-vk-cocoon exposes three metrics surfaces:
-
-**`:10250/stats/summary`** — kubelet stats API consumed by metrics-server and `kubectl top`. Reports per-pod CPU (cumulative nanoseconds from `/proc/<pid>/stat`) and memory (RSS from `/proc/<pid>/status`), plus per-pod network I/O from the TAP device inside each VM's network namespace (`/proc/<pid>/net/dev`). Node-level CPU and memory are read from `/proc/stat` and `/proc/meminfo`.
-
-**`:10250/metrics/resource`** — Prometheus text format with the metric families metrics-server and HPA require: `node_cpu_usage_seconds_total`, `node_memory_working_set_bytes`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, `pod_cpu_usage_seconds_total`, `pod_memory_working_set_bytes`.
-
-**`:9091/metrics`** — Prometheus endpoint with vk-cocoon-specific metrics:
-
-| Metric | Type | Description |
-|---|---|---|
-| `cocoon_vk_vm_cpu_seconds_total{vm,pod,namespace,backend}` | Counter | Per-VM cumulative CPU |
-| `cocoon_vk_vm_memory_rss_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM RSS |
-| `cocoon_vk_vm_disk_cow_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM COW overlay actual size |
-| `cocoon_vk_vm_network_rx_bytes_total` / `tx_bytes_total` | Counter | Per-VM TAP network I/O |
-| `cocoon_vk_node_cpu_seconds_total` | Counter | Node cumulative CPU |
-| `cocoon_vk_node_memory_used_bytes` | Gauge | Node used memory |
-| `cocoon_vk_node_storage_available_bytes` / `total_bytes` | Gauge | Cocoon root filesystem |
-| `cocoon_vk_vm_boot_duration_seconds{mode,backend}` | Histogram | VM creation time (run or clone) |
-| `cocoon_vk_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
-| `cocoon_vk_snapshot_push_duration_seconds` | Histogram | Registry push time |
-| `cocoon_vk_snapshot_pull_duration_seconds` | Histogram | Registry pull time |
-| `cocoon_vk_probe_duration_seconds` | Histogram | Per-probe health check time (ICMP or TCP) |
-| `cocoon_vk_pod_lifecycle_total{op,result,reason}` | Counter | Pod lifecycle operations (`result=ok\|failed\|skipped`, `reason` sub-classifies) |
-| `cocoon_vk_snapshot_pull_total{result}` / `save_total` / `push_total` | Counter | Snapshot pull/save/push counts |
-| `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
-| `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=netresize\|snapshot\|push\|remove`) |
-| `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
-| `cocoon_vk_wake_ip_wait_total{result}` | Counter | CH+Windows dropNIC wake's post-clone DHCP lease wait (`result=ok\|timeout`) |
-| `cocoon_vk_postclone_total{kind,result}` | Counter | Post-clone fixup outcomes (`kind=linux_static\|linux_fc\|windows\|sac`) |
-| `cocoon_vk_postclone_retry_attempts{result}` | Histogram | Attempts consumed before post-clone exec succeeded or failed (`result=ok\|failed`) |
-| `cocoon_vk_vm_table_size` | Gauge | Tracked VM count |
-| `cocoon_vk_orphan_vm_total` | Counter | Orphan VMs at startup |
-| `cocoon_vk_vm_inspect_transient_fail_total` | Counter | Transient VM inspect failures tolerated by the status refresher |
-| `cocoon_vk_pod_evict_failure_total` | Counter | Failed pod evictions |
-| `cocoon_vk_reconcile_adopt_by_name_total` | Counter | Startup reconcile adoptions matched by VM name |
-
-In addition to metrics, the hibernate / wake / post-clone failure paths write a K8s Event on the Pod with a typed Reason — `kubectl describe pod` surfaces the same signal that `vm.cocoonstack.io/lifecycle-state-message` carries. Spec validation rejects (e.g. missing `vm.cocoonstack.io/name`) and pod-delete short-circuits stay counter-only on `pod_lifecycle_total`: they're input-validation noise rather than runtime-lifecycle failures, and the rejection is already visible to the caller as the synchronous error return. Warning reasons: `CreateBringUpFailed`, `HibernateNetResizeFailed`, `HibernateSnapshotFailed`, `HibernatePushFailed`, `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`, `WakeIPWaitTimeout`, `WindowsStaticIPFailed`, `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`, `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`, `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`. Normal reasons: `Hibernated`, `Woken`, `PostCloneSucceeded`.
-
-All per-VM stats are read from `/proc` using the hypervisor PID tracked in memory — no shell-out to `cocoon` on each scrape. The tracking table is snapshot-copied under RLock and `/proc` reads happen outside the lock to avoid blocking CreatePod/DeletePod. When a VM is restarted in-place (event watcher → `cocoon vm start`), the PID is re-inspected and refreshed.
-
-### Post-clone hints
-
-After a clone (or hibernate wake / fork), vk-cocoon checks whether the VM needs manual guest-side network setup. The only fully automatic case is CH + OCI + all-DHCP (NIC hot-swap triggers systemd-networkd to re-DHCP). All other combinations require intervention:
-
-| Scenario | Reason | Hint commands |
-|---|---|---|
-| CH + cloudimg (any network) | snapshot restore does not re-trigger cloud-init | `cloud-init clean + init` |
-| CH + OCI + static IP | guest retains old IP config | write MAC-based networkd files |
-| FC (any) | guest MAC frozen in vmstate | `ip link set address` + networkd reconfig |
-
-When a hint is needed, vk-cocoon base64-encodes the required shell commands into `vm.cocoonstack.io/post-clone-hint` on the pod and logs a warning. The pod stays Running but Not Ready. To retrieve the commands: `kubectl get pod <name> -o jsonpath='{.metadata.annotations.vm\.cocoonstack\.io/post-clone-hint}' | base64 -d`. After executing via `cocoon vm console`, the probe detects connectivity and flips Ready automatically.
-
-Classification uses the snapshot's original image URL (normal clone) or the COW file type on disk (fork/wake) to distinguish cloudimg from OCI.
-
-### Startup reconcile
-
-Cluster state is the source of truth. There is **no** persistent `pods.json` file. On every restart vk-cocoon:
-
-1. Lists every pod scheduled to its node via `fieldSelector=spec.nodeName=<VK_NODE_NAME>`.
-2. Lists every VM the cocoon runtime knows about via `Runtime.List`.
-3. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching the VMID against the runtime list.
-4. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
-   - `destroy` (default): remove the VM so pod-less VMs don't accumulate after restart or pod chaos.
-   - `alert`: log + bump `cocoon_vk_orphan_vm_total`, leave the VM alone.
-   - `keep`: no log, no metric.
-
-A pod whose annotated VMID does **not** appear in the local runtime list logs a warning and is left to `CreatePod` to recreate on the next reconcile.
-
-### Readiness probing
-
-vk-cocoon implements v-k's `NotifyPods` interface, so the framework treats it as an **async provider**: Kubernetes only sees the pod status vk-cocoon actively pushes through `notify`, and v-k never polls `GetPodStatus` on its own. That makes a real per-pod probe loop load-bearing — any status change that happens after `CreatePod` returns is invisible to the cluster unless vk-cocoon re-fires `notify`.
-
-The `probes/` package owns that loop:
-
-1. `CreatePod` (and startup reconcile) call `Manager.Start(key, probe, onUpdate)`. The probe closure the provider supplies performs three checks in order:
-    1. The tracked VM still exists.
-    2. If the in-memory VM record has no IP, re-try the cocoon-net lease file by MAC and write it back via `setVMIP`.
-    3. If the pod carries a `vm.cocoonstack.io/probe-port` annotation, dial TCP on that port instead of ICMP. Otherwise fall back to `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the cocoon Windows golden image contract (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables all firewall profiles), and it decouples readiness from specific services so the same probe works for Linux and Windows guests alike.
-2. The first probe runs **synchronously inside `Start`** so the refreshStatus/notify pass that `CreatePod` does before returning already reflects the initial reachability decision.
-3. A background goroutine re-runs the probe on a ticker (2 s cold-start, 5 s once Ready) and invokes `onUpdate` after 3 consecutive failures flip readiness back to false. `onUpdate` re-reads the pod, rebuilds the status, and calls `notify` so the kubelet observes the change.
-4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod goroutine; `Manager.Close` is called once at shutdown to tear every remaining agent down.
-
-### VM event watcher
-
-In addition to the periodic probe, vk-cocoon subscribes to cocoon's real-time VM event stream via `cocoon vm status --event --format json`. This provides sub-second detection of VM state changes (DELETED, stopped, error) without waiting for the next probe tick.
-
-The watcher goroutine (`vmWatchLoop`) runs for the lifetime of the process with automatic restart on subprocess failure (exponential backoff from 1 s to 60 s, reset on successful connect). Normal stream closes (cocoon restart) use a fixed 2 s reconnect delay. When an event arrives:
-
-| Event | Inspect result | Action |
-|---|---|---|
-| `DELETED` | VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
-| `MODIFIED` (state ≠ running) | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
-| `MODIFIED` (state ≠ running) | state = running | False alarm — ignore |
-
-A 30-second **restart cooldown** (`restartCooldown`) prevents tight restart loops when a VM keeps crashing. If the cooldown has not elapsed since the last restart, the pod is evicted (phase=`Failed`, reason=`RestartCooldown`) so the operator can do a clean recreation. Stale cooldown entries are garbage-collected on each event stream reconnect.
-
-Detection latency comparison:
-
-| Mechanism | Worst-case latency |
-|---|---|
-| Probe only (old: 15 s × 5 failures) | ~75 s |
-| Probe only (current: 5 s × 3 failures) | ~24 s |
-| VM event watcher | **< 1 s** |
-
-If the ICMP raw socket cannot be opened — typically because the binary is running without `CAP_NET_RAW` — the provider falls back to `network.NopPinger` and the probe degrades to "an IP was resolved == Ready". That is weaker than a real end-to-end ping but still strictly better than the previous behaviour of marking the pod Ready the instant `cocoon vm clone/run` returned. The systemd unit in `packaging/vk-cocoon.service` grants `AmbientCapabilities=CAP_NET_RAW` so the production path gets the real pinger.
-
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `KUBECONFIG` | unset | Path to kubeconfig (in-cluster used otherwise). |
-| `VK_NODE_NAME` | `cocoon-pool` | Virtual node name registered with the K8s API. |
-| `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
-| `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
-| `GOOGLE_APPLICATION_CREDENTIALS` | unset | Path to a GCP service-account JSON key with `roles/artifactregistry.writer`, fed to ADC for the snapshot push. Unset falls back to the read-only node instance SA. |
-| `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
-| `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
-| `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
-| `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
-| `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |
-| `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |
-| `VK_TLS_CERT` | `/etc/cocoon/vk/tls/vk-kubelet.crt` | Path to the kubelet serving TLS certificate. |
-| `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |
-| `VK_KUBELET_PORT` | `10250` | Port the virtual node's kubelet API listens on and advertises. Override when a real kubelet on the same host already owns `:10250` (e.g. a co-located k3s server node). |
-| `VK_METRICS_ADDR` | `:9091` | Plain-HTTP prometheus listener. |
-| `VK_RESERVE_PERCENT` | `20` | Percentage of host resources reserved for the host OS (0-100). Allocatable = Capacity × (100 - reserve) / 100. |
-| `VK_NODE_CPU` | auto-detected | Override CPU capacity (auto: `runtime.NumCPU()`). |
-| `VK_NODE_MEM` | auto-detected | Override memory capacity (auto: `/proc/meminfo` MemTotal). |
-| `VK_NODE_STORAGE` | auto-detected | Override storage capacity (auto: `statfs` on `COCOON_ROOT_DIR`). |
-| `VK_NODE_HUGEPAGES` | auto-detected | Override hugepages-2Mi capacity (auto: `/proc/meminfo`). |
-| `VK_NODE_PODS` | `256` | Maximum pod count. |
-
-## Installation
-
-vk-cocoon is a host-level binary, not a kubernetes Deployment. The recommended path is the supplied systemd unit:
+vk-cocoon is a host-level binary installed via a systemd unit:
 
 ```bash
 sudo install -m 0755 ./vk-cocoon /usr/local/bin/vk-cocoon
 sudo install -m 0644 packaging/vk-cocoon.service /etc/systemd/system/vk-cocoon.service
 sudo install -m 0644 packaging/vk-cocoon.env.example /etc/cocoon/vk-cocoon.env
-
-# edit /etc/cocoon/vk-cocoon.env to your environment
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now vk-cocoon
+# edit /etc/cocoon/vk-cocoon.env, then:
+sudo systemctl daemon-reload && sudo systemctl enable --now vk-cocoon
 ```
 
-The unit reads `/etc/cocoon/kubeconfig` for cluster credentials and `/etc/cocoon/vk-cocoon.env` for the variables above.
+Full steps in [Installation](docs/installation.md).
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — layer map, async-provider contract
+- [Pod lifecycle](docs/lifecycle.md) — CreatePod / DeletePod / hibernate
+- [Readiness probing](docs/probes.md) — the per-pod probe loop
+- [Runtime reconciliation](docs/reconcile.md) — startup reconcile, VM events
+- [Post-clone network hints](docs/post-clone.md) — manual guest fixups
+- [Node resources](docs/node-resources.md) — host-probed Capacity/Allocatable
+- [Metrics & monitoring](docs/metrics.md) — the three metrics surfaces
+- [Configuration](docs/configuration.md) — every environment variable
+- [Installation](docs/installation.md) — systemd unit and building from source
 
 ## Development
 
 ```bash
-make all            # full pipeline: deps + fmt + lint + test + build
-make build          # build vk-cocoon binary
-make test           # vet + race-detected tests
-make lint           # golangci-lint on linux + darwin
-make fmt            # gofumpt + goimports
-make help           # show all targets
+make all     # deps + fmt + lint + test + build
+make build   # build the vk-cocoon binary
+make test    # vet + race-detected tests
+make lint    # golangci-lint on linux + darwin
+make help    # show all targets
 ```
-
-The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy` when active so cross-module references resolve through `go.work` without forcing a release of cocoon-common.
 
 ## Related projects
 
 | Project | Role |
 |---|---|
-| [cocoon](https://github.com/cocoonstack/cocoon) | The MicroVM runtime vk-cocoon shells out to. |
-| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry + snapshot/cloud-image packages. |
-| [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers. |
-| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation. |
-| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file. |
+| [cocoon](https://github.com/cocoonstack/cocoon) | The MicroVM runtime vk-cocoon shells out to |
+| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, OCI registry + snapshot/cloud-image packages |
+| [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
+| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking; vk-cocoon reads its JSON lease file |
 
 ## License
 
