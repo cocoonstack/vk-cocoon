@@ -269,12 +269,15 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	got, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	got, snapshot, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
 	if got != "vk-ns-demo-0" {
 		t.Errorf("source = %q, want vk-ns-demo-0 (local snapshot)", got)
+	}
+	if snapshot == nil || snapshot.Name != "vk-ns-demo-0" {
+		t.Errorf("snapshot metadata = %+v, want the local snapshot", snapshot)
 	}
 }
 
@@ -283,7 +286,7 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
+	if _, _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
 }

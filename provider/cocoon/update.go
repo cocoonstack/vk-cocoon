@@ -165,14 +165,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
-	sourceName, err := p.resolveWakeSource(ctx, spec.VMName)
+	sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
 		return err
 	}
 	cloneStart := time.Now()
-	v, err := p.cloneFromHibernate(ctx, spec, sourceName)
+	v, err := p.cloneFromHibernate(ctx, spec, sourceName, snapshot)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
@@ -191,8 +191,16 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 // source. CH+Windows hibernate snapshots are captured NIC-less, so the clone
 // hot-adds a fresh NIC that Windows enumerates as new hardware. The local import
 // copy (cross-node pull) is dropped whether the clone succeeds or fails.
-func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string) (*vm.VM, error) {
+func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string, snapshot *vm.Snapshot) (*vm.VM, error) {
 	defer p.cleanupWakeImport(spec.VMName, sourceName)
+	// Same guard as the fresh-clone path: `vm clone --pull` fetches only
+	// http(s) bases, so an OCI-ref base absent from the local store must be
+	// materialized here or the restore fails resolving the backing file.
+	if snapshot != nil && snapshot.Image != "" && !isHTTPURL(snapshot.Image) && !p.imagePresent(ctx, snapshot.ImageDigest) {
+		if _, imgErr := p.ensureRunImage(ctx, snapshot.Image, false); imgErr != nil {
+			return nil, fmt.Errorf("ensure restore base image %s: %w", snapshot.Image, imgErr)
+		}
+	}
 	opts := vm.CloneOptions{
 		From:       sourceName,
 		To:         spec.VMName,
@@ -200,6 +208,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sou
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
 		OnDemand:   useOnDemandClone(spec.OS),
+		Pull:       snapshot != nil && snapshot.Image != "",
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = ptr.To(1)
@@ -298,27 +307,32 @@ func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) b
 	}
 }
 
-// resolveWakeSource returns the local snapshot when present, else pulls.
-func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, error) {
-	_, err := p.Runtime.Snapshot(ctx, vmName)
+// resolveWakeSource returns the clone source name and its snapshot metadata —
+// the local snapshot when present, else pulled from the registry.
+func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, *vm.Snapshot, error) {
+	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
-		return vmName, nil
+		return vmName, snapshot, nil
 	}
 	if !errors.Is(err, vm.ErrSnapshotNotFound) {
-		return "", fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
+		return "", nil, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
 	if p.Puller == nil {
-		return "", fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
+		return "", nil, fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
 	}
 	importName := vmName + hibernateImportSuffix
 	pullStart := time.Now()
-	if err := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); err != nil {
+	if pullErr := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); pullErr != nil {
 		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-		return "", fmt.Errorf("pull hibernation snapshot %s: %w", vmName, err)
+		return "", nil, fmt.Errorf("pull hibernation snapshot %s: %w", vmName, pullErr)
 	}
 	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
 	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
-	return importName, nil
+	snapshot, err = p.Runtime.Snapshot(ctx, importName)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect imported snapshot %s: %w", importName, err)
+	}
+	return importName, snapshot, nil
 }
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the

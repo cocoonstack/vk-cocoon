@@ -57,3 +57,113 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 		})
 	}
 }
+
+func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			vmName: {
+				Name:  vmName,
+				Image: "simular/win11:25h2-20260705-1", // bare OCI ref: cocoon's --pull refuses these
+			},
+		},
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
+	spec := meta.ParseVMSpec(pod)
+
+	if _, _, err := p.bringUpVM(t.Context(), pod, spec); err != nil {
+		t.Fatalf("bringUpVM: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatal("restore must clone from the hibernate snapshot, Clone was never called")
+	}
+	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != "simular/win11:25h2-20260705-1" {
+		t.Fatalf("OCI-ref base image was not ensured before restore, got %#v", rt.ensuredImages)
+	}
+	if !rt.cloned.Pull {
+		t.Error("materialized OCI-ref base still needs --pull so core resolves the backing file by digest")
+	}
+}
+
+func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			vmName: {
+				Name:        vmName,
+				Image:       "simular/win11:25h2-20260705-1",
+				ImageDigest: "sha256:142ab794",
+			},
+		},
+		imagesPresent: map[string]bool{"sha256:142ab794": true}, // same bytes under another name
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
+	spec := meta.ParseVMSpec(pod)
+
+	if _, _, err := p.bringUpVM(t.Context(), pod, spec); err != nil {
+		t.Fatalf("bringUpVM: %v", err)
+	}
+	if len(rt.ensuredImages) != 0 {
+		t.Fatalf("EnsureImage should be skipped when the digest is already local, got %#v", rt.ensuredImages)
+	}
+	if len(rt.imageInspectCalls) != 1 || rt.imageInspectCalls[0] != "sha256:142ab794" {
+		t.Fatalf("presence must be resolved by digest via Image(), got %#v", rt.imageInspectCalls)
+	}
+	if rt.cloned == nil || !rt.cloned.Pull {
+		t.Error("restore clone must pass --pull when the base is present")
+	}
+}
+
+func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{
+		snapshots: map[string]*vm.Snapshot{
+			vmName: {
+				Name:  vmName,
+				Image: "https://epoch.simular.cloud/dl/simular/win11/25h2-20260608",
+			},
+		},
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
+	spec := meta.ParseVMSpec(pod)
+
+	if _, _, err := p.bringUpVM(t.Context(), pod, spec); err != nil {
+		t.Fatalf("bringUpVM: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatal("Runtime.Clone was not called")
+	}
+	if !rt.cloned.Pull {
+		t.Error("restore clone must pass --pull so core fetches a missing http(s) base")
+	}
+	if len(rt.ensuredImages) != 0 {
+		t.Errorf("EnsureImage should not run for an http(s) base (core --pull handles it), got %#v", rt.ensuredImages)
+	}
+}
