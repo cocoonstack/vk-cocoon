@@ -208,9 +208,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sou
 		Backend:    spec.Backend,
 		NoDirectIO: spec.NoDirectIO,
 		OnDemand:   useOnDemandClone(spec.OS),
-		// http(s) bases ride core's --pull (same as the fresh-clone path);
-		// OCI-ref bases were materialized above.
-		Pull: snapshot != nil && snapshot.Image != "",
+		Pull:       snapshot != nil && snapshot.Image != "",
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = ptr.To(1)

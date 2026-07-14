@@ -89,6 +89,9 @@ func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
 	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0].image != "simular/win11:25h2-20260705-1" {
 		t.Fatalf("OCI-ref base image was not ensured before restore, got %#v", rt.ensuredImages)
 	}
+	if !rt.cloned.Pull {
+		t.Error("materialized OCI-ref base still needs --pull so core resolves the backing file by digest")
+	}
 }
 
 func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
@@ -120,6 +123,12 @@ func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
 	}
 	if len(rt.ensuredImages) != 0 {
 		t.Fatalf("EnsureImage should be skipped when the digest is already local, got %#v", rt.ensuredImages)
+	}
+	if len(rt.imageInspectCalls) != 1 || rt.imageInspectCalls[0] != "sha256:142ab794" {
+		t.Fatalf("presence must be resolved by digest via Image(), got %#v", rt.imageInspectCalls)
+	}
+	if rt.cloned == nil || !rt.cloned.Pull {
+		t.Error("restore clone must pass --pull when the base is present")
 	}
 }
 
