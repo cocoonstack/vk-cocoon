@@ -13,15 +13,12 @@ type inspectJSON struct {
 	State      string `json:"state"`
 	PID        int    `json:"pid"`
 	Config     struct {
-		Name   string `json:"name"`
-		CPU    int    `json:"cpu"`
-		Memory int64  `json:"memory"`
+		Name string `json:"name"`
 	} `json:"config"`
 	NetworkConfigs []struct {
-		Tap       string       `json:"tap"`
-		Mac       string       `json:"mac"`
-		NetNSPath string       `json:"netns_path"`
-		Network   *NetworkInfo `json:"network,omitempty"`
+		Tap     string       `json:"tap"`
+		Mac     string       `json:"mac"`
+		Network *NetworkInfo `json:"network,omitempty"`
 	} `json:"network_configs,omitempty"`
 }
 
@@ -31,7 +28,6 @@ type snapshotJSON struct {
 	Name        string `json:"name"`
 	Image       string `json:"image"`
 	ImageDigest string `json:"image_digest"`
-	ImageType   string `json:"image_type"`
 	Hypervisor  string `json:"hypervisor"`
 }
 
@@ -78,7 +74,6 @@ func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
 		Name:        d.Name,
 		Image:       d.Image,
 		ImageDigest: d.ImageDigest,
-		ImageType:   d.ImageType,
 		Hypervisor:  d.Hypervisor,
 	}, nil
 }
@@ -89,16 +84,13 @@ func inspectJSONToVM(d inspectJSON) *VM {
 		Hypervisor: d.Hypervisor,
 		Name:       d.Config.Name,
 		State:      d.State,
-		CPU:        d.Config.CPU,
-		Mem:        d.Config.Memory,
 		PID:        d.PID,
 	}
 	for _, nc := range d.NetworkConfigs {
 		v.NetworkConfigs = append(v.NetworkConfigs, &NetworkConfig{
-			Tap:       nc.Tap,
-			MAC:       nc.Mac,
-			NetNSPath: nc.NetNSPath,
-			Network:   nc.Network,
+			Tap:     nc.Tap,
+			MAC:     nc.Mac,
+			Network: nc.Network,
 		})
 	}
 	if len(d.NetworkConfigs) > 0 {

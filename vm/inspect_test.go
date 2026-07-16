@@ -36,12 +36,6 @@ func TestParseInspectJSON(t *testing.T) {
 	if got.State != "running" {
 		t.Errorf("State = %q, want %q", got.State, "running")
 	}
-	if got.CPU != 4 {
-		t.Errorf("CPU = %d, want %d", got.CPU, 4)
-	}
-	if got.Mem != 4294967296 {
-		t.Errorf("Mem = %d, want %d", got.Mem, int64(4294967296))
-	}
 	if got.MAC != "02:00:00:00:00:01" {
 		t.Errorf("MAC = %q, want %q", got.MAC, "02:00:00:00:00:01")
 	}
@@ -124,9 +118,6 @@ func TestParseSnapshotJSON(t *testing.T) {
 	}
 	if got.ImageDigest != "sha256:abcdef1234567890" {
 		t.Errorf("ImageDigest = %q, want sha256:abcdef1234567890", got.ImageDigest)
-	}
-	if got.ImageType != "cloudimg" {
-		t.Errorf("ImageType = %q, want cloudimg", got.ImageType)
 	}
 	if got.Hypervisor != "firecracker" {
 		t.Errorf("Hypervisor = %q, want firecracker", got.Hypervisor)

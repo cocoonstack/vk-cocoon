@@ -19,9 +19,8 @@ var ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
 
 // Lease is one cocoon-net DHCP entry.
 type Lease struct {
-	MAC     string
-	IP      string
-	Expires time.Time
+	MAC string
+	IP  string
 }
 
 // LeaseParser reads cocoon-net leases, caching until mtime changes.
@@ -104,15 +103,10 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
 		// Skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
-		expiry, err := time.Parse(time.RFC3339, r.Expiry)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, r.Expiry); err != nil {
 			continue
 		}
-		out = append(out, Lease{
-			MAC:     r.MAC,
-			IP:      r.IP,
-			Expires: expiry,
-		})
+		out = append(out, Lease{MAC: r.MAC, IP: r.IP})
 	}
 	return out, nil
 }

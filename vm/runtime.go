@@ -45,10 +45,9 @@ type NetworkInfo struct {
 
 // NetworkConfig is a single NIC configuration from cocoon vm inspect.
 type NetworkConfig struct {
-	Tap       string       `json:"tap"`
-	MAC       string       `json:"mac"`
-	NetNSPath string       `json:"netns_path"`
-	Network   *NetworkInfo `json:"network,omitempty"`
+	Tap     string       `json:"tap"`
+	MAC     string       `json:"mac"`
+	Network *NetworkInfo `json:"network,omitempty"`
 }
 
 // VM is the runtime view of a cocoon VM.
@@ -59,8 +58,6 @@ type VM struct {
 	State          string
 	IP             string
 	MAC            string
-	CPU            int
-	Mem            int64
 	PID            int
 	NetworkConfigs []*NetworkConfig
 }
@@ -75,7 +72,6 @@ type Snapshot struct {
 	Name        string
 	Image       string
 	ImageDigest string // resolved image digest (e.g. "sha256:abc...")
-	ImageType   string // "oci" or "cloudimg"
 	Hypervisor  string
 }
 

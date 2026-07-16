@@ -474,9 +474,6 @@ func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
 }
 
 func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
-	if pod == nil {
-		return
-	}
 	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
 	if err != nil || status == nil {
 		return
@@ -492,9 +489,6 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 // parseCloneFromDirAnnotation returns the validated absolute, canonical
 // path from the clone-from-dir annotation, or "" when absent.
 func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
-	if pod == nil {
-		return "", nil
-	}
 	raw := strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir])
 	if raw == "" {
 		return "", nil
@@ -519,7 +513,7 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 // isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
 // is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
-	if pod != nil && strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
+	if strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
 		return true
 	}
 	if spec.ForkFrom != "" {
@@ -567,7 +561,7 @@ func forkSnapshotName(sourceVMName string) string {
 
 // vmResourceOverrides translates pod resources into cocoon CLI args (milliCPU rounds up).
 func vmResourceOverrides(pod *corev1.Pod) (int, string) {
-	if pod == nil || len(pod.Spec.Containers) == 0 {
+	if len(pod.Spec.Containers) == 0 {
 		return 0, ""
 	}
 	resources := pod.Spec.Containers[0].Resources
