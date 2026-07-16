@@ -40,18 +40,6 @@ func TestLeaseParserLookupByMAC(t *testing.T) {
 	}
 }
 
-func TestLeaseParserAll(t *testing.T) {
-	t.Parallel()
-	p := newTestParser(t, twoLeases)
-	leases, err := p.All()
-	if err != nil {
-		t.Fatalf("All: %v", err)
-	}
-	if len(leases) != 2 {
-		t.Fatalf("len = %d, want 2", len(leases))
-	}
-}
-
 func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
 	t.Parallel()
 	data := `[
@@ -59,12 +47,15 @@ func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
   {"mac":"11:22:33:44:55:66","ip":"172.20.0.11","expiry":"2099-01-01T00:00:00Z"}
 ]`
 	p := newTestParser(t, data)
-	leases, err := p.All()
-	if err != nil {
-		t.Fatalf("All: %v", err)
+	if _, err := p.LookupByMAC("aa:bb:cc:dd:ee:ff"); !errors.Is(err, ErrNoLease) {
+		t.Fatalf("malformed entry should be skipped, got err %v", err)
 	}
-	if len(leases) != 1 {
-		t.Fatalf("malformed entry should be skipped, got %d leases", len(leases))
+	lease, err := p.LookupByMAC("11:22:33:44:55:66")
+	if err != nil {
+		t.Fatalf("LookupByMAC: %v", err)
+	}
+	if lease.IP != "172.20.0.11" {
+		t.Errorf("IP = %q, want %q", lease.IP, "172.20.0.11")
 	}
 }
 

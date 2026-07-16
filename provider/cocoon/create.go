@@ -2,7 +2,6 @@ package cocoon
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -250,13 +249,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if snapshot != nil && snapshot.Image != "" {
 			srcImage = snapshot.Image
 		}
-		// cocoon's `vm clone --pull` only fetches http(s) bases; an OCI-ref base
-		// must be materialized here. Dedup by digest — the same bytes may be
-		// local under another name (epoch→AR ref migration).
-		if srcImage != "" && !isHTTPURL(srcImage) && !p.imagePresent(ctx, snapshot.ImageDigest) {
-			if _, imgErr := p.ensureRunImage(ctx, srcImage, false); imgErr != nil {
-				return nil, "", fmt.Errorf("ensure clone base image %s: %w", srcImage, imgErr)
-			}
+		if baseErr := p.ensureSnapshotBaseImage(ctx, snapshot); baseErr != nil {
+			return nil, "", baseErr
 		}
 
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
@@ -282,6 +276,20 @@ func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	}
 	_, err := p.Runtime.Image(ctx, digest)
 	return err == nil
+}
+
+// ensureSnapshotBaseImage materializes a snapshot's OCI-ref base image before a
+// clone or restore. cocoon's `vm clone --pull` only fetches http(s) bases, so an
+// OCI-ref base must be imported here. Dedup by digest — the same bytes may be
+// local under another name (epoch→AR ref migration).
+func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
+	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
+		return nil
+	}
+	if _, err := p.ensureRunImage(ctx, snapshot.Image, false); err != nil {
+		return fmt.Errorf("ensure snapshot base image %s: %w", snapshot.Image, err)
+	}
+	return nil
 }
 
 // detachedImportContext scopes shared import work to the provider, not to the
@@ -542,17 +550,14 @@ func isHTTPURL(ref string) bool {
 // localSnapshotName omits the default tag for backward compatibility.
 func localSnapshotName(repo, tag string) string {
 	name := repo
-	if tag == "" || tag == meta.DefaultSnapshotTag {
-		name = repo
-	} else {
+	if tag != "" && tag != meta.DefaultSnapshotTag {
 		name = repo + ":" + tag
 	}
 	const maxSnapshotNameLength = 63
 	if len(name) <= maxSnapshotNameLength {
 		return name
 	}
-	sum := sha256.Sum256([]byte(name))
-	suffix := fmt.Sprintf("-%x", sum[:6])
+	suffix := "-" + ociutil.SHA256Hex([]byte(name))[:12]
 	return name[:maxSnapshotNameLength-len(suffix)] + suffix
 }
 

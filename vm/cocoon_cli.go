@@ -143,13 +143,7 @@ func (c *CocoonCLI) ImageImport(ctx context.Context, opts ImageImportOptions) (i
 		_ = stdin.Close()
 		return nil, nil, fmt.Errorf("start cocoon image import: %w", err)
 	}
-	wait := func() error {
-		if err := cmd.Wait(); err != nil {
-			return fmt.Errorf("cocoon image import: %w", err)
-		}
-		return nil
-	}
-	return stdin, wait, nil
+	return stdin, cocoonWait(cmd, "cocoon image import"), nil
 }
 
 // Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound.
@@ -286,13 +280,7 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 		_ = stdin.Close()
 		return nil, nil, fmt.Errorf("start cocoon snapshot import: %w", err)
 	}
-	wait := func() error {
-		if err := cmd.Wait(); err != nil {
-			return fmt.Errorf("cocoon snapshot import: %w", err)
-		}
-		return nil
-	}
-	return stdin, wait, nil
+	return stdin, cocoonWait(cmd, "cocoon snapshot import"), nil
 }
 
 // SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
@@ -306,13 +294,7 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 		_ = stdout.Close()
 		return nil, nil, fmt.Errorf("start cocoon snapshot export: %w", err)
 	}
-	wait := func() error {
-		if err := cmd.Wait(); err != nil {
-			return fmt.Errorf("cocoon snapshot export: %w", err)
-		}
-		return nil
-	}
-	return stdout, wait, nil
+	return stdout, cocoonWait(cmd, "cocoon snapshot export"), nil
 }
 
 // SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
@@ -510,6 +492,16 @@ func parseVMFromStatusJSON(data []byte) VM {
 // cocoonCmdError formats a consistent error message for cocoon subprocess failures.
 func cocoonCmdError(op, ref string, err error, output []byte) error {
 	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
+}
+
+// cocoonWait wraps cmd.Wait with a labeled error for streaming subcommands.
+func cocoonWait(cmd *exec.Cmd, op string) func() error {
+	return func() error {
+		if err := cmd.Wait(); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+		return nil
+	}
 }
 
 // isCocoonNotFound detects cocoon's VM-not-found signal inside the

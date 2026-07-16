@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,11 +28,10 @@ type Lease struct {
 type LeaseParser struct {
 	Path string
 
-	mu     sync.Mutex
-	mtime  time.Time
-	size   int64
-	cached []Lease
-	byMAC  map[string]*Lease
+	mu    sync.Mutex
+	mtime time.Time
+	size  int64
+	byMAC map[string]*Lease
 }
 
 // NewLeaseParser returns a parser; empty path uses the default.
@@ -57,16 +55,6 @@ func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	return nil, ErrNoLease
 }
 
-// All returns every lease in the file.
-func (p *LeaseParser) All() ([]Lease, error) {
-	if err := p.refresh(); err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Clone(p.cached), nil
-}
-
 // refresh re-reads the lease file when mtime or size changed. Parsing happens
 // outside the lock so concurrent lookups aren't serialized behind file I/O; a
 // racing refresh at worst records a stale stamp and re-parses on the next call.
@@ -76,7 +64,7 @@ func (p *LeaseParser) refresh() error {
 		return fmt.Errorf("stat lease file %s: %w", p.Path, err)
 	}
 	p.mu.Lock()
-	fresh := p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size
+	fresh := p.byMAC != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size
 	p.mu.Unlock()
 	if fresh {
 		return nil
@@ -90,7 +78,6 @@ func (p *LeaseParser) refresh() error {
 		byMAC[strings.ToLower(leases[i].MAC)] = &leases[i]
 	}
 	p.mu.Lock()
-	p.cached = leases
 	p.byMAC = byMAC
 	p.mtime = info.ModTime()
 	p.size = info.Size()

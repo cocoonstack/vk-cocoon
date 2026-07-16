@@ -188,13 +188,8 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 // copy (cross-node pull) is dropped whether the clone succeeds or fails.
 func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string, snapshot *vm.Snapshot) (*vm.VM, error) {
 	defer p.cleanupWakeImport(spec.VMName, sourceName)
-	// Same guard as the fresh-clone path: `vm clone --pull` fetches only
-	// http(s) bases, so an OCI-ref base absent from the local store must be
-	// materialized here or the restore fails resolving the backing file.
-	if snapshot != nil && snapshot.Image != "" && !isHTTPURL(snapshot.Image) && !p.imagePresent(ctx, snapshot.ImageDigest) {
-		if _, imgErr := p.ensureRunImage(ctx, snapshot.Image, false); imgErr != nil {
-			return nil, fmt.Errorf("ensure restore base image %s: %w", snapshot.Image, imgErr)
-		}
+	if err := p.ensureSnapshotBaseImage(ctx, snapshot); err != nil {
+		return nil, err
 	}
 	opts := vm.CloneOptions{
 		From:        sourceName,

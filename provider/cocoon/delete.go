@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -36,9 +37,14 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	if v.Name != "" {
+		// Synchronous on purpose: an immediate recreate must not race the rm.
+		var wg sync.WaitGroup
 		for _, name := range []string{v.Name, forkSnapshotName(v.Name)} {
-			p.removeSnapshotDetached("Provider.DeletePod", name)
+			wg.Go(func() {
+				p.removeSnapshotDetached("Provider.DeletePod", name)
+			})
 		}
+		wg.Wait()
 	}
 
 	p.forgetPod(pod.Namespace, pod.Name)

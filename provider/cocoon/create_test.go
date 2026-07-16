@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1168,9 +1168,11 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Errorf("DeletePod should drop the pod from the in-memory table")
 	}
-	wantSnapRemovals := []string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")}
-	if !reflect.DeepEqual(rt.snapshotRemoveCalls, wantSnapRemovals) {
-		t.Errorf("snapshot removes = %v, want %v", rt.snapshotRemoveCalls, wantSnapRemovals)
+	// DeletePod removes the two snapshots concurrently; compare order-insensitively.
+	gotSnapRemovals := slices.Sorted(slices.Values(rt.snapshotRemoveCalls))
+	wantSnapRemovals := slices.Sorted(slices.Values([]string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")}))
+	if !slices.Equal(gotSnapRemovals, wantSnapRemovals) {
+		t.Errorf("snapshot removes = %v, want %v", gotSnapRemovals, wantSnapRemovals)
 	}
 }
 

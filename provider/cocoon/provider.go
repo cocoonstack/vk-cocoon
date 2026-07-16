@@ -496,7 +496,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, vmID, key string, pod *corev1.Pod, reason, message string) {
 	if err := p.Runtime.Remove(ctx, vmID); err != nil {
-		log.WithFunc("cocoon.Provider.removeThenEvict").
+		log.WithFunc("Provider.removeThenEvict").
 			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", vmID, reason)
 		return
 	}
