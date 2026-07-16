@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -540,10 +541,19 @@ func isHTTPURL(ref string) bool {
 
 // localSnapshotName omits the default tag for backward compatibility.
 func localSnapshotName(repo, tag string) string {
+	name := repo
 	if tag == "" || tag == meta.DefaultSnapshotTag {
-		return repo
+		name = repo
+	} else {
+		name = repo + ":" + tag
 	}
-	return repo + ":" + tag
+	const maxSnapshotNameLength = 63
+	if len(name) <= maxSnapshotNameLength {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := fmt.Sprintf("-%x", sum[:6])
+	return name[:maxSnapshotNameLength-len(suffix)] + suffix
 }
 
 func forkSnapshotName(sourceVMName string) string {
