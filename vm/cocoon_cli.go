@@ -421,10 +421,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.Pull || opts.FromDir != "" {
 		args = append(args, "--pull")
 	}
-	if opts.OnDemand && opts.Backend != BackendFirecracker {
-		// UFFD lazy memory restore is CH-only; skipping on FC keeps the
-		// same CloneOptions usable for both backends.
-		args = append(args, "--on-demand")
+	// copy emits no flag, keeping the argv valid on cocoon builds predating --restore-mode.
+	if opts.RestoreMode != "" && opts.RestoreMode != RestoreCopy && opts.Backend != BackendFirecracker {
+		args = append(args, "--restore-mode", string(opts.RestoreMode))
 	}
 	if opts.NICs != nil && opts.Backend != BackendFirecracker {
 		args = append(args, "--nics", strconv.Itoa(*opts.NICs))

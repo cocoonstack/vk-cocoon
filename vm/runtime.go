@@ -3,11 +3,19 @@ package vm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 )
 
-// StateRunning is the state string cocoon reports for a live VM.
-const StateRunning = "running"
+const (
+	// StateRunning is the state string cocoon reports for a live VM.
+	StateRunning = "running"
+
+	RestoreCopy     RestoreMode = "copy"
+	RestoreOnDemand RestoreMode = "ondemand"
+	RestoreMmap     RestoreMode = "mmap"
+)
 
 var (
 	// ErrVMNotFound signals the cocoon CLI has authoritatively reported the
@@ -71,21 +79,31 @@ type Snapshot struct {
 	Hypervisor  string
 }
 
+// RestoreMode maps to `cocoon vm clone --restore-mode`: how CH restores guest
+// memory. RestoreMmap needs a CH build with mmap restore support.
+type RestoreMode string
+
+// ParseRestoreMode validates a configured restore mode, normalizing case.
+func ParseRestoreMode(s string) (RestoreMode, error) {
+	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
+	case RestoreCopy, RestoreOnDemand, RestoreMmap:
+		return m, nil
+	default:
+		return "", fmt.Errorf("restore mode must be %s, %s or %s, got %q",
+			RestoreCopy, RestoreOnDemand, RestoreMmap, s)
+	}
+}
+
 // CloneOptions is the input to Runtime.Clone. Resource fields inherit
 // from the snapshot unless overridden.
 type CloneOptions struct {
-	From       string
-	To         string
-	Network    string
-	Backend    string
-	NoDirectIO bool
-	Pull       bool
-	// OnDemand maps to `cocoon vm clone --on-demand`: CH loads guest
-	// memory lazily via userfaultfd instead of copying it upfront.
-	// Cuts clone wall time from ~500ms to ~50-100ms at the cost of
-	// per-page faults during the first seconds of guest execution.
-	// CH only; firecracker ignores the flag.
-	OnDemand bool
+	From        string
+	To          string
+	Network     string
+	Backend     string
+	NoDirectIO  bool
+	Pull        bool
+	RestoreMode RestoreMode
 	// FromDir maps to `cocoon vm clone --from-dir`: when set, From is
 	// ignored and --pull is forced (the dir holds snapshot data, not
 	// base image layers).

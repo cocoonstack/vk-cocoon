@@ -167,12 +167,12 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", fmt.Errorf("annotation %s is incompatible with fork-from %q", meta.AnnotationCloneFromDir, spec.ForkFrom)
 		}
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			FromDir:    fromDir,
-			To:         spec.VMName,
-			Network:    spec.Network,
-			Backend:    backend,
-			NoDirectIO: noDirectIO,
-			OnDemand:   useOnDemandClone(spec.OS),
+			FromDir:     fromDir,
+			To:          spec.VMName,
+			Network:     spec.Network,
+			Backend:     backend,
+			NoDirectIO:  noDirectIO,
+			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
 		})
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
@@ -187,12 +187,12 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", err
 		}
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:       cloneFrom,
-			To:         spec.VMName,
-			Network:    spec.Network,
-			Backend:    backend,
-			NoDirectIO: noDirectIO,
-			OnDemand:   useOnDemandClone(spec.OS),
+			From:        cloneFrom,
+			To:          spec.VMName,
+			Network:     spec.Network,
+			Backend:     backend,
+			NoDirectIO:  noDirectIO,
+			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -254,13 +254,13 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 
 		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:       local,
-			To:         spec.VMName,
-			Network:    spec.Network,
-			Backend:    backend,
-			NoDirectIO: noDirectIO,
-			Pull:       srcImage != "",
-			OnDemand:   useOnDemandClone(spec.OS),
+			From:        local,
+			To:          spec.VMName,
+			Network:     spec.Network,
+			Backend:     backend,
+			NoDirectIO:  noDirectIO,
+			Pull:        srcImage != "",
+			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
@@ -444,9 +444,12 @@ func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 	return raw, nil
 }
 
-// useOnDemandClone is off for Windows: UFFD lazy paging stalls DHCP boot.
-func useOnDemandClone(os string) bool {
-	return os != string(cocoonv1.OSWindows)
+// Windows forces copy: lazy memory restore stalls DHCP boot.
+func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
+	if os == string(cocoonv1.OSWindows) {
+		return vm.RestoreCopy
+	}
+	return mode
 }
 
 // isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone

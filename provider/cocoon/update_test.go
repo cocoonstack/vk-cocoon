@@ -15,21 +15,22 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-func TestUseOnDemandClone(t *testing.T) {
+func TestRestoreModeFor(t *testing.T) {
 	cases := []struct {
 		name string
 		os   string
-		want bool
+		mode vm.RestoreMode
+		want vm.RestoreMode
 	}{
-		{"linux", string(cocoonv1.OSLinux), true},
-		{"windows off", string(cocoonv1.OSWindows), false},
-		{"android counts as non-windows", string(cocoonv1.OSAndroid), true},
-		{"empty OS defaults to on", "", true},
+		{"linux gets configured mode", string(cocoonv1.OSLinux), vm.RestoreMmap, vm.RestoreMmap},
+		{"windows forced to copy", string(cocoonv1.OSWindows), vm.RestoreMmap, vm.RestoreCopy},
+		{"android counts as non-windows", string(cocoonv1.OSAndroid), vm.RestoreOnDemand, vm.RestoreOnDemand},
+		{"empty OS gets configured mode", "", vm.RestoreOnDemand, vm.RestoreOnDemand},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := useOnDemandClone(tc.os); got != tc.want {
-				t.Errorf("useOnDemandClone(%q) = %v, want %v", tc.os, got, tc.want)
+			if got := restoreModeFor(tc.mode, tc.os); got != tc.want {
+				t.Errorf("restoreModeFor(%q, %q) = %q, want %q", tc.mode, tc.os, got, tc.want)
 			}
 		})
 	}

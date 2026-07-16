@@ -51,6 +51,7 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
+	defaultRestoreMode  = string(vm.RestoreOnDemand)
 
 	defaultTLSCert        = "/etc/cocoon/vk/tls/vk-kubelet.crt"
 	defaultTLSKey         = "/etc/cocoon/vk/tls/vk-kubelet.key"
@@ -77,6 +78,7 @@ func main() {
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
+	restoreMode := commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode)
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
 	providerID := os.Getenv("VK_PROVIDER_ID")
@@ -124,6 +126,7 @@ func main() {
 		leasesPath:   leasesPath,
 		cocoonBin:    cocoonBin,
 		orphanPolicy: orphanPolicy,
+		restoreMode:  restoreMode,
 		clientset:    clientset,
 		recorder:     recorder,
 	})
@@ -219,6 +222,7 @@ type buildOpts struct {
 	leasesPath   string
 	cocoonBin    string
 	orphanPolicy string
+	restoreMode  string
 	clientset    kubernetes.Interface
 	recorder     record.EventRecorder
 }
@@ -235,6 +239,10 @@ func buildRegistry(opts buildOpts) (oci.Registry, error) {
 
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
 	logger := log.WithFunc("buildProvider")
+	restoreMode, err := vm.ParseRestoreMode(opts.restoreMode)
+	if err != nil {
+		return nil, fmt.Errorf("parse VK_RESTORE_MODE: %w", err)
+	}
 	registry, err := buildRegistry(opts)
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
@@ -261,6 +269,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
+	p.RestoreMode = restoreMode
 	return p, nil
 }
 
