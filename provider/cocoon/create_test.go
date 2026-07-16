@@ -1,6 +1,7 @@
 package cocoon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,8 +25,10 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	utilexec "k8s.io/client-go/util/exec"
 
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
+	"github.com/cocoonstack/cocoon-common/ociutil"
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -836,6 +841,289 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 	}
 }
 
+func TestEnsureSnapshotColdBurstSingleflight(t *testing.T) {
+	p, rt, reg := newSnapshotTestSetup(t)
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	snaps := make([]*vm.Snapshot, n)
+	for i := range n {
+		wg.Go(func() {
+			snaps[i], errs[i] = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1")
+		})
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("caller %d: %v", i, errs[i])
+		}
+		if snaps[i] == nil || snaps[i].Name != "ubuntu:v1" {
+			t.Fatalf("caller %d snapshot = %+v, want ubuntu:v1", i, snaps[i])
+		}
+	}
+	if len(rt.snapshotImports) != 1 {
+		t.Errorf("snapshot imports = %v, want exactly one", rt.snapshotImports)
+	}
+	if got := reg.manifests.Load(); got != 1 {
+		t.Errorf("manifest fetches = %d, want 1", got)
+	}
+}
+
+func TestEnsureSnapshotLocalHitSkipsRegistry(t *testing.T) {
+	p, rt, reg := newSnapshotTestSetup(t)
+	rt.registerSnapshot("ubuntu:v1")
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1")
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	if len(rt.snapshotImports) != 0 || reg.manifests.Load() != 0 {
+		t.Errorf("local hit performed transfer/import: imports=%v manifests=%d",
+			rt.snapshotImports, reg.manifests.Load())
+	}
+}
+
+func TestEnsureSnapshotDifferentRefsNotSerialized(t *testing.T) {
+	p, rt, _ := newSnapshotTestSetup(t)
+	both := make(chan struct{})
+	var entered atomic.Int64
+	rt.importHook = func() {
+		if entered.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-time.After(5 * time.Second):
+			t.Error("second flight never imported while the first held its import: flights serialized")
+		}
+	}
+
+	var wg sync.WaitGroup
+	var errA, errB error
+	wg.Go(func() { _, errA = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1") })
+	wg.Go(func() { _, errB = p.ensureSnapshot(t.Context(), "debian", "v2", "debian:v2") })
+	wg.Wait()
+	if errA != nil || errB != nil {
+		t.Fatalf("errA=%v errB=%v", errA, errB)
+	}
+	if len(rt.snapshotImports) != 2 {
+		t.Errorf("imports = %v, want one per ref", rt.snapshotImports)
+	}
+}
+
+func TestEnsureSnapshotSharedWorkSurvivesCallerCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, rt, _ := newSnapshotTestSetup(t)
+		release := make(chan struct{})
+		rt.importHook = func() { <-release }
+
+		leaderCtx, cancelLeader := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		var errLeader, errLive error
+		var liveSnapshot *vm.Snapshot
+		wg.Go(func() { _, errLeader = p.ensureSnapshot(leaderCtx, "ubuntu", "v1", "ubuntu:v1") })
+		synctest.Wait() // leader parked in SnapshotImport
+		wg.Go(func() { liveSnapshot, errLive = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1") })
+		synctest.Wait() // live caller parked in the shared flight
+		cancelLeader()
+		synctest.Wait() // cancelled caller has abandoned the flight
+		close(release)
+		wg.Wait()
+
+		if !errors.Is(errLeader, context.Canceled) {
+			t.Errorf("cancelled caller err = %v, want context.Canceled (it must not wait out the shared import)", errLeader)
+		}
+		if errLive != nil || liveSnapshot == nil {
+			t.Fatalf("shared work must outlive the cancelled caller: snapshot=%v err=%v", liveSnapshot, errLive)
+		}
+		if len(rt.snapshotImports) != 1 {
+			t.Errorf("imports = %v, want one", rt.snapshotImports)
+		}
+	})
+}
+
+func TestEnsureSnapshotSharedImportAbortedByClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, rt, _ := newSnapshotTestSetup(t)
+		release := make(chan struct{})
+		rt.importHook = func() { <-release }
+
+		var wg sync.WaitGroup
+		var err error
+		wg.Go(func() { _, err = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1") })
+		synctest.Wait() // caller parked in the shared flight
+		p.Close()
+		close(release)
+		wg.Wait()
+
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled: provider shutdown must abort the detached import", err)
+		}
+	})
+}
+
+func TestEnsureSnapshotRetryAfterSharedFailure(t *testing.T) {
+	p, rt, reg := newSnapshotTestSetup(t)
+	reg.err = errors.New("registry down")
+
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1")
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err == nil {
+			t.Fatalf("caller %d: want shared failure, got nil", i)
+		}
+	}
+	if len(rt.snapshotImports) != 0 {
+		t.Fatalf("failed manifest fetch must not reach import, got %v", rt.snapshotImports)
+	}
+
+	reg.err = nil
+	snapshot, err := p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1")
+	if err != nil || snapshot == nil {
+		t.Fatalf("retry after shared failure: snapshot=%v err=%v", snapshot, err)
+	}
+	if len(rt.snapshotImports) != 1 {
+		t.Errorf("imports = %v, want one after retry", rt.snapshotImports)
+	}
+}
+
+func TestEnsureRunImageColdBurstSingleImport(t *testing.T) {
+	p, rt, _ := newCloudImageTestSetup(t)
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	refs := make([]string, n)
+	for i := range n {
+		wg.Go(func() {
+			refs[i], errs[i] = p.ensureRunImage(t.Context(), "ubuntu", false)
+		})
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("caller %d: %v", i, errs[i])
+		}
+		if refs[i] != "ubuntu:latest" {
+			t.Fatalf("caller %d ref = %q, want ubuntu:latest", i, refs[i])
+		}
+	}
+	if len(rt.imageImports) != 1 {
+		t.Errorf("image imports = %v, want exactly one", rt.imageImports)
+	}
+}
+
+func TestEnsureRunImageWarmHitNoImport(t *testing.T) {
+	p, rt, _ := newCloudImageTestSetup(t)
+	rt.imagesPresent = map[string]bool{"ubuntu:latest": true}
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = p.ensureRunImage(t.Context(), "ubuntu", false)
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	if len(rt.imageImports) != 0 {
+		t.Errorf("warm hit imported anyway: %v", rt.imageImports)
+	}
+}
+
+func TestEnsureRunImageLaterForceReimports(t *testing.T) {
+	p, rt, _ := newCloudImageTestSetup(t)
+
+	for i, force := range []bool{false, false, true} {
+		if _, err := p.ensureRunImage(t.Context(), "ubuntu", force); err != nil {
+			t.Fatalf("call %d (force=%v): %v", i, force, err)
+		}
+	}
+	if len(rt.imageImports) != 2 {
+		t.Errorf("imports = %v, want cold import + warm hit + later-force reimport", rt.imageImports)
+	}
+}
+
+func TestEnsureRunImageConcurrentForceShareOneImport(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p, rt, _ := newCloudImageTestSetup(t)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		rt.importHook = func() { once.Do(func() { close(entered) }); <-release }
+
+		var wg sync.WaitGroup
+		var err1, err2 error
+		wg.Go(func() { _, err1 = p.ensureRunImage(t.Context(), "ubuntu", true) })
+		<-entered
+		wg.Go(func() { _, err2 = p.ensureRunImage(t.Context(), "ubuntu", true) })
+		synctest.Wait() // second force caller is parked in the shared flight
+		close(release)
+		wg.Wait()
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("err1=%v err2=%v", err1, err2)
+		}
+		if len(rt.imageImports) != 1 {
+			t.Errorf("concurrent force imports = %v, want one shared", rt.imageImports)
+		}
+	})
+}
+
+func TestEnsureRunImageFallbackDeduped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rt := &fakeRuntime{}
+		reg := &countingRegistry{fakeRegistry: fakeRegistry{err: errors.New("registry down")}}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		rt.ensureImageHook = func() { once.Do(func() { close(entered) }); <-release }
+
+		var wg sync.WaitGroup
+		var err1, err2 error
+		wg.Go(func() { _, err1 = p.ensureRunImage(t.Context(), "ubuntu-22.04", false) })
+		<-entered
+		wg.Go(func() { _, err2 = p.ensureRunImage(t.Context(), "ubuntu-22.04", false) })
+		synctest.Wait() // second caller is parked in the shared flight
+		close(release)
+		wg.Wait()
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("err1=%v err2=%v", err1, err2)
+		}
+		if len(rt.ensuredImages) != 1 {
+			t.Errorf("fallback EnsureImage calls = %v, want one shared", rt.ensuredImages)
+		}
+	})
+}
+
 func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
@@ -1357,6 +1645,16 @@ type fakeRuntime struct {
 	netResizeCalls []netResizeCall
 	netResizeErr   error
 
+	// mu guards snapshots, imagesPresent, and the call ledgers so
+	// singleflight tests can drive concurrent ensure* callers under -race.
+	mu              sync.Mutex
+	snapshotImports []string
+	imageImports    []string
+	// importHook / ensureImageHook fire at SnapshotImport+ImageImport /
+	// EnsureImage entry so a test can hold a flight in-flight.
+	importHook      func()
+	ensureImageHook func()
+
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
 	// removeErr, when set, makes Remove fail with this error.
@@ -1444,14 +1742,22 @@ func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
 	f.savedSnapshot.name = name
 	f.savedSnapshot.vmID = vmID
 	f.snapshotSaveCount++
+	f.registerSnapshot(name)
+	return nil
+}
+
+func (f *fakeRuntime) registerSnapshot(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.snapshots == nil {
 		f.snapshots = map[string]*vm.Snapshot{}
 	}
 	f.snapshots[name] = &vm.Snapshot{Name: name}
-	return nil
 }
 
 func (f *fakeRuntime) SnapshotRemoveIfExists(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.snapshotRemoveCalls = append(f.snapshotRemoveCalls, name)
 	delete(f.snapshots, name)
 	return nil
@@ -1461,6 +1767,8 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 	if f.snapshotErr != nil {
 		return nil, f.snapshotErr
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.snapshots != nil {
 		if snapshot, ok := f.snapshots[name]; ok {
 			return snapshot, nil
@@ -1469,8 +1777,24 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
 }
 
-func (f *fakeRuntime) SnapshotImport(_ context.Context, _ vm.ImportOptions) (io.WriteCloser, func() error, error) {
-	return nopWriteCloser{}, func() error { return nil }, nil
+// SnapshotImport mirrors cocoon's contract: the name is registered only when
+// the import completes (wait), and the argv child dies with a canceled ctx.
+func (f *fakeRuntime) SnapshotImport(ctx context.Context, opts vm.ImportOptions) (io.WriteCloser, func() error, error) {
+	f.mu.Lock()
+	f.snapshotImports = append(f.snapshotImports, opts.Name)
+	hook := f.importHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	wait := func() error {
+		f.registerSnapshot(opts.Name)
+		return nil
+	}
+	return nopWriteCloser{}, wait, nil
 }
 
 func (f *fakeRuntime) SnapshotExport(_ context.Context, _ string) (io.ReadCloser, func() error, error) {
@@ -1478,14 +1802,22 @@ func (f *fakeRuntime) SnapshotExport(_ context.Context, _ string) (io.ReadCloser
 }
 
 func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) error {
+	f.mu.Lock()
 	f.ensuredImages = append(f.ensuredImages, struct {
 		image string
 		force bool
 	}{image, force})
+	hook := f.ensureImageHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
 func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.imageInspectCalls = append(f.imageInspectCalls, name)
 	if f.imagesPresent[name] {
 		return &vm.Image{Name: name}, nil
@@ -1493,8 +1825,29 @@ func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
 	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
 }
 
-func (f *fakeRuntime) ImageImport(_ context.Context, _ vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
-	return nopWriteCloser{}, func() error { return nil }, nil
+// ImageImport mirrors SnapshotImport's contract minus the rm-first: the name
+// becomes visible to Image() only when the import completes (wait).
+func (f *fakeRuntime) ImageImport(ctx context.Context, opts vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
+	f.mu.Lock()
+	f.imageImports = append(f.imageImports, opts.Name)
+	hook := f.importHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	wait := func() error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.imagesPresent == nil {
+			f.imagesPresent = map[string]bool{}
+		}
+		f.imagesPresent[opts.Name] = true
+		return nil
+	}
+	return nopWriteCloser{}, wait, nil
 }
 
 func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
@@ -1580,14 +1933,14 @@ func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 	return pod
 }
 
+var _ oci.Registry = fakeRegistry{}
+
 // fakeRegistry is a stub oci.Registry serving a canned GetManifest; the other
 // methods are unused by the ensureRunImage classify dispatch.
 type fakeRegistry struct {
 	manifest []byte
 	err      error
 }
-
-var _ oci.Registry = fakeRegistry{}
 
 func (f fakeRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
 	return f.manifest, "", f.err
@@ -1604,3 +1957,72 @@ func (fakeRegistry) PutManifest(context.Context, string, string, []byte, string)
 func (fakeRegistry) HasManifest(context.Context, string, string) (bool, error) { return false, nil }
 
 func (fakeRegistry) DeleteManifest(context.Context, string, string) error { return nil }
+
+// countingRegistry serves an in-memory artifact (manifest + blobs by digest)
+// and counts manifest fetches, for the singleflight dedup assertions.
+type countingRegistry struct {
+	fakeRegistry
+	blobs     map[string][]byte
+	manifests atomic.Int64
+}
+
+func (c *countingRegistry) GetManifest(ctx context.Context, name, tag string) ([]byte, string, error) {
+	c.manifests.Add(1)
+	return c.fakeRegistry.GetManifest(ctx, name, tag)
+}
+
+func (c *countingRegistry) GetBlob(_ context.Context, _, digest string) (io.ReadCloser, error) {
+	if b, ok := c.blobs[digest]; ok {
+		return io.NopCloser(bytes.NewReader(b)), nil
+	}
+	return nil, fmt.Errorf("blob %s not found", digest)
+}
+
+func blobDigest(b []byte) string {
+	return "sha256:" + ociutil.SHA256Hex(b)
+}
+
+// snapshotArtifact builds a minimal streamable snapshot manifest: a config
+// blob and zero layers, enough for snapshot.Stream to complete an import.
+func snapshotArtifact() ([]byte, map[string][]byte) {
+	cfg := []byte(`{"schemaVersion":"1","snapshotId":"snap-test"}`)
+	m := fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"artifactType":%q,`+
+		`"config":{"mediaType":%q,"digest":%q,"size":%d},"layers":[]}`,
+		manifest.MediaTypeOCIManifest, manifest.ArtifactTypeSnapshot,
+		manifest.MediaTypeSnapshotConfig, blobDigest(cfg), len(cfg))
+	return []byte(m), map[string][]byte{blobDigest(cfg): cfg}
+}
+
+// cloudImageArtifact builds a minimal streamable cloud-image manifest with
+// one qcow2 disk layer whose digest matches the served blob bytes.
+func cloudImageArtifact() ([]byte, map[string][]byte) {
+	disk := []byte("qcow2-bytes")
+	m := fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"artifactType":%q,`+
+		`"config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":%q,"size":2},`+
+		`"layers":[{"mediaType":%q,"digest":%q,"size":%d}]}`,
+		manifest.MediaTypeOCIManifest, manifest.ArtifactTypeOSImage,
+		blobDigest([]byte("{}")), manifest.MediaTypeDiskQcow2, blobDigest(disk), len(disk))
+	return []byte(m), map[string][]byte{blobDigest(disk): disk}
+}
+
+func newSnapshotTestSetup(t *testing.T) (*Provider, *fakeRuntime, *countingRegistry) {
+	t.Helper()
+	m, blobs := snapshotArtifact()
+	return newArtifactTestSetup(t, m, blobs)
+}
+
+func newCloudImageTestSetup(t *testing.T) (*Provider, *fakeRuntime, *countingRegistry) {
+	t.Helper()
+	m, blobs := cloudImageArtifact()
+	return newArtifactTestSetup(t, m, blobs)
+}
+
+func newArtifactTestSetup(t *testing.T, m []byte, blobs map[string][]byte) (*Provider, *fakeRuntime, *countingRegistry) {
+	t.Helper()
+	rt := &fakeRuntime{}
+	reg := &countingRegistry{fakeRegistry: fakeRegistry{manifest: m}, blobs: blobs}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}
+	return p, rt, reg
+}

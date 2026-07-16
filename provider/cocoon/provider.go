@@ -107,6 +107,8 @@ type Provider struct {
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
 	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
+	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
+	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
 	notifyHook     func(*corev1.Pod)
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
