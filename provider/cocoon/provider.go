@@ -80,6 +80,7 @@ type Provider struct {
 	NodeName string
 
 	OrphanPolicy provider.OrphanPolicy
+	RestoreMode  vm.RestoreMode
 
 	Clientset   kubernetes.Interface
 	Runtime     vm.Runtime
@@ -133,6 +134,7 @@ func NewProvider() *Provider {
 		lifecycleCtx:     lifecycleCtx,
 		lifecycleStop:    lifecycleStop,
 		OrphanPolicy:     provider.OrphanDestroy,
+		RestoreMode:      vm.RestoreOnDemand,
 		Pinger:           network.NopPinger{},
 		pods:             map[string]*corev1.Pod{},
 		vmsByPod:         map[string]*vm.VM{},

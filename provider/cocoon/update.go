@@ -202,13 +202,13 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sou
 		}
 	}
 	opts := vm.CloneOptions{
-		From:       sourceName,
-		To:         spec.VMName,
-		Network:    spec.Network,
-		Backend:    spec.Backend,
-		NoDirectIO: spec.NoDirectIO,
-		OnDemand:   useOnDemandClone(spec.OS),
-		Pull:       snapshot != nil && snapshot.Image != "",
+		From:        sourceName,
+		To:          spec.VMName,
+		Network:     spec.Network,
+		Backend:     spec.Backend,
+		NoDirectIO:  spec.NoDirectIO,
+		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+		Pull:        snapshot != nil && snapshot.Image != "",
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = ptr.To(1)

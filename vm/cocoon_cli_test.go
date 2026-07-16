@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"cmp"
 	"errors"
 	"reflect"
 	"testing"
@@ -72,8 +73,8 @@ func TestBuildCloneArgs(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-a", "snap-a"},
 		},
 		{
-			name: "firecracker clone strips on-demand",
-			opts: CloneOptions{From: "snap-a", To: "vm-b", Backend: "firecracker", OnDemand: true},
+			name: "firecracker clone strips restore-mode",
+			opts: CloneOptions{From: "snap-a", To: "vm-b", Backend: "firecracker", RestoreMode: RestoreOnDemand},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-b", "snap-a"},
 		},
 		{
@@ -92,9 +93,24 @@ func TestBuildCloneArgs(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-e", "--pull", "snap-a"},
 		},
 		{
-			name: "on-demand appended on cloud-hypervisor",
-			opts: CloneOptions{From: "snap-a", To: "vm-od", Backend: "cloud-hypervisor", OnDemand: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-od", "--on-demand", "snap-a"},
+			name: "restore-mode ondemand appended on cloud-hypervisor",
+			opts: CloneOptions{From: "snap-a", To: "vm-od", Backend: "cloud-hypervisor", RestoreMode: RestoreOnDemand},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-od", "--restore-mode", "ondemand", "snap-a"},
+		},
+		{
+			name: "restore-mode mmap appended on cloud-hypervisor",
+			opts: CloneOptions{From: "snap-a", To: "vm-mm", Backend: "cloud-hypervisor", RestoreMode: RestoreMmap},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-mm", "--restore-mode", "mmap", "snap-a"},
+		},
+		{
+			name: "restore-mode copy emits no flag",
+			opts: CloneOptions{From: "snap-a", To: "vm-cp", Backend: "cloud-hypervisor", RestoreMode: RestoreCopy},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-cp", "snap-a"},
+		},
+		{
+			name: "empty backend treated as cloud-hypervisor for restore-mode",
+			opts: CloneOptions{From: "snap-a", To: "vm-eb", RestoreMode: RestoreOnDemand},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-eb", "--restore-mode", "ondemand", "snap-a"},
 		},
 		{
 			name: "from-dir replaces positional and forces --pull",
@@ -102,13 +118,13 @@ func TestBuildCloneArgs(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-f", "--pull", "--from-dir", "/var/lib/cocoon/snaps/foo"},
 		},
 		{
-			name: "from-dir on cloud-hypervisor with on-demand",
-			opts: CloneOptions{To: "vm-g", FromDir: "/snaps/bar", Backend: "cloud-hypervisor", OnDemand: true},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-g", "--pull", "--on-demand", "--from-dir", "/snaps/bar"},
+			name: "from-dir on cloud-hypervisor with restore-mode",
+			opts: CloneOptions{To: "vm-g", FromDir: "/snaps/bar", Backend: "cloud-hypervisor", RestoreMode: RestoreOnDemand},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-g", "--pull", "--restore-mode", "ondemand", "--from-dir", "/snaps/bar"},
 		},
 		{
-			name: "from-dir on firecracker skips on-demand",
-			opts: CloneOptions{To: "vm-h", FromDir: "/snaps/fc", Backend: "firecracker", OnDemand: true},
+			name: "from-dir on firecracker skips restore-mode",
+			opts: CloneOptions{To: "vm-h", FromDir: "/snaps/fc", Backend: "firecracker", RestoreMode: RestoreOnDemand},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-h", "--pull", "--from-dir", "/snaps/fc"},
 		},
 		{
@@ -132,9 +148,9 @@ func TestBuildCloneArgs(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-l", "--nics", "0", "snap-a"},
 		},
 		{
-			name: "nics combines with on-demand on CH",
-			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", OnDemand: true, NICs: ptr.To(2)},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--on-demand", "--nics", "2", "snap-a"},
+			name: "nics combines with restore-mode on CH",
+			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", RestoreMode: RestoreOnDemand, NICs: ptr.To(2)},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--restore-mode", "ondemand", "--nics", "2", "snap-a"},
 		},
 		{
 			name: "firecracker clone strips --nics",
@@ -147,6 +163,41 @@ func TestBuildCloneArgs(t *testing.T) {
 			got := buildCloneArgs(tc.opts)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("buildCloneArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRestoreMode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in      string
+		want    RestoreMode
+		wantErr bool
+	}{
+		{in: "copy", want: RestoreCopy},
+		{in: "ondemand", want: RestoreOnDemand},
+		{in: "mmap", want: RestoreMmap},
+		{in: "MMAP", want: RestoreMmap},
+		{in: " ondemand ", want: RestoreOnDemand},
+		{in: "", wantErr: true},
+		{in: "on-demand", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(cmp.Or(tc.in, "empty"), func(t *testing.T) {
+			got, err := ParseRestoreMode(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseRestoreMode(%q) = %q, want error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseRestoreMode(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseRestoreMode(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
