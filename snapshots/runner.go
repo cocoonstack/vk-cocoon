@@ -18,10 +18,3 @@ type runnerAdapter struct {
 func (a runnerAdapter) Export(ctx context.Context, name string) (io.ReadCloser, func() error, error) {
 	return a.Runtime.SnapshotExport(ctx, name)
 }
-
-func (a runnerAdapter) Import(ctx context.Context, opts snapshot.ImportOptions) (io.WriteCloser, func() error, error) {
-	return a.Runtime.SnapshotImport(ctx, vm.ImportOptions{
-		Name:        opts.Name,
-		Description: opts.Description,
-	})
-}
