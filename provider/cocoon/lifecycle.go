@@ -169,7 +169,6 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 func (p *Provider) recordLifecycleFlushed(key, snap string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Skip if the pod was forgotten or the intent advanced past this snapshot.
 	cur, ok := p.lifecycleIntent[key]
 	if !ok || cur.Snapshot() != snap {
 		return

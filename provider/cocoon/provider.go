@@ -436,7 +436,6 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):
-		// Authoritatively gone → delete pod so operator recreates.
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
@@ -451,11 +450,9 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.scheduleDeferredRecheck(trackedID)
 
 	case inspected.State == vm.StateRunning:
-		// Still running → false alarm.
 		logger.Debugf(ctx, "vm %s still running after event, ignoring", trackedID)
 
 	default:
-		// Stopped/error → restart the CH process in place, with cooldown.
 		p.mu.Lock()
 		last := p.lastRestart[trackedID]
 		cooldownElapsed := time.Since(last) >= restartCooldown
@@ -584,7 +581,6 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
 			return
 		case err != nil:
-			// Still transient — back off and try again until the budget expires.
 			if time.Now().After(deadline) {
 				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, evicting pod %s/%s to avoid stuck state",
 					vmID, budget, pod.Namespace, pod.Name)
@@ -603,7 +599,6 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			p.handleVMGone(ctx, v)
 			return
 		default:
-			// Running — false alarm, stop recheck.
 			return
 		}
 	}

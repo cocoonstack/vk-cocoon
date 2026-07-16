@@ -26,7 +26,6 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		return errors.New("clientset is required for startup reconcile")
 	}
 
-	// Fetch pods and VMs concurrently (independent backends).
 	var (
 		pods *corev1.PodList
 		vms  []vm.VM
@@ -77,9 +76,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		v, ok := vmByID[runtime.VMID]
 		if !ok {
-			// Hibernated pod with stale VMID — the VM was removed during
-			// hibernate but the annotation patch failed. Clear the stale
-			// annotations and track the pod without a VM so wake works.
+			// The VM was removed during hibernate but the annotation patch failed.
 			if meta.ReadHibernateState(pod) {
 				p.reconcileStaleHibernate(ctx, pod)
 				continue

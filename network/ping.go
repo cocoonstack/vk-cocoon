@@ -64,7 +64,6 @@ func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 	if err != nil {
 		return fmt.Errorf("marshal icmp echo: %w", err)
 	}
-	// Refuse unbounded waits; callers must set a deadline.
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return errors.New("icmp ping requires context deadline")

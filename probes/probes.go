@@ -99,7 +99,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 		return
 	}
 
-	// Cancel any previous agent for this key.
 	m.mu.Lock()
 	if prev, ok := m.agents[key]; ok {
 		prev.cancel()
@@ -110,7 +109,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	m.agents[key] = ag
 	m.mu.Unlock()
 
-	// First probe runs synchronously.
 	ready, message := runProbe(ctx, probe)
 
 	// Guard against a racing Forget that canceled us during the sync probe.
@@ -160,7 +158,6 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 
 		switch {
 		case ready && !lastReady:
-			// Transition to Ready: push immediately and slow to steady.
 			lastReady = true
 			failures = 0
 			interval = defaultSteadyInterval
@@ -170,10 +167,8 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 		case ready:
 			failures = 0
 		case !lastReady:
-			// Still waiting for the VM to come up: back off.
 			interval = nextInitialInterval(interval)
 		case lastReady:
-			// Only flip back after the failure budget is exhausted.
 			failures++
 			if failures >= defaultFailureThreshold {
 				lastReady = false

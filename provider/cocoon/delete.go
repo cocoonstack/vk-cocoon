@@ -19,7 +19,6 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	if v == nil {
-		// No VM to tear down; forget and succeed.
 		p.forgetPod(pod.Namespace, pod.Name)
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "no_vm").Inc()
 		return nil

@@ -257,7 +257,6 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime}
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
-	// NopPinger fallback when CAP_NET_RAW is unavailable.
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {
 		logger.Warnf(ctx, "icmp pinger disabled (%v); readiness will fall back to ip-resolved heuristic", err)
 		p.Pinger = network.NopPinger{}
