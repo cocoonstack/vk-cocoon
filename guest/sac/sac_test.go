@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"net"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -141,10 +140,6 @@ func TestNetHasIP(t *testing.T) {
 	if NetHasIP(output, 3, "10.88.0.60") {
 		t.Error("NetHasIP should return false for wrong net number")
 	}
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
 }
 
 // fakeSAC simulates a Windows SAC console over a Unix socket.

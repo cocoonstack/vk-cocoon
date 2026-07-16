@@ -7,6 +7,7 @@
 package vm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,6 +33,9 @@ const (
 	BackendFirecracker = "firecracker"
 
 	netResizeUnsupportedMarker = "backend does not support net resize"
+
+	// maxEventLineBytes bounds one `cocoon vm status --event` JSON line.
+	maxEventLineBytes = 1 << 20
 )
 
 var _ Runtime = (*CocoonCLI)(nil)
@@ -349,7 +353,8 @@ func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) erro
 
 // WatchEvents starts `cocoon vm status --event --format json` and streams
 // parsed VMEvent values. The channel closes when ctx is canceled or the
-// subprocess exits. On parse errors the line is silently skipped.
+// subprocess exits. An undecodable line is logged and skipped so one torn
+// write cannot kill the stream and force a subprocess respawn.
 func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	cmd := c.command(ctx, "vm", "status", "--event", "--format", "json")
 	stdout, err := cmd.StdoutPipe()
@@ -363,14 +368,21 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	go func() {
 		defer close(ch)
 		defer cmd.Wait() //nolint:errcheck // wait error ignored on goroutine cleanup path
-		dec := json.NewDecoder(stdout)
-		for {
+		logger := log.WithFunc("vm.CocoonCLI.WatchEvents")
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 64*1024), maxEventLineBytes)
+		for sc.Scan() {
+			line := bytes.TrimSpace(sc.Bytes())
+			if len(line) == 0 {
+				continue
+			}
 			var raw struct {
 				Event string          `json:"event"`
 				VM    json.RawMessage `json:"vm"`
 			}
-			if err := dec.Decode(&raw); err != nil {
-				return // EOF or ctx canceled
+			if err := json.Unmarshal(line, &raw); err != nil {
+				logger.Warnf(ctx, "skip undecodable event line: %v", err)
+				continue
 			}
 			ev := VMEvent{Event: raw.Event}
 			ev.VM = parseVMFromStatusJSON(raw.VM)
@@ -382,6 +394,9 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 			case <-ctx.Done():
 				return
 			}
+		}
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			logger.Warnf(ctx, "event stream read: %v", err)
 		}
 	}()
 	return ch, nil

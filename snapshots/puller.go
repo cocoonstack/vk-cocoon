@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-common/cloudimg"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -44,10 +45,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 		_ = wait()
 		return fmt.Errorf("close importer: %w", err)
 	}
-	if err := wait(); err != nil {
-		return err
-	}
-	return nil
+	return wait()
 }
 
 // EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`.
@@ -71,7 +69,7 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 		return fmt.Errorf("open cocoon image import: %w", err)
 	}
 	adapter := blobReader{registry: p.Registry, name: name}
-	if err := cloudimgStream(ctx, raw, adapter, importer); err != nil {
+	if err := cloudimg.Stream(ctx, raw, adapter, importer); err != nil {
 		_ = importer.Close()
 		_ = wait()
 		return fmt.Errorf("stream cloud image: %w", err)

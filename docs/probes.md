@@ -27,10 +27,12 @@ The `probes/` package owns that loop:
 2. The first probe runs **synchronously inside `Start`** so the
    refreshStatus/notify pass that `CreatePod` does before returning
    already reflects the initial reachability decision.
-3. A background goroutine re-runs the probe on a ticker (2 s cold-start,
-   5 s once Ready) and invokes `onUpdate` after 3 consecutive failures
-   flip readiness back to false. `onUpdate` re-reads the pod, rebuilds the
-   status, and calls `notify` so the kubelet observes the change.
+3. A background goroutine re-runs the probe — pre-Ready on exponential
+   backoff (100 ms growing ×1.5 up to a 1 s cap, so a fast guest flips to
+   Ready within ~100 ms), then a steady 5 s interval once Ready — and
+   invokes `onUpdate` after 3 consecutive failures flip readiness back to
+   false. `onUpdate` re-reads the pod, rebuilds the status, and calls
+   `notify` so the kubelet observes the change.
 4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod
    goroutine; `Manager.Close` is called once at shutdown to tear every
    remaining agent down.

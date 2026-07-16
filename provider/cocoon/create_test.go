@@ -1154,7 +1154,7 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 		SnapshotPolicy: "never", // skip push path — not under test here
 	})
 	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0"})
-	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true, Live: true})
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
 		t.Fatalf("DeletePod: %v", err)
@@ -1603,7 +1603,7 @@ func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p := newTestProvider(t)
 	p.Probes = probes.NewManager(t.Context())
-	p.Probes.Set("ns/demo-0", probes.Result{Ready: true, Live: true})
+	p.Probes.Set("ns/demo-0", probes.Result{Ready: true})
 
 	leasePath := filepath.Join(t.TempDir(), "leases.json")
 	leases := `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.88","expiry":"2099-01-01T00:00:00Z"}]`

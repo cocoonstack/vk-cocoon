@@ -22,13 +22,8 @@ const (
 	// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
 	hibernateImportSuffix = "-hibernate-import"
 
-	// defaultWakeFreshIPBudget caps the wait for a fresh DHCP lease after a clone
-	// re-DHCPs on a new NIC/MAC: dropNIC wake, and every fork/restore clone routed
-	// through markReadyAfterIP. On-demand clones fault RAM in lazily over UFFD and
-	// concurrent resumes (replicas>1) contend, so the first lease can land many
-	// seconds after resume — long enough to surface as a spurious lifecycle=failed
-	// and an operator sub-agent rebuild. This budget absorbs that; a genuinely dead
-	// VM still fails, just later.
+	// defaultWakeFreshIPBudget bounds waitForFreshIP; see its doc for why
+	// the budget is generous.
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
 )
@@ -286,6 +281,11 @@ func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Po
 	return true
 }
 
+// waitForFreshIP polls for the DHCP lease a clone acquires on its new
+// NIC/MAC. On-demand clones fault RAM in lazily over UFFD and concurrent
+// resumes contend, so the first lease can land many seconds after resume;
+// a short budget would misread that as lifecycle=failed and trigger an
+// operator rebuild.
 func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)

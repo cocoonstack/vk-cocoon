@@ -36,27 +36,20 @@ const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
 
-	// initialStatusPushDelay defers the post-restart pod-status push so the
-	// kubelet's pod-informer has time to populate knownPods. Without the
-	// delay, enqueuePodStatusUpdate's poll-for-knownPods loop times out
-	// (151ms × 20 retries ≈ 3s) before the AddFunc handler observes the
-	// pod, and the status update is silently dropped.
+	// initialStatusPushDelay waits out the kubelet pod-informer's knownPods
+	// population window so the first post-restart status push isn't dropped.
 	initialStatusPushDelay = 10 * time.Second
 
 	// containerName is the synthetic container name used in pod status and metrics.
 	containerName = "agent"
 
-	// evictDeleteAttempts / evictDeleteBaseDelay bound the K8s-side retry in
-	// evictPod. Kept small because the event loop is serialized per provider —
-	// better to return quickly and let the next event re-enter evictPod than
-	// to stall all VM events on a flaky API server.
+	// evictDeleteAttempts / evictDeleteBaseDelay bound evictPod's K8s-side
+	// retry; kept small so a flaky apiserver can't stall the serialized event loop.
 	evictDeleteAttempts  = 2
 	evictDeleteBaseDelay = 200 * time.Millisecond
 
-	// inlineInspectAttempts bounds the synchronous retry in handleVMGone.
-	// Two attempts catch the common single-CLI-hiccup case; anything
-	// longer hands off to the deferred recheck so the event loop keeps
-	// moving. Symmetric with evictDeleteAttempts.
+	// inlineInspectAttempts bounds handleVMGone's synchronous retry; beyond
+	// a single CLI hiccup the deferred recheck takes over.
 	inlineInspectAttempts = 2
 
 	// Default tunables for the recheck path. Overridable via Provider
@@ -65,11 +58,8 @@ const (
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
 
-	// defaultDeferredRecheckBudget caps how long a single recheck loop
-	// will keep asking cocoon about a VM. On timeout we evict the pod
-	// with reason VMInspectTimeout so a permanently broken cocoon does
-	// not leave the pod tracked forever — the whole point of the
-	// deferred path was to avoid that outcome.
+	// defaultDeferredRecheckBudget caps one recheck loop; on timeout the pod
+	// is evicted (VMInspectTimeout) so a broken cocoon can't leave it tracked forever.
 	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
@@ -89,7 +79,6 @@ type Provider struct {
 	Registry    oci.Registry
 	LeaseParser *network.LeaseParser
 	Pinger      network.Pinger
-	GuestRDP    guest.Executor
 	GuestSAC    guest.Dialer
 	Probes      *probes.Manager
 	Recorder    record.EventRecorder
@@ -476,25 +465,13 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.mu.Unlock()
 		if !cooldownElapsed {
 			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
-			if err := p.Runtime.Remove(ctx, trackedID); err != nil {
-				// Remove failed: VM still live in an unknown state. Keep the pod for
-				// investigation — evicting would orphan the live VM and collide on recreate.
-				logger.Errorf(ctx, err, "remove vm %s during cooldown eviction, keeping pod for investigation", trackedID)
-				return
-			}
-			p.evictPod(ctx, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
+			p.removeThenEvict(ctx, trackedID, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
-			if removeErr := p.Runtime.Remove(ctx, trackedID); removeErr != nil {
-				// Remove failed: VM still live in an unknown state. Keep the pod for
-				// investigation — evicting would orphan the live VM and collide on recreate.
-				logger.Errorf(ctx, removeErr, "remove vm %s after failed restart, keeping pod for investigation", trackedID)
-				return
-			}
-			p.evictPod(ctx, affectedKey, affectedPod, "RestartFailed", startErr.Error())
+			p.removeThenEvict(ctx, trackedID, affectedKey, affectedPod, "RestartFailed", startErr.Error())
 			return
 		}
 		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
@@ -512,6 +489,18 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 			p.mu.Unlock()
 		}
 	}
+}
+
+// removeThenEvict removes the VM then evicts the pod. On remove failure the
+// pod is kept for investigation — evicting would orphan the live VM and
+// collide on recreate.
+func (p *Provider) removeThenEvict(ctx context.Context, vmID, key string, pod *corev1.Pod, reason, message string) {
+	if err := p.Runtime.Remove(ctx, vmID); err != nil {
+		log.WithFunc("cocoon.Provider.removeThenEvict").
+			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", vmID, reason)
+		return
+	}
+	p.evictPod(ctx, key, pod, reason, message)
 }
 
 // inspectWithRetry calls Runtime.Inspect up to inlineInspectAttempts

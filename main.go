@@ -35,7 +35,6 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
-	"github.com/cocoonstack/vk-cocoon/guest/rdp"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -265,7 +264,6 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	} else {
 		p.Pinger = icmpPinger
 	}
-	p.GuestRDP = rdp.Executor{}
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))

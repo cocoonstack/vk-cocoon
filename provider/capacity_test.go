@@ -41,16 +41,16 @@ func TestNodeResourcesDefaults(t *testing.T) {
 	if _, err := os.Stat(rootDir); err != nil {
 		t.Skipf("requires %s for statfs", rootDir)
 	}
-	cap, alloc, err := NodeResources()
+	capacity, alloc, err := NodeResources()
 	if err != nil {
 		t.Fatalf("NodeResources: %v", err)
 	}
 
-	cpu := cap.Cpu()
+	cpu := capacity.Cpu()
 	if cpu.IsZero() {
 		t.Errorf("capacity CPU is zero")
 	}
-	mem := cap.Memory()
+	mem := capacity.Memory()
 	if mem.IsZero() {
 		t.Errorf("capacity Memory is zero")
 	}

@@ -130,11 +130,9 @@ func detectMemory() (resource.Quantity, error) {
 	return *resource.NewQuantity(fields["MemTotal"]*1024, resource.BinarySI), nil
 }
 
-// detectHugepagesResource returns the hugepages quantity and the matching
-// k8s resource name (hugepages-<size>). The page size comes from /proc/meminfo,
-// so a node whose default hugepage size is not 2Mi (e.g. 1Gi) is advertised
-// under the correct key rather than mislabeled. VK_NODE_HUGEPAGES overrides the
-// amount and assumes the conventional 2Mi page size.
+// detectHugepagesResource reads amount and page size from /proc/meminfo so a
+// non-2Mi default (e.g. 1Gi) is advertised under the right hugepages-<size>
+// key; VK_NODE_HUGEPAGES overrides the amount and assumes 2Mi pages.
 func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 	if v := os.Getenv("VK_NODE_HUGEPAGES"); v != "" {
 		q, err := resource.ParseQuantity(v)

@@ -5,7 +5,6 @@ package probes
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 
@@ -30,7 +29,6 @@ type Probe func(ctx context.Context) (ready bool, message string)
 // Result is the latest probe outcome.
 type Result struct {
 	Ready    bool
-	Live     bool
 	LastSeen time.Time
 	Message  string
 }
@@ -94,15 +92,6 @@ func (m *Manager) Forget(key string) {
 	}
 }
 
-// Snapshot copies the entire result map.
-func (m *Manager) Snapshot(_ context.Context) map[string]Result {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]Result, len(m.results))
-	maps.Copy(out, m.results)
-	return out
-}
-
 // Start launches (or replaces) a per-pod probe agent. The first probe runs
 // synchronously so CreatePod's initial notify reflects reachability.
 func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
@@ -133,7 +122,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	}
 	m.results[key] = Result{
 		Ready:    ready,
-		Live:     ready,
 		Message:  message,
 		LastSeen: time.Now().UTC(),
 	}
@@ -146,7 +134,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 func (m *Manager) applyResult(key string, ready bool, message string) {
 	m.Set(key, Result{
 		Ready:   ready,
-		Live:    ready,
 		Message: message,
 	})
 }

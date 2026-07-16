@@ -16,7 +16,7 @@ reporting per-VM status back to the kubelet.
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `cocoon` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | `Puller` and `Pusher` stream snapshots and cloud images to any OCI registry through `cocoon-common`'s `oci.Registry` backend (`cocoon-common/snapshot` + `cocoon-common/cloudimg`) |
 | Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
-| Guest exec | `guest/` | RDP help-text shim (Windows) and SAC dialer (Windows static IP). Linux guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/` |
+| Guest console | `guest/` | SAC dialer (Windows static IP). Guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/` |
 | Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
 | Metrics | `metrics/` | Prometheus collectors for pod lifecycle, snapshot pull / push, VM table size, orphans |
 | Build metadata | `version/` | ldflags-injected version / revision / built-at strings |

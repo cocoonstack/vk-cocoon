@@ -294,7 +294,7 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 
 func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
-	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true, Live: true})
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
 
 	done := make(chan struct{})
 	go func() {

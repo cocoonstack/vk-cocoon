@@ -67,15 +67,18 @@ func (p *LeaseParser) All() ([]Lease, error) {
 	return slices.Clone(p.cached), nil
 }
 
-// refresh re-reads the lease file when mtime or size changed.
+// refresh re-reads the lease file when mtime or size changed. Parsing happens
+// outside the lock so concurrent lookups aren't serialized behind file I/O; a
+// racing refresh at worst records a stale stamp and re-parses on the next call.
 func (p *LeaseParser) refresh() error {
 	info, err := os.Stat(p.Path)
 	if err != nil {
 		return fmt.Errorf("stat lease file %s: %w", p.Path, err)
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size {
+	fresh := p.cached != nil && info.ModTime().Equal(p.mtime) && info.Size() == p.size
+	p.mu.Unlock()
+	if fresh {
 		return nil
 	}
 	leases, err := p.parse()
@@ -86,14 +89,22 @@ func (p *LeaseParser) refresh() error {
 	for i := range leases {
 		byMAC[strings.ToLower(leases[i].MAC)] = &leases[i]
 	}
+	p.mu.Lock()
 	p.cached = leases
 	p.byMAC = byMAC
 	p.mtime = info.ModTime()
 	p.size = info.Size()
+	p.mu.Unlock()
 	return nil
 }
 
-// parse decodes cocoon-net's JSON lease file.
+// cocoonNetLease is the on-disk JSON shape written by cocoon-net, decoded by parse.
+type cocoonNetLease struct {
+	MAC    string `json:"mac"`
+	IP     string `json:"ip"`
+	Expiry string `json:"expiry"`
+}
+
 func (p *LeaseParser) parse() ([]Lease, error) {
 	data, err := os.ReadFile(p.Path) //nolint:gosec // operator-supplied path
 	if err != nil {
@@ -105,8 +116,7 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	}
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
-		// Tolerate partial rows: cocoon-net may flush a lease mid-write,
-		// and one bad timestamp shouldn't block lookups for healthy leases.
+		// Skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
 		expiry, err := time.Parse(time.RFC3339, r.Expiry)
 		if err != nil {
 			continue
@@ -118,11 +128,4 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 		})
 	}
 	return out, nil
-}
-
-// cocoonNetLease is the on-disk JSON shape written by cocoon-net, decoded by parse.
-type cocoonNetLease struct {
-	MAC    string `json:"mac"`
-	IP     string `json:"ip"`
-	Expiry string `json:"expiry"`
 }

@@ -19,7 +19,3 @@ type blobReader struct {
 func (b blobReader) ReadBlob(ctx context.Context, digest string) (io.ReadCloser, error) {
 	return b.registry.GetBlob(ctx, b.name, digest)
 }
-
-func cloudimgStream(ctx context.Context, raw []byte, blobs blobReader, w io.Writer) error {
-	return cloudimg.Stream(ctx, raw, blobs, w)
-}

@@ -197,7 +197,7 @@ var (
 			Name:      "postclone_total",
 			Help:      "Number of post-clone fixups by guest kind and result.",
 		},
-		[]string{"kind", "result"}, // kind=windows|linux_static|linux_fc|sac  result=ok|failed
+		[]string{"kind", "result"}, // kind=windows|linux_static|linux_fc|sac, result=ok|failed
 	)
 
 	PostCloneRetryAttempts = prometheus.NewHistogramVec(

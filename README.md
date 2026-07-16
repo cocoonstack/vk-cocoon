@@ -25,7 +25,7 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
 | Cocoon CLI | `vm/` | `Runtime` interface + the `CocoonCLI` that shells out to `cocoon` |
 | Snapshot SDK | `snapshots/` | `Puller` / `Pusher` stream snapshots and cloud images to an OCI registry |
 | Network | `network/` | cocoon-net lease parser + the ICMPv4 `Pinger` the probe loop uses |
-| Guest exec | `guest/` | RDP help-text shim + SAC dialer for Windows static IP |
+| Guest console | `guest/` | SAC dialer for Windows static IP |
 | Probes | `probes/` | Per-pod probe agents that keep the async provider's pushed status live |
 | Metrics | `metrics/` | Prometheus collectors for lifecycle, snapshots, VM table, orphans |
 

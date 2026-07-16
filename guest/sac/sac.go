@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,17 +36,19 @@ var _ guest.Dialer = (*Dialer)(nil)
 
 // Dialer opens persistent SAC sessions over serial console sockets.
 type Dialer struct {
-	WaitReady time.Duration // max time waiting for SAC> prompt; 0 = 60s
+	WaitReady time.Duration // total Dial budget: connect + SAC> prompt; 0 = 60s
 }
 
 // Dial connects to the SAC console at target (a Unix socket path),
-// waits for the SAC> prompt, and returns a ready Session.
+// waits for the SAC> prompt, and returns a ready Session. Connect and
+// prompt wait share one WaitReady budget.
 func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error) {
-	conn, err := d.dial(ctx, target)
+	deadline := time.Now().Add(d.waitReady())
+	conn, err := dial(ctx, target, deadline)
 	if err != nil {
 		return nil, err
 	}
-	if promptErr := waitPrompt(conn, d.waitReady()); promptErr != nil {
+	if promptErr := waitPrompt(ctx, conn, time.Until(deadline)); promptErr != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("sac wait prompt: %w", promptErr)
 	}
@@ -59,32 +62,6 @@ func (d *Dialer) waitReady() time.Duration {
 	return defaultWaitReady
 }
 
-func (d *Dialer) dial(ctx context.Context, socketPath string) (net.Conn, error) {
-	deadline := time.Now().Add(d.waitReady())
-	var lastErr error
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return nil, fmt.Errorf("sac dial timeout: %w", lastErr)
-			}
-			return nil, errors.New("sac dial timeout")
-		}
-		conn, err := net.DialTimeout("unix", socketPath, defaultRWTimeout)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retryInterval):
-		}
-	}
-}
-
 var _ guest.Session = (*Session)(nil)
 
 // Session is a persistent SAC console connection. Commands are sent
@@ -93,8 +70,8 @@ type Session struct {
 	conn net.Conn
 }
 
-func (s *Session) Run(_ context.Context, cmd []string, stdout io.Writer) error {
-	output, err := sacCommand(s.conn, strings.Join(cmd, " "), defaultCmdTimeout)
+func (s *Session) Run(ctx context.Context, cmd []string, stdout io.Writer) error {
+	output, err := sacCommand(ctx, s.conn, strings.Join(cmd, " "), defaultCmdTimeout)
 	if err != nil {
 		return err
 	}
@@ -128,20 +105,46 @@ func ParseNetEntries(output string) []int {
 // NetHasIP reports whether the SAC "i" output contains the given IP
 // for the specified net number.
 func NetHasIP(output string, netNum int, ip string) bool {
-	for _, match := range netLineRe.FindAllStringSubmatch(output, -1) {
+	return slices.ContainsFunc(netLineRe.FindAllStringSubmatch(output, -1), func(match []string) bool {
 		num, _ := strconv.Atoi(match[1])
-		if num == netNum && match[2] == ip {
-			return true
+		return num == netNum && match[2] == ip
+	})
+}
+
+// dial connects to the SAC socket, retrying until deadline.
+func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn, error) {
+	var lastErr error
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return nil, fmt.Errorf("sac dial timeout: %w", lastErr)
+			}
+			return nil, errors.New("sac dial timeout")
+		}
+		conn, err := net.DialTimeout("unix", socketPath, defaultRWTimeout)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryInterval):
 		}
 	}
-	return false
 }
 
 // waitPrompt sends CR+LF and waits until the SAC> prompt appears.
-func waitPrompt(conn net.Conn, timeout time.Duration) error {
+func waitPrompt(ctx context.Context, conn net.Conn, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	buf := make([]byte, readBufSize)
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if time.Now().After(deadline) {
 			return errors.New("timeout waiting for SAC> prompt")
 		}
@@ -165,7 +168,7 @@ func waitPrompt(conn net.Conn, timeout time.Duration) error {
 }
 
 // sacCommand sends a command and reads the response until SAC> appears.
-func sacCommand(conn net.Conn, cmd string, timeout time.Duration) (string, error) {
+func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Duration) (string, error) {
 	drain(conn)
 
 	_ = conn.SetWriteDeadline(time.Now().Add(defaultRWTimeout))
@@ -177,6 +180,9 @@ func sacCommand(conn net.Conn, cmd string, timeout time.Duration) (string, error
 	buf := make([]byte, readBufSize)
 	deadline := time.Now().Add(timeout)
 	for {
+		if err := ctx.Err(); err != nil {
+			return sb.String(), err
+		}
 		if time.Now().After(deadline) {
 			return sb.String(), fmt.Errorf("timeout waiting for response to %q", cmd)
 		}

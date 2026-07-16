@@ -3,6 +3,8 @@ package vm
 import (
 	"cmp"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -307,5 +309,28 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 				t.Fatalf("buildExecArgs() = %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWatchEventsSkipsUndecodableLine(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "cocoon")
+	payload := `#!/bin/sh
+echo '{"event":"ADDED","vm":{"id":"vm-1","config":{"name":"a"}}}'
+echo 'not-json {{{'
+echo '{"event":"DELETED","vm":{"id":"vm-2","config":{"name":"b"}}}'
+`
+	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
+		t.Fatalf("write fake cocoon: %v", err)
+	}
+	events, err := NewCocoonCLI(script).WatchEvents(t.Context())
+	if err != nil {
+		t.Fatalf("WatchEvents: %v", err)
+	}
+	var got []VMEvent
+	for ev := range events {
+		got = append(got, ev)
+	}
+	if len(got) != 2 || got[0].VM.ID != "vm-1" || got[1].VM.ID != "vm-2" {
+		t.Fatalf("events = %+v, want vm-1 then vm-2 with the torn line skipped", got)
 	}
 }
