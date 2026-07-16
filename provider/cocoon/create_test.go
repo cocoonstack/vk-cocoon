@@ -526,6 +526,25 @@ func TestLocalSnapshotName(t *testing.T) {
 	}
 }
 
+func TestLocalSnapshotNameBoundsLongRegistryRefs(t *testing.T) {
+	repo := "simular/ubuntu2404-base-snapshot"
+	tag := "ubuntu2404-20260716-29479663055-1"
+
+	got := localSnapshotName(repo, tag)
+	if len(got) > 63 {
+		t.Fatalf("local snapshot name length = %d, want <= 63: %q", len(got), got)
+	}
+	if got != localSnapshotName(repo, tag) {
+		t.Fatal("local snapshot name is not deterministic")
+	}
+	if got == localSnapshotName(repo, tag+"-different") {
+		t.Fatal("different registry refs produced the same local snapshot name")
+	}
+	if !strings.HasPrefix(got, "simular/ubuntu2404-base-snapshot:") {
+		t.Fatalf("local snapshot name lost its recognizable prefix: %q", got)
+	}
+}
+
 func TestAssertSnapshotBackend(t *testing.T) {
 	t.Parallel()
 
