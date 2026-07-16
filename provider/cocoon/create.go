@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +22,10 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+// importDetachTimeout backstops a shared import flight: it outlives every
+// individual caller, so a stalled registry stream needs a deadline of its own.
+const importDetachTimeout = 30 * time.Minute
 
 // CreatePod admits a pod by pulling its snapshot/image and creating the VM.
 func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
@@ -278,13 +283,52 @@ func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	return err == nil
 }
 
+// detachedImportContext scopes shared import work to the provider, not to the
+// caller that happened to start it: Close aborts it, one CreatePod cannot.
+func (p *Provider) detachedImportContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(p.lifecycleCtx, importDetachTimeout)
+}
+
+// awaitFlight waits on a singleflight result or the caller's cancellation,
+// whichever comes first; a canceled caller abandons the flight, which keeps
+// running for its remaining waiters.
+func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return zero, res.Err
+		}
+		return res.Val.(T), nil
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+}
+
 // ensureRunImage materializes the base image locally and returns the ref
 // `cocoon vm run` should be invoked with. A cloud-image artifact is imported
 // into the local store and booted from there (repo:tag), not the registry.
+// The flight key carries force so a force caller never coalesces onto a
+// non-force flight that may have been a pure local-store hit; a later force
+// call re-imports because the key is evicted when its flight returns.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
 	}
+	// Raw ref, not ParseRef-normalized: fallback branches return the leader's
+	// spelling verbatim, so a joiner must share its exact ref.
+	key := image
+	if force {
+		key = "force " + image
+	}
+	ch := p.runImageSF.DoChan(key, func() (any, error) {
+		shared, cancel := p.detachedImportContext()
+		defer cancel()
+		return p.resolveRunImage(shared, image, force)
+	})
+	return awaitFlight(ctx, ch, image)
+}
+
+func (p *Provider) resolveRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if p.Puller == nil || p.Puller.Registry == nil || isHTTPURL(image) {
 		return image, p.Runtime.EnsureImage(ctx, image, force)
 	}
@@ -315,23 +359,34 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	if repo == "" {
 		return nil, nil
 	}
-	snapshot, err := p.Runtime.Snapshot(ctx, local)
-	if err == nil {
+	if snapshot, err := p.Runtime.Snapshot(ctx, local); err == nil {
 		return snapshot, nil
 	}
 	if p.Puller == nil {
 		return nil, nil
 	}
-	pullStart := time.Now()
-	if pullErr := p.Puller.PullSnapshot(ctx, repo, tag, local); pullErr != nil {
-		return nil, pullErr
-	}
-	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
-	snapshot, err = p.Runtime.Snapshot(ctx, local)
-	if err != nil {
-		return nil, fmt.Errorf("inspect imported snapshot %s: %w", local, err)
-	}
-	return snapshot, nil
+	// The in-flight re-check is load-bearing: SnapshotImport rm's the target
+	// name first and cocoon registers it only when the import completes, so a
+	// caller that missed the outer check during another flight's pull would
+	// otherwise re-import and rm the snapshot that flight just registered.
+	ch := p.snapshotPullSF.DoChan(local, func() (any, error) {
+		shared, cancel := p.detachedImportContext()
+		defer cancel()
+		if snapshot, err := p.Runtime.Snapshot(shared, local); err == nil {
+			return snapshot, nil
+		}
+		pullStart := time.Now()
+		if pullErr := p.Puller.PullSnapshot(shared, repo, tag, local); pullErr != nil {
+			return nil, pullErr
+		}
+		metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
+		snapshot, err := p.Runtime.Snapshot(shared, local)
+		if err != nil {
+			return nil, fmt.Errorf("inspect imported snapshot %s: %w", local, err)
+		}
+		return snapshot, nil
+	})
+	return awaitFlight(ctx, ch, (*vm.Snapshot)(nil))
 }
 
 // ensureForkSnapshot returns the fork snapshot for a source VM, creating
