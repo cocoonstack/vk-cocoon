@@ -12,7 +12,15 @@ and the hibernate transition.
    (idempotent on restart). Adoption hinges on `StartupReconcile` having
    populated `vmsByName`; before reconcile completes, CreatePod treats
    the pod as new and may collide on VM name.
-3. Otherwise branch on `spec.Managed` first, then `spec.Mode`:
+3. Otherwise `bringUpVM` selects a path — restore-from-hibernate and
+   fork-from take precedence, then `spec.Managed`, then `spec.Mode`:
+   - **Restore-from-hibernate** (`vm.cocoonstack.io/restore-from-hibernate`,
+     set by the operator for a cross-node wake arriving via CreatePod
+     rather than UpdatePod): pull the `:hibernate` snapshot and clone from
+     it, same as the UpdatePod wake path.
+   - **Fork-from** (`spec.ForkFrom`): snapshot the named source VM once
+     (deduped via `ensureForkSnapshot`) and clone every fork off that
+     shared snapshot.
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows
      toolboxes on an external QEMU host): skip the runtime entirely and
      adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator
@@ -95,7 +103,7 @@ genuine spec changes).
 | Transition | Behavior |
 |---|---|
 | `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
-| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone` → drop the hibernation tag from the registry. |
+| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone`. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.

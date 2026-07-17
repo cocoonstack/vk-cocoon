@@ -31,3 +31,9 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
 - [Configuration](configuration.md) — every environment variable
 - [Installation](installation.md) — the systemd unit, capabilities, and
   building from source
+
+## Repository
+
+Source and issue tracker:
+[github.com/cocoonstack/vk-cocoon](https://github.com/cocoonstack/vk-cocoon).
+Part of the [cocoonstack](https://cocoonstack.github.io/) MicroVM platform.

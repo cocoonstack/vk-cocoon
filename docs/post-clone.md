@@ -1,13 +1,14 @@
 # Post-clone network hints
 
 After a clone (or hibernate wake / fork), vk-cocoon checks whether the VM
-needs manual guest-side network setup. The only fully automatic case is
-CH + OCI + all-DHCP (NIC hot-swap triggers systemd-networkd to re-DHCP).
-All other combinations require intervention:
+needs manual guest-side network setup. CH clones are automatic on all-DHCP
+networks (NIC hot-swap triggers systemd-networkd to re-DHCP); the fixup path
+is entered only when a static-IP NIC is present. These combinations require
+intervention:
 
 | Scenario | Reason | Hint commands |
 |---|---|---|
-| CH + cloudimg (any network) | snapshot restore does not re-trigger cloud-init | `cloud-init clean + init` |
+| CH + cloudimg + static IP | snapshot restore does not re-trigger cloud-init | `cloud-init clean + init` |
 | CH + OCI + static IP | guest retains old IP config | write MAC-based networkd files |
 | FC (any) | guest MAC frozen in vmstate | `ip link set address` + networkd reconfig |
 

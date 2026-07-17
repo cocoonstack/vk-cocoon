@@ -8,6 +8,8 @@ One vk-cocoon process runs per node. It satisfies the
 provider contract by translating pod CRUD into `cocoon` CLI calls and
 pushing per-VM status back to the kubelet.
 
+**Documentation: [cocoonstack.github.io/vk-cocoon](https://cocoonstack.github.io/vk-cocoon/)** (source in [`docs/`](docs/)).
+
 ```
 Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
    pod CRUD    ──► CreatePod / DeletePod / UpdatePod ── cocoon clone/run/snapshot

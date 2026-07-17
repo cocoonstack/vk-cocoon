@@ -42,7 +42,7 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
 | `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=netresize\|snapshot\|push\|remove`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
-| `cocoon_vk_wake_ip_wait_total{result}` | Counter | CH+Windows dropNIC wake's post-clone DHCP lease wait (`result=ok\|timeout`) |
+| `cocoon_vk_wake_ip_wait_total{result}` | Counter | Post-clone and wake DHCP-lease-wait outcomes — both the CH+Windows dropNIC wake and every clone's post-clone IP wait (`result=ok\|timeout`) |
 | `cocoon_vk_postclone_total{kind,result}` | Counter | Post-clone fixup outcomes (`kind=linux_static\|linux_fc\|windows\|sac`) |
 | `cocoon_vk_postclone_retry_attempts{result}` | Histogram | Attempts consumed before post-clone exec succeeded or failed (`result=ok\|failed`) |
 | `cocoon_vk_vm_table_size` | Gauge | Tracked VM count |
@@ -73,6 +73,7 @@ error return.
   `HibernateSnapshotFailed`, `HibernatePushFailed`,
   `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`,
   `WakeIPWaitTimeout`, `WindowsStaticIPFailed`,
+  `PostCloneIPWaitTimeout`,
   `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`,
   `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`,
   `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`.
