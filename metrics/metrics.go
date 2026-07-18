@@ -190,6 +190,16 @@ var (
 		[]string{"result"}, // result=ok|timeout
 	)
 
+	WakeRenewNudgeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "wake_renew_nudge_total",
+			Help:      "ipconfig /renew nudges sent to Windows guests still lease-less mid lease-wait.",
+		},
+		[]string{"result"}, // result=ok|failed
+	)
+
 	PostCloneTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -233,6 +243,7 @@ func Register(reg prometheus.Registerer) {
 		HibernateTotal,
 		WakeTotal,
 		WakeIPWaitTotal,
+		WakeRenewNudgeTotal,
 		PostCloneTotal,
 		PostCloneRetryAttempts,
 	)

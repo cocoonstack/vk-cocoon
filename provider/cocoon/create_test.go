@@ -1678,6 +1678,8 @@ type fakeRuntime struct {
 
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
+	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
+	onExec func()
 	// removeErr, when set, makes Remove fail with this error.
 	removeErr error
 	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
@@ -1891,6 +1893,9 @@ type fakeExecCall struct {
 }
 
 func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if f.onExec != nil {
+		f.onExec()
+	}
 	call := fakeExecCall{vmID: vmID, argv: argv, env: env}
 	if stdin != nil {
 		buf, _ := io.ReadAll(stdin)
