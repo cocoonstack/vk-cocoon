@@ -35,7 +35,8 @@ const (
 
 	// guestIpconfigTimeout bounds the vsock exec for release/renew so a sick
 	// guest (dead agent, stopped DHCP service) cannot stall hibernate or wake.
-	guestIpconfigTimeout = 20 * time.Second
+	guestIpconfigTimeout     = 20 * time.Second
+	hibernateRollbackTimeout = 30 * time.Second
 )
 
 // UpdatePod handles hibernate/wake transitions; other spec changes are no-ops
@@ -181,6 +182,10 @@ func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped b
 		return
 	}
 	logger := log.WithFunc("Provider.rollbackHibernateNIC")
+	// Cancel-detached: the failure that triggered the rollback may be ctx dying,
+	// and an online VM must not be left NIC-less.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hibernateRollbackTimeout)
+	defer cancel()
 	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
 		logger.Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
 		return

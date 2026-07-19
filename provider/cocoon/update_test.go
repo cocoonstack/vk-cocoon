@@ -582,6 +582,30 @@ func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
 	}
 }
 
+func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), snapshotSaveHook: cancel}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(ctx, pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail on snapshot save error")
+	}
+	if len(rt.netResizeCalls) != 2 || rt.netResizeCalls[1].target != 1 {
+		t.Errorf("NetResize calls = %#v, want the NIC re-add to outlive the cancelled request", rt.netResizeCalls)
+	}
+	if got := execArgvs(rt); len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want the rollback renew to share the detached lifetime", got)
+	}
+}
+
 func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
 	p := newTestProvider(t)
 	leases := filepath.Join(t.TempDir(), "leases.json")

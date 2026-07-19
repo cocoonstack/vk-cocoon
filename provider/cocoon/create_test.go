@@ -1880,7 +1880,10 @@ type netResizeCall struct {
 	target int
 }
 
-func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
+func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
 	return f.netResizeErr
 }
