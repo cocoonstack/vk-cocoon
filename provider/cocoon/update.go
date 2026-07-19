@@ -151,24 +151,21 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 
 // dropNICForHibernate releases the lease then detaches the NIC (VMware Tools'
 // suspend default): the snapshot carries no cached lease, so restored clones
-// DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates,
-// and a failed detach re-acquires the lease it just released.
+// DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates.
+// A failed detach renews unconditionally — an exec error does not prove the
+// guest skipped the release, and renewing a still-bound adapter is benign.
 func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	logger := log.WithFunc("Provider.dropNICForHibernate")
-	released := false
 	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
 		metrics.HibernateTotal.WithLabelValues("dhcp_release", "failed").Inc()
 		logger.Warnf(ctx, "dhcp release before hibernate %s: %v (proceeding)", v.Name, err)
 	} else {
-		released = true
 		metrics.HibernateTotal.WithLabelValues("dhcp_release", "ok").Inc()
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-		if released {
-			if renewErr := p.execGuestIpconfig(ctx, v.ID, "renew"); renewErr != nil {
-				logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
-			}
+		if renewErr := p.execGuestIpconfig(ctx, v.ID, "renew"); renewErr != nil {
+			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}
 		return fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
 	}
@@ -269,7 +266,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 
 // finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
 func (p *Provider) finalizeDropNICWake(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	gotIP := p.waitForFreshIP(ctx, pod)
+	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
 		return
 	}
@@ -321,7 +318,7 @@ func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Po
 // resumes contend, so the first lease can land many seconds after resume;
 // a short budget would misread that as lifecycle=failed and trigger an
 // operator rebuild.
-func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod) bool {
+func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, vmID string) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
 	deadline := time.Now().Add(budget)
@@ -329,7 +326,8 @@ func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod) bool {
 	nudged := meta.ParseVMSpec(pod).OS != string(cocoonv1.OSWindows)
 	for {
 		v := p.vmForPod(pod.Namespace, pod.Name)
-		if v == nil {
+		// A same-name recreate swaps the tracked VM; never touch the successor.
+		if v == nil || v.ID != vmID {
 			return false
 		}
 		if ip := p.resolveVMIP(pod.Namespace, pod.Name, v); ip != "" {

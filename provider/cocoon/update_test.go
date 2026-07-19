@@ -533,12 +533,47 @@ func TestHibernateRenewsWhenNICDropFails(t *testing.T) {
 	}
 }
 
+func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
+	rt := &fakeRuntime{execErr: errors.New("vsock timeout"), netResizeErr: errors.New("resize boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail when the NIC drop fails")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want a renew attempt even though the release verdict was an error", got)
+	}
+}
+
+func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
+	p, pod, _ := newDropNICWakeFixture(t, 500*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.wakeRenewNudgeDelay = time.Nanosecond
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0", IP: "10.0.0.9"})
+
+	if p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
+		t.Fatal("waiter armed for a replaced VM must fail, not adopt the successor")
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("waiter must not exec into the successor VM, got %v", execArgvs(rt))
+	}
+}
+
 func TestWaitForFreshIPRenewNudgeWhenLeaseMissing(t *testing.T) {
 	p, pod, _ := newDropNICWakeFixture(t, 200*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
 	p.wakeRenewNudgeDelay = 30 * time.Millisecond
 
-	if p.waitForFreshIP(t.Context(), pod) {
+	if p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
 		t.Fatal("no IP should time out")
 	}
 	got := execArgvs(rt)
@@ -553,7 +588,7 @@ func TestWaitForFreshIPNoRenewWhenIPPresent(t *testing.T) {
 	p.wakeRenewNudgeDelay = time.Nanosecond // even an instant nudge window must not fire
 	v.IP = "10.0.0.9"
 
-	if !p.waitForFreshIP(t.Context(), pod) {
+	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
 		t.Fatal("IP present should return true")
 	}
 	if len(rt.execCalls) != 0 {
@@ -577,7 +612,7 @@ func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
 	})
 	p.trackPod(pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"})
 
-	if p.waitForFreshIP(t.Context(), pod) {
+	if p.waitForFreshIP(t.Context(), pod, "vmid-1") {
 		t.Fatal("no IP should time out")
 	}
 	if len(rt.execCalls) != 0 {
@@ -596,7 +631,7 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 		p.setVMIP("ns", "demo-0", "10.0.0.9")
 	}
 
-	if !p.waitForFreshIP(t.Context(), pod) {
+	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
 		t.Fatal("lease landed during the nudge exec; verdict must be success")
 	}
 }
