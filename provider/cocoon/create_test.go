@@ -1892,7 +1892,10 @@ type fakeExecCall struct {
 	stdin string
 }
 
-func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (f *fakeRuntime) Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if f.onExec != nil {
 		f.onExec()
 	}

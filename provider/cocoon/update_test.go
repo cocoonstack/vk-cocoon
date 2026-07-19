@@ -1,8 +1,11 @@
 package cocoon
 
 import (
+	"context"
 	"errors"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +16,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -305,7 +309,7 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	}()
 
 	time.AfterFunc(10*time.Millisecond, func() {
-		p.setVMIP("ns", "demo-0", "172.20.1.228")
+		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 	})
 
 	select {
@@ -366,7 +370,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 
 	time.AfterFunc(10*time.Millisecond, func() {
 		meta.HibernateState(true).Apply(pod)
-		p.setVMIP("ns", "demo-0", "172.20.1.228")
+		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 	})
 
 	select {
@@ -554,6 +558,49 @@ func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
 	}
 }
 
+func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
+	rt := &fakeRuntime{netResizeErr: errors.New("resize boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	rt.onExec = func() { cancel() } // the request dies while the release is in flight
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(ctx, pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail when the NIC drop fails")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want the renew to outlive the cancelled request", got)
+	}
+}
+
+func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
+	p := newTestProvider(t)
+	leases := filepath.Join(t.TempDir(), "leases.json")
+	if err := os.WriteFile(leases, []byte(`[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"2099-01-01T00:00:00Z"}]`), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	p.LeaseParser = network.NewLeaseParser(leases)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0"})
+
+	stale := &vm.VM{ID: "vmid-old", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"}
+	if ip := p.resolveVMIP("ns", "demo-0", stale); ip != "" {
+		t.Errorf("stale VM's lease resolved to %q, want refused", ip)
+	}
+	if got := p.vmForPod("ns", "demo-0").IP; got != "" {
+		t.Errorf("successor VM polluted with IP %q", got)
+	}
+}
+
 func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
 	p, pod, _ := newDropNICWakeFixture(t, 500*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
@@ -628,7 +675,7 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 
 	rt.onExec = func() {
 		time.Sleep(150 * time.Millisecond) // block past the 100ms deadline
-		p.setVMIP("ns", "demo-0", "10.0.0.9")
+		p.setVMIP("ns", "demo-0", "vmid-wake", "10.0.0.9")
 	}
 
 	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {

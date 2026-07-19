@@ -164,7 +164,9 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-		if renewErr := p.execGuestIpconfig(ctx, v.ID, "renew"); renewErr != nil {
+		// Cancel-detached: the drop may have failed because ctx died, and the
+		// compensation must still run (bounded by execGuestIpconfig's timeout).
+		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
 			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}
 		return fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
