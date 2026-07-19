@@ -1,10 +1,12 @@
 package cocoon
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -26,6 +28,15 @@ const (
 	// the budget is generous.
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
+
+	// defaultWakeRenewNudgeDelay leaves natural DHCP the first 30s of the lease
+	// budget; the one-shot renew after it restarts DORA and lands in ~1s.
+	defaultWakeRenewNudgeDelay = 30 * time.Second
+
+	// guestIpconfigTimeout bounds the vsock exec for release/renew so a sick
+	// guest (dead agent, stopped DHCP service) cannot stall hibernate or wake.
+	guestIpconfigTimeout     = 20 * time.Second
+	hibernateRollbackTimeout = 30 * time.Second
 )
 
 // UpdatePod handles hibernate/wake transitions; other spec changes are no-ops
@@ -72,13 +83,10 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
-		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
-			metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-			err = fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
+		if err := p.dropNICForHibernate(ctx, v); err != nil {
 			p.failOp(ctx, pod, "HibernateNetResizeFailed", "update", err)
 			return err
 		}
-		metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
 	}
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
@@ -142,13 +150,47 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
+// dropNICForHibernate releases the lease then detaches the NIC (VMware Tools'
+// suspend default): the snapshot carries no cached lease, so restored clones
+// DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates.
+func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
+	logger := log.WithFunc("Provider.dropNICForHibernate")
+	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
+		metrics.HibernateTotal.WithLabelValues("dhcp_release", "failed").Inc()
+		logger.Warnf(ctx, "dhcp release before hibernate %s: %v (proceeding)", v.Name, err)
+	} else {
+		metrics.HibernateTotal.WithLabelValues("dhcp_release", "ok").Inc()
+	}
+	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
+		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
+		// Renew regardless, detached from ctx: an exec error does not prove the
+		// guest skipped the release, and the drop may have failed because ctx died.
+		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
+			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
+		}
+		return fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
+	}
+	metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
+	return nil
+}
+
 // rollbackHibernateNIC re-adds the NIC dropped pre-snapshot.
 func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
 	if !dropped {
 		return
 	}
+	logger := log.WithFunc("Provider.rollbackHibernateNIC")
+	// Cancel-detached: the failure that triggered the rollback may be ctx dying,
+	// and an online VM must not be left NIC-less.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hibernateRollbackTimeout)
+	defer cancel()
 	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
-		log.WithFunc("Provider.rollbackHibernateNIC").Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
+		logger.Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
+		return
+	}
+	// The pre-hibernate release left the guest unbound; nudge it to re-acquire.
+	if err := p.execGuestIpconfig(ctx, v.ID, "renew"); err != nil {
+		logger.Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
 	}
 }
 
@@ -229,7 +271,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 
 // finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
 func (p *Provider) finalizeDropNICWake(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
+	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
 		return
 	}
@@ -281,17 +323,36 @@ func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Po
 // resumes contend, so the first lease can land many seconds after resume;
 // a short budget would misread that as lifecycle=failed and trigger an
 // operator rebuild.
-func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) bool {
+func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, vmID string) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
 	deadline := time.Now().Add(budget)
+	renewAt := time.Now().Add(cmp.Or(p.wakeRenewNudgeDelay, defaultWakeRenewNudgeDelay))
+	nudged := meta.ParseVMSpec(pod).OS != string(cocoonv1.OSWindows)
 	for {
-		v := p.vmForPod(namespace, name)
-		if v == nil {
+		v := p.vmForPod(pod.Namespace, pod.Name)
+		// A same-name recreate swaps the tracked VM; never touch the successor.
+		if v == nil || v.ID != vmID {
 			return false
 		}
-		if ip := p.resolveVMIP(namespace, name, v); ip != "" {
+		if ip := p.resolveVMIP(pod.Namespace, pod.Name, v); ip != "" {
 			return true
+		}
+		// One-shot renew: win11 can wedge on APIPA after a NAK and never re-DISCOVER.
+		if !nudged && !time.Now().Before(renewAt) {
+			nudged = true
+			// Capped by the wake deadline so a hung agent cannot push the verdict past it.
+			nudgeCtx, cancel := context.WithDeadline(ctx, deadline)
+			err := p.execGuestIpconfig(nudgeCtx, v.ID, "renew")
+			cancel()
+			if err != nil {
+				metrics.WakeRenewNudgeTotal.WithLabelValues("failed").Inc()
+				log.WithFunc("Provider.waitForFreshIP").Warnf(ctx, "renew nudge %s/%s: %v", pod.Namespace, pod.Name, err)
+			} else {
+				metrics.WakeRenewNudgeTotal.WithLabelValues("ok").Inc()
+			}
+			// The lease may have landed during the exec; re-check before the deadline verdict.
+			continue
 		}
 		if !time.Now().Before(deadline) {
 			return false
@@ -300,6 +361,34 @@ func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) b
 			return false
 		}
 	}
+}
+
+// execGuestIpconfig runs `ipconfig /<verb>` in the guest over vsock, so the
+// exec path never depends on the IP it is repairing.
+func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) error {
+	ctx, cancel := context.WithTimeout(ctx, guestIpconfigTimeout)
+	defer cancel()
+	var out bytes.Buffer
+	if err := p.Runtime.Exec(ctx, vmID, []string{"cmd", "/c", "ipconfig /" + verb}, nil, nil, &out, &out); err != nil {
+		// Surface the guest-side reason ("The RPC server is unavailable", ...).
+		if line := lastNonEmptyLine(out.String()); line != "" {
+			return fmt.Errorf("%w: %s", err, line)
+		}
+		return err
+	}
+	return nil
+}
+
+// lastNonEmptyLine returns the last non-blank line of s, trimmed. ipconfig
+// prints a banner first and the actual error last, so the tail is the signal.
+func lastNonEmptyLine(s string) string {
+	last := ""
+	for line := range strings.SplitSeq(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			last = trimmed
+		}
+	}
+	return last
 }
 
 // resolveWakeSource returns the clone source name and its snapshot metadata —

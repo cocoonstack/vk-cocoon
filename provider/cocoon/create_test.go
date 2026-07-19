@@ -1607,12 +1607,7 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set("ns/demo-0", probes.Result{Ready: true})
 
-	leasePath := filepath.Join(t.TempDir(), "leases.json")
-	leases := `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.88","expiry":"2099-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(leasePath, []byte(leases), 0o644); err != nil {
-		t.Fatalf("write leases: %v", err)
-	}
-	p.LeaseParser = network.NewLeaseParser(leasePath)
+	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
@@ -1678,6 +1673,8 @@ type fakeRuntime struct {
 
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
+	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
+	onExec func()
 	// removeErr, when set, makes Remove fail with this error.
 	removeErr error
 	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
@@ -1878,7 +1875,10 @@ type netResizeCall struct {
 	target int
 }
 
-func (f *fakeRuntime) NetResize(_ context.Context, vmID string, target int) error {
+func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
 	return f.netResizeErr
 }
@@ -1890,7 +1890,13 @@ type fakeExecCall struct {
 	stdin string
 }
 
-func (f *fakeRuntime) Exec(_ context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+func (f *fakeRuntime) Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if f.onExec != nil {
+		f.onExec()
+	}
 	call := fakeExecCall{vmID: vmID, argv: argv, env: env}
 	if stdin != nil {
 		buf, _ := io.ReadAll(stdin)
@@ -1942,9 +1948,20 @@ func (nopWriteCloser) Close() error                { return nil }
 // race with the next test on a recycled pod heap address.
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
-	p := NewProvider()
+	p := NewProvider(t.Context())
 	t.Cleanup(p.Close)
 	return p
+}
+
+// newLeaseParser writes a one-entry leases.json and returns a parser for it.
+func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "leases.json")
+	entry := `[{"mac":"` + mac + `","ip":"` + ip + `","expiry":"2099-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(entry), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	return network.NewLeaseParser(path)
 }
 
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {

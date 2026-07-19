@@ -123,7 +123,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 // ready then would promise an IP resolveVMIP can't yet return. On timeout mark
 // failed, never ready-without-IP.
 func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
+	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
 		return
 	}

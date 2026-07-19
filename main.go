@@ -248,7 +248,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	}
 	logger.Infof(ctx, "registry backend: OCI %s", opts.ociRegistry)
 	runtime := vm.NewCocoonCLI(opts.cocoonBin)
-	p := cocoon.NewProvider()
+	p := cocoon.NewProvider(ctx)
 	p.NodeName = opts.nodeName
 	p.Clientset = opts.clientset
 	p.Recorder = opts.recorder

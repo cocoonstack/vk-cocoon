@@ -114,12 +114,14 @@ type Provider struct {
 	// dropNIC wake tunables; defaults live in update.go.
 	wakeFreshIPBudget   time.Duration
 	wakeFreshIPInterval time.Duration
+	wakeRenewNudgeDelay time.Duration
 }
 
-// NewProvider constructs a Provider with empty tables.
-// Default Pinger is NopPinger so tests degrade gracefully.
-func NewProvider() *Provider {
-	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
+// NewProvider constructs a Provider with empty tables; background work stops
+// when ctx is canceled or Close is called. Default Pinger is NopPinger so
+// tests degrade gracefully.
+func NewProvider(ctx context.Context) *Provider {
+	lifecycleCtx, lifecycleStop := context.WithCancel(ctx)
 	return &Provider{
 		startTime:        time.Now(),
 		lifecycleCtx:     lifecycleCtx,
@@ -295,13 +297,13 @@ func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 }
 
 // setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
-func (p *Provider) setVMIP(namespace, name, ip string) {
+func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(namespace, name)
 	v, ok := p.vmsByPod[key]
-	if !ok {
-		return
+	if !ok || v.ID != vmID {
+		return false
 	}
 	updated := *v
 	updated.IP = ip
@@ -309,6 +311,7 @@ func (p *Provider) setVMIP(namespace, name, ip string) {
 	if updated.Name != "" {
 		p.vmsByName[updated.Name] = &updated
 	}
+	return true
 }
 
 // resolveVMIP returns the VM's IP, falling back to a cocoon-net lease
@@ -322,7 +325,11 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	if err != nil {
 		return ""
 	}
-	p.setVMIP(namespace, name, lease.IP)
+	// The lease belongs to v's MAC; if a same-name recreate swapped the tracked
+	// VM during the lookup, the IP must not leak onto the successor.
+	if !p.setVMIP(namespace, name, v.ID, lease.IP) {
+		return ""
+	}
 	return lease.IP
 }
 

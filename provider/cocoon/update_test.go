@@ -1,13 +1,16 @@
 package cocoon
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -303,7 +306,7 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	}()
 
 	time.AfterFunc(10*time.Millisecond, func() {
-		p.setVMIP("ns", "demo-0", "172.20.1.228")
+		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 	})
 
 	select {
@@ -364,7 +367,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 
 	time.AfterFunc(10*time.Millisecond, func() {
 		meta.HibernateState(true).Apply(pod)
-		p.setVMIP("ns", "demo-0", "172.20.1.228")
+		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 	})
 
 	select {
@@ -411,4 +414,287 @@ func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provi
 	p.trackPod(pod, v)
 	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
 	return p, pod, v
+}
+
+func execArgvs(rt *fakeRuntime) []string {
+	var out []string
+	for _, c := range rt.execCalls {
+		out = append(out, strings.Join(c.argv, " "))
+	}
+	return out
+}
+
+func TestHibernateReleasesLeaseBeforeNICDrop(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}
+
+	if err := p.hibernate(t.Context(), pod, v); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if got := execArgvs(rt); len(got) != 1 || got[0] != "cmd /c ipconfig /release" {
+		t.Errorf("exec calls = %v, want exactly [cmd /c ipconfig /release]", got)
+	}
+	if len(rt.netResizeCalls) != 1 || rt.netResizeCalls[0].target != 0 {
+		t.Errorf("NetResize calls = %#v, want one drop-to-0", rt.netResizeCalls)
+	}
+}
+
+func TestHibernateReleaseFailureDoesNotBlock(t *testing.T) {
+	rt := &fakeRuntime{execErr: errors.New("agent down")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err != nil {
+		t.Fatalf("hibernate must proceed past a failed release: %v", err)
+	}
+	if rt.removedID != "vmid-1" {
+		t.Errorf("hibernate did not complete: removedID=%q", rt.removedID)
+	}
+}
+
+func TestHibernateSkipsReleaseOnNonDropNIC(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("linux hibernate must not exec ipconfig, got %v", execArgvs(rt))
+	}
+}
+
+func TestHibernateRollbackRenews(t *testing.T) {
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail on snapshot save error")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[0] != "cmd /c ipconfig /release" || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want [release, renew-on-rollback]", got)
+	}
+	if len(rt.netResizeCalls) != 2 || rt.netResizeCalls[1].target != 1 {
+		t.Errorf("NetResize calls = %#v, want drop then rollback re-add", rt.netResizeCalls)
+	}
+}
+
+func TestHibernateRenewsWhenNICDropFails(t *testing.T) {
+	rt := &fakeRuntime{netResizeErr: errors.New("resize boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail when the NIC drop fails")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[0] != "cmd /c ipconfig /release" || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want [release, renew] around the failed drop", got)
+	}
+	if len(rt.netResizeCalls) != 1 {
+		t.Errorf("NetResize calls = %#v, want only the failed drop (NIC never dropped, no re-add)", rt.netResizeCalls)
+	}
+}
+
+func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
+	rt := &fakeRuntime{execErr: errors.New("vsock timeout"), netResizeErr: errors.New("resize boom")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(t.Context(), pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail when the NIC drop fails")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want a renew attempt even though the release verdict was an error", got)
+	}
+}
+
+func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	rt.onExec = func() { cancel() } // the request dies while the release is in flight
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(ctx, pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail when the NIC drop fails")
+	}
+	got := execArgvs(rt)
+	if len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want the renew to outlive the cancelled request", got)
+	}
+}
+
+func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), snapshotSaveHook: cancel}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	if err := p.hibernate(ctx, pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+		t.Fatal("hibernate should fail on snapshot save error")
+	}
+	if len(rt.netResizeCalls) != 2 || rt.netResizeCalls[1].target != 1 {
+		t.Errorf("NetResize calls = %#v, want the NIC re-add to outlive the cancelled request", rt.netResizeCalls)
+	}
+	if got := execArgvs(rt); len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want the rollback renew to share the detached lifetime", got)
+	}
+}
+
+func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
+	p := newTestProvider(t)
+	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.10")
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0"})
+
+	stale := &vm.VM{ID: "vmid-old", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"}
+	if ip := p.resolveVMIP("ns", "demo-0", stale); ip != "" {
+		t.Errorf("stale VM's lease resolved to %q, want refused", ip)
+	}
+	if got := p.vmForPod("ns", "demo-0").IP; got != "" {
+		t.Errorf("successor VM polluted with IP %q", got)
+	}
+}
+
+func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
+	p, pod, _ := newDropNICWakeFixture(t, 500*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0", IP: "10.0.0.9"})
+
+	if p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
+		t.Fatal("waiter armed for a replaced VM must fail, not adopt the successor")
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("waiter must not exec into the successor VM, got %v", execArgvs(rt))
+	}
+}
+
+func TestWaitForFreshIPRenewNudgeWhenLeaseMissing(t *testing.T) {
+	p, pod, _ := newDropNICWakeFixture(t, 200*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.wakeRenewNudgeDelay = 30 * time.Millisecond
+
+	if p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
+		t.Fatal("no IP should time out")
+	}
+	got := execArgvs(rt)
+	if len(got) != 1 || got[0] != "cmd /c ipconfig /renew" {
+		t.Errorf("exec calls = %v, want exactly one renew nudge", got)
+	}
+}
+
+func TestWaitForFreshIPNoRenewWhenIPPresent(t *testing.T) {
+	p, pod, v := newDropNICWakeFixture(t, 200*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.wakeRenewNudgeDelay = time.Nanosecond // even an instant nudge window must not fire
+	v.IP = "10.0.0.9"
+
+	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
+		t.Fatal("IP present should return true")
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("guest already holds a lease; renew must not fire, got %v", execArgvs(rt))
+	}
+}
+
+func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	p.wakeFreshIPBudget = 120 * time.Millisecond
+	p.wakeFreshIPInterval = 10 * time.Millisecond
+	p.wakeRenewNudgeDelay = 20 * time.Millisecond
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	p.trackPod(pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"})
+
+	if p.waitForFreshIP(t.Context(), pod, "vmid-1") {
+		t.Fatal("no IP should time out")
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("linux guest must not get ipconfig, got %v", execArgvs(rt))
+	}
+}
+
+func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
+	// A lease landing while the renew exec blocks past the deadline must win over timeout.
+	p, pod, _ := newDropNICWakeFixture(t, 100*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.wakeRenewNudgeDelay = 20 * time.Millisecond
+
+	rt.onExec = func() {
+		time.Sleep(150 * time.Millisecond) // block past the 100ms deadline
+		p.setVMIP("ns", "demo-0", "vmid-wake", "10.0.0.9")
+	}
+
+	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
+		t.Fatal("lease landed during the nudge exec; verdict must be success")
+	}
 }
