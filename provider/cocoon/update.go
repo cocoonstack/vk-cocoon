@@ -29,12 +29,8 @@ const (
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
 
-	// defaultWakeRenewNudgeDelay splits the 45s lease budget in two: natural
-	// DHCP gets the first 30s (slow UFFD restores legitimately take a while),
-	// then a `ipconfig /renew` nudge gets the rest. win11's DHCP client can
-	// wedge on APIPA after a NAK (event 1002, then no re-DISCOVER ever); a
-	// renew restarts DORA reliably and lands in ~1s, so 15s of post-nudge
-	// budget is ample. The nudge never fires once a lease is observed.
+	// defaultWakeRenewNudgeDelay leaves natural DHCP the first 30s of the lease
+	// budget; the one-shot renew after it restarts DORA and lands in ~1s.
 	defaultWakeRenewNudgeDelay = 30 * time.Second
 
 	// guestIpconfigTimeout bounds the vsock exec for release/renew so a sick
@@ -86,24 +82,10 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
-		// Release the DHCP lease before yanking the NIC (VMware Tools' default
-		// suspend behavior): the server-side lease frees immediately instead of
-		// squatting its pool slot for 24h, and the snapshot freezes a guest with
-		// no cached lease, so the restored clone DISCOVERs instead of REQUESTing
-		// an IP the server must NAK. Best-effort: a sick guest still hibernates.
-		if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
-			metrics.HibernateTotal.WithLabelValues("dhcp_release", "failed").Inc()
-			logger.Warnf(ctx, "dhcp release before hibernate %s: %v (proceeding)", v.Name, err)
-		} else {
-			metrics.HibernateTotal.WithLabelValues("dhcp_release", "ok").Inc()
-		}
-		if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
-			metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-			err = fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
+		if err := p.dropNICForHibernate(ctx, v); err != nil {
 			p.failOp(ctx, pod, "HibernateNetResizeFailed", "update", err)
 			return err
 		}
-		metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
 	}
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
@@ -167,18 +149,46 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
+// dropNICForHibernate releases the lease then detaches the NIC (VMware Tools'
+// suspend default): the snapshot carries no cached lease, so restored clones
+// DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates,
+// and a failed detach re-acquires the lease it just released.
+func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
+	logger := log.WithFunc("Provider.dropNICForHibernate")
+	released := false
+	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
+		metrics.HibernateTotal.WithLabelValues("dhcp_release", "failed").Inc()
+		logger.Warnf(ctx, "dhcp release before hibernate %s: %v (proceeding)", v.Name, err)
+	} else {
+		released = true
+		metrics.HibernateTotal.WithLabelValues("dhcp_release", "ok").Inc()
+	}
+	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
+		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
+		if released {
+			if renewErr := p.execGuestIpconfig(ctx, v.ID, "renew"); renewErr != nil {
+				logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
+			}
+		}
+		return fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
+	}
+	metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
+	return nil
+}
+
 // rollbackHibernateNIC re-adds the NIC dropped pre-snapshot.
 func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
 	if !dropped {
 		return
 	}
+	logger := log.WithFunc("Provider.rollbackHibernateNIC")
 	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
-		log.WithFunc("Provider.rollbackHibernateNIC").Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
+		logger.Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
 		return
 	}
 	// The pre-hibernate release left the guest unbound; nudge it to re-acquire.
 	if err := p.execGuestIpconfig(ctx, v.ID, "renew"); err != nil {
-		log.WithFunc("Provider.rollbackHibernateNIC").Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
+		logger.Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
 	}
 }
 
@@ -259,7 +269,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 
 // finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
 func (p *Provider) finalizeDropNICWake(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	gotIP := p.waitForFreshIP(ctx, pod.Namespace, pod.Name)
+	gotIP := p.waitForFreshIP(ctx, pod)
 	if ctx.Err() != nil {
 		return
 	}
@@ -311,43 +321,35 @@ func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Po
 // resumes contend, so the first lease can land many seconds after resume;
 // a short budget would misread that as lifecycle=failed and trigger an
 // operator rebuild.
-func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) bool {
+func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
 	deadline := time.Now().Add(budget)
 	renewAt := time.Now().Add(cmp.Or(p.wakeRenewNudgeDelay, defaultWakeRenewNudgeDelay))
-	renewed := false
+	nudged := meta.ParseVMSpec(pod).OS != string(cocoonv1.OSWindows)
 	for {
-		v := p.vmForPod(namespace, name)
+		v := p.vmForPod(pod.Namespace, pod.Name)
 		if v == nil {
 			return false
 		}
-		if ip := p.resolveVMIP(namespace, name, v); ip != "" {
+		if ip := p.resolveVMIP(pod.Namespace, pod.Name, v); ip != "" {
 			return true
 		}
-		// One-shot renew nudge: only while still lease-less, only for Windows
-		// guests (win11 wedges on APIPA after a NAK and never re-DISCOVERs).
-		// A guest that already holds a lease returns above and is never nudged.
-		if !renewed && !time.Now().Before(renewAt) {
-			renewed = true // non-Windows passes through once and never re-checks
-			if p.isWindowsGuest(namespace, name) {
-				// Cap the exec by the overall deadline too: a hung agent must not
-				// push the failure verdict past the 45s contract.
-				nudgeCtx, cancel := context.WithDeadline(ctx, deadline)
-				err := p.execGuestIpconfig(nudgeCtx, v.ID, "renew")
-				cancel()
-				if err != nil {
-					// failed = the exec didn't confirm; the in-guest renew may
-					// still have landed — the lease re-check decides, not this.
-					metrics.WakeRenewNudgeTotal.WithLabelValues("failed").Inc()
-					log.WithFunc("Provider.waitForFreshIP").Warnf(ctx, "renew nudge %s/%s: %v", namespace, name, err)
-				} else {
-					metrics.WakeRenewNudgeTotal.WithLabelValues("ok").Inc()
-				}
-				// The exec may have blocked long enough for the lease to land;
-				// re-check it before the deadline verdict.
-				continue
+		// One-shot renew: win11 can wedge on APIPA after a NAK and never re-DISCOVER.
+		if !nudged && !time.Now().Before(renewAt) {
+			nudged = true
+			// Capped by the wake deadline so a hung agent cannot push the verdict past it.
+			nudgeCtx, cancel := context.WithDeadline(ctx, deadline)
+			err := p.execGuestIpconfig(nudgeCtx, v.ID, "renew")
+			cancel()
+			if err != nil {
+				metrics.WakeRenewNudgeTotal.WithLabelValues("failed").Inc()
+				log.WithFunc("Provider.waitForFreshIP").Warnf(ctx, "renew nudge %s/%s: %v", pod.Namespace, pod.Name, err)
+			} else {
+				metrics.WakeRenewNudgeTotal.WithLabelValues("ok").Inc()
 			}
+			// The lease may have landed during the exec; re-check before the deadline verdict.
+			continue
 		}
 		if !time.Now().Before(deadline) {
 			return false
@@ -358,10 +360,8 @@ func (p *Provider) waitForFreshIP(ctx context.Context, namespace, name string) b
 	}
 }
 
-// execGuestIpconfig runs `ipconfig /<verb>` inside a Windows guest over the
-// cocoon-agent vsock channel — the same release/renew pair VMware Tools'
-// default power scripts have shipped for decades. Network-independent: the
-// exec path never touches the guest's IP.
+// execGuestIpconfig runs `ipconfig /<verb>` in the guest over vsock, so the
+// exec path never depends on the IP it is repairing.
 func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) error {
 	ctx, cancel := context.WithTimeout(ctx, guestIpconfigTimeout)
 	defer cancel()
