@@ -153,8 +153,6 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 // dropNICForHibernate releases the lease then detaches the NIC (VMware Tools'
 // suspend default): the snapshot carries no cached lease, so restored clones
 // DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates.
-// A failed detach renews unconditionally — an exec error does not prove the
-// guest skipped the release, and renewing a still-bound adapter is benign.
 func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	logger := log.WithFunc("Provider.dropNICForHibernate")
 	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
@@ -165,8 +163,8 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-		// Cancel-detached: the drop may have failed because ctx died, and the
-		// compensation must still run (bounded by execGuestIpconfig's timeout).
+		// Renew regardless, detached from ctx: an exec error does not prove the
+		// guest skipped the release, and the drop may have failed because ctx died.
 		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
 			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}

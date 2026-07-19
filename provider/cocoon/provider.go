@@ -118,7 +118,7 @@ type Provider struct {
 }
 
 // NewProvider constructs a Provider with empty tables; background work stops
-// when ctx is cancelled or Close is called. Default Pinger is NopPinger so
+// when ctx is canceled or Close is called. Default Pinger is NopPinger so
 // tests degrade gracefully.
 func NewProvider(ctx context.Context) *Provider {
 	lifecycleCtx, lifecycleStop := context.WithCancel(ctx)

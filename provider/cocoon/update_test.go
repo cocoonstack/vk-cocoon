@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,7 +14,6 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -559,7 +556,7 @@ func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
 }
 
 func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
-	rt := &fakeRuntime{netResizeErr: errors.New("resize boom")}
+	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Probes = probes.NewManager(t.Context())
@@ -608,11 +605,7 @@ func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
 
 func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
 	p := newTestProvider(t)
-	leases := filepath.Join(t.TempDir(), "leases.json")
-	if err := os.WriteFile(leases, []byte(`[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"2099-01-01T00:00:00Z"}]`), 0o644); err != nil {
-		t.Fatalf("write leases: %v", err)
-	}
-	p.LeaseParser = network.NewLeaseParser(leases)
+	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.10")
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0"})
 	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0"})
 
@@ -628,7 +621,6 @@ func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
 func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
 	p, pod, _ := newDropNICWakeFixture(t, 500*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
-	p.wakeRenewNudgeDelay = time.Nanosecond
 	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0", IP: "10.0.0.9"})
 
 	if p.waitForFreshIP(t.Context(), pod, "vmid-wake") {

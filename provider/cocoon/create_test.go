@@ -1607,12 +1607,7 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set("ns/demo-0", probes.Result{Ready: true})
 
-	leasePath := filepath.Join(t.TempDir(), "leases.json")
-	leases := `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.88","expiry":"2099-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(leasePath, []byte(leases), 0o644); err != nil {
-		t.Fatalf("write leases: %v", err)
-	}
-	p.LeaseParser = network.NewLeaseParser(leasePath)
+	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
@@ -1956,6 +1951,17 @@ func newTestProvider(t *testing.T) *Provider {
 	p := NewProvider(t.Context())
 	t.Cleanup(p.Close)
 	return p
+}
+
+// newLeaseParser writes a one-entry leases.json and returns a parser for it.
+func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "leases.json")
+	entry := `[{"mac":"` + mac + `","ip":"` + ip + `","expiry":"2099-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(entry), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	return network.NewLeaseParser(path)
 }
 
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
