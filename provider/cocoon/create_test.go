@@ -1953,7 +1953,7 @@ func (nopWriteCloser) Close() error                { return nil }
 // race with the next test on a recycled pod heap address.
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
-	p := NewProvider()
+	p := NewProvider(t.Context())
 	t.Cleanup(p.Close)
 	return p
 }
