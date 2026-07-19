@@ -20,7 +20,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 
-	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
@@ -348,14 +347,6 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 		}
 		return true, "ping ok"
 	}
-}
-
-// isWindowsGuest reports whether the tracked pod declares a Windows guest.
-func (p *Provider) isWindowsGuest(namespace, name string) bool {
-	p.mu.RLock()
-	pod := p.pods[meta.PodKey(namespace, name)]
-	p.mu.RUnlock()
-	return pod != nil && meta.ParseVMSpec(pod).OS == string(cocoonv1.OSWindows)
 }
 
 func (p *Provider) probePort(ctx context.Context, namespace, name string) string {
