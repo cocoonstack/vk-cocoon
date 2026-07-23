@@ -49,7 +49,6 @@ func TestSessionSetAndVerify(t *testing.T) {
 	}
 	defer func() { _ = sess.Close() }()
 
-	// Set IP.
 	if err := sess.Run(t.Context(), []string{"i", "7", "10.88.0.60", "255.255.255.0", "10.88.0.1"}, nil); err != nil {
 		t.Fatalf("Run set: %v", err)
 	}
@@ -57,7 +56,6 @@ func TestSessionSetAndVerify(t *testing.T) {
 		t.Errorf("net 7 ip = %q, want 10.88.0.60", fake.ips[7])
 	}
 
-	// Verify via query on the same session.
 	var out bytes.Buffer
 	if err := sess.Run(t.Context(), []string{"i"}, &out); err != nil {
 		t.Fatalf("Run verify: %v", err)
@@ -80,7 +78,6 @@ func TestSessionMultiNICAllStatic(t *testing.T) {
 	}
 	defer func() { _ = sess.Close() }()
 
-	// Query.
 	var out bytes.Buffer
 	if err := sess.Run(t.Context(), []string{"i"}, &out); err != nil {
 		t.Fatalf("Run query: %v", err)
@@ -90,7 +87,6 @@ func TestSessionMultiNICAllStatic(t *testing.T) {
 		t.Fatalf("ParseNetEntries = %v, want 3 entries", nums)
 	}
 
-	// Set all.
 	ips := []string{"10.0.0.10", "10.0.1.10", "10.0.2.10"}
 	for i, ip := range ips {
 		if err := sess.Run(t.Context(), []string{"i", fmt.Sprintf("%d", nums[i]), ip, "255.255.255.0", "10.0.0.1"}, nil); err != nil {
@@ -98,7 +94,6 @@ func TestSessionMultiNICAllStatic(t *testing.T) {
 		}
 	}
 
-	// Verify.
 	for num, want := range map[int]string{2: "10.0.0.10", 4: "10.0.1.10", 6: "10.0.2.10"} {
 		if fake.ips[num] != want {
 			t.Errorf("net %d ip = %q, want %q", num, fake.ips[num], want)

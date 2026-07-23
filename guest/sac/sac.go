@@ -19,7 +19,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/guest"
 )
 
-// SAC serial-console timing and buffer defaults.
 const (
 	defaultWaitReady  = 60 * time.Second
 	defaultRWTimeout  = 5 * time.Second
@@ -204,7 +203,6 @@ func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Dur
 	}
 }
 
-// drain reads and discards any pending data on the connection.
 func drain(conn net.Conn) {
 	buf := make([]byte, readBufSize)
 	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))

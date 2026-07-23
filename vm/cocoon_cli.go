@@ -402,7 +402,6 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// buildCloneArgs assembles the cocoon vm clone argv.
 func buildCloneArgs(opts CloneOptions) []string {
 	args := []string{"vm", "clone", "--output", "json"}
 	if opts.To != "" {
@@ -431,7 +430,6 @@ func buildCloneArgs(opts CloneOptions) []string {
 	return append(args, opts.From)
 }
 
-// buildRunArgs assembles the cocoon vm run argv.
 func buildRunArgs(opts RunOptions) []string {
 	args := []string{"vm", "run", "--output", "json"}
 	if opts.Name != "" {

@@ -11,9 +11,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
-// Probe timing defaults. Pre-Ready uses exponential backoff so a fast guest
-// flips to Ready within ~100ms instead of paying a fixed 2s wait; the cap
-// bounds slow guests. Once Ready, a coarse steady interval suffices.
 const (
 	defaultInitialInterval    = 100 * time.Millisecond
 	defaultInitialBackoffMax  = 1 * time.Second
@@ -128,7 +125,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	go m.run(ctx, key, probe, onUpdate, ready)
 }
 
-// applyResult writes one probe outcome into the result map.
 func (m *Manager) applyResult(key string, ready bool, message string) {
 	m.Set(key, Result{
 		Ready:   ready,
@@ -136,7 +132,6 @@ func (m *Manager) applyResult(key string, ready bool, message string) {
 	})
 }
 
-// run is the per-pod agent loop. Starts fast, slows to steady state once Ready.
 func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
 	interval := defaultInitialInterval
 	if lastReady {
