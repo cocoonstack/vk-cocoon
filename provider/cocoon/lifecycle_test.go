@@ -484,6 +484,47 @@ func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.
 	}
 }
 
+func TestApplyLifecycleLockedSameGenFailedAllowsNewAttemptViaHibernating(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateFailed, "transient timeout")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateHibernating, "")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateHibernated, "")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateHibernated) {
+		t.Errorf("state = %q, want hibernated (a new attempt via Hibernating must un-stick same-gen Failed)", got)
+	}
+}
+
+func TestApplyLifecycleLockedSameGenFailedStaysStickyWithoutNewAttempt(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateFailed, "transient timeout")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateFailed) {
+		t.Errorf("state = %q, want failed (Ready with no intervening new-attempt state must still drop)", got)
+	}
+}
+
 func TestForgetPodDropsLifecycleState(t *testing.T) {
 	t.Parallel()
 

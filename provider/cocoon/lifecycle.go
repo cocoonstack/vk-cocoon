@@ -57,9 +57,12 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		return status, false
 	}
 	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
+	// Creating/Hibernating mark the start of a new attempt, so they may clear it.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
+		state != meta.LifecycleStateCreating &&
+		state != meta.LifecycleStateHibernating &&
 		status.ObservedGeneration == cur.ObservedGeneration {
 		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
