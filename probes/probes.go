@@ -11,6 +11,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
+// Pre-Ready polling starts at 100ms so a fast guest flips Ready in ~100ms instead of paying a fixed wait; the cap bounds slow guests.
 const (
 	defaultInitialInterval    = 100 * time.Millisecond
 	defaultInitialBackoffMax  = 1 * time.Second
