@@ -3,7 +3,7 @@ module github.com/cocoonstack/vk-cocoon
 go 1.26.5
 
 require (
-	github.com/cocoonstack/cocoon-common v0.2.7-0.20260716191933-37897866a3f3
+	github.com/cocoonstack/cocoon-common v0.2.7-0.20260723045116-c317c9877be6
 	github.com/google/go-containerregistry v0.21.7
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	github.com/prometheus/client_golang v1.23.2
@@ -11,7 +11,6 @@ require (
 	github.com/virtual-kubelet/virtual-kubelet v1.12.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.21.0
-	google.golang.org/protobuf v1.36.11
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.3
@@ -117,6 +116,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/grpc v1.82.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
