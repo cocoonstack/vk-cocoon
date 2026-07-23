@@ -81,13 +81,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				if spec.OS == string(cocoonv1.OSWindows) {
-					if _, sacErr := p.applyWindowsStaticIP(ctx, pod, v); sacErr != nil {
-						metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
-						p.markPostCloneState(ctx, pod, postCloneStateFailed)
-						sacMsg := sacErr.Error()
-						p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate(op+": "+sacMsg, eventMessageMaxBytes))
-						p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(sacMsg, lifecycleMessageMaxBytes))
-						logger.Errorf(ctx, sacErr, "%s/%s windows static IP", pod.Namespace, pod.Name)
+					if _, ok := p.runWindowsSAC(ctx, pod, v, op); !ok {
 						return
 					}
 				}
@@ -155,6 +149,24 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 	p.notify(pod)
 	// wake marker: don't publish Ready over a VM hibernated/replaced mid-wait.
 	p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "")
+}
+
+// runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; ok=false means the pod was marked Failed.
+func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM, op string) (bool, bool) {
+	ran, err := p.applyWindowsStaticIP(ctx, pod, v)
+	if err != nil {
+		metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
+		p.markPostCloneState(ctx, pod, postCloneStateFailed)
+		errMsg := err.Error()
+		p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate(op+": "+errMsg, eventMessageMaxBytes))
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
+		log.WithFunc("Provider.runWindowsSAC").Errorf(ctx, err, "%s/%s windows static IP", pod.Namespace, pod.Name)
+		return false, false
+	}
+	if ran {
+		metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
+	}
+	return ran, true
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
