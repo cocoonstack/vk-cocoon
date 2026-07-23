@@ -11,6 +11,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
@@ -395,6 +396,42 @@ func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 	defer mu.Unlock()
 	if len(order) != 2 || order[0] != "exec" || order[1] != "sac" {
 		t.Errorf("order = %v, want [exec sac]", order)
+	}
+}
+
+func TestMarkPostCloneStateDropsStaleIncarnation(t *testing.T) {
+	t.Parallel()
+
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset(podB)
+	p.trackPod(podB, nil)
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	p.markPostCloneState(t.Context(), podA, postCloneStateFailed)
+
+	if got := podB.Annotations[annotationPostCloneState]; got != "" {
+		t.Errorf("successor post-clone-state = %q, want unset (stale incarnation write must drop)", got)
+	}
+}
+
+func TestSetPodAnnotationDropsStaleIncarnation(t *testing.T) {
+	t.Parallel()
+
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset(podB)
+	p.trackPod(podB, nil)
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	p.setPodAnnotation(t.Context(), podA, annotationPostCloneHint, "stale")
+
+	got, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if v := got.Annotations[annotationPostCloneHint]; v != "" {
+		t.Errorf("successor hint = %q, want unset (stale incarnation write must drop)", v)
 	}
 }
 

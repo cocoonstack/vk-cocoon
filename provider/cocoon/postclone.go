@@ -161,6 +161,10 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
 	target := p.pods[key]
+	if target != nil && target.UID != pod.UID {
+		p.mu.Unlock()
+		return
+	}
 	if target == nil {
 		target = pod
 	}
@@ -198,6 +202,10 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 // setPodAnnotation writes one annotation locally under p.mu and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
+	if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID != pod.UID {
+		p.mu.Unlock()
+		return
+	}
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
