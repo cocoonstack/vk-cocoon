@@ -9,7 +9,6 @@ import (
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
-	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
@@ -83,16 +82,16 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 		memBytes := float64(readProcessMemoryWorkingSet(s.PID))
 
 		containerLabels := []*dto.LabelPair{
-			{Name: proto.String("namespace"), Value: proto.String(s.Namespace)},
-			{Name: proto.String("pod"), Value: proto.String(s.PodName)},
-			{Name: proto.String("container"), Value: proto.String(containerName)},
+			{Name: new("namespace"), Value: new(s.Namespace)},
+			{Name: new("pod"), Value: new(s.PodName)},
+			{Name: new("container"), Value: new(containerName)},
 		}
 		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
 		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
 
 		podLabels := []*dto.LabelPair{
-			{Name: proto.String("namespace"), Value: proto.String(s.Namespace)},
-			{Name: proto.String("pod"), Value: proto.String(s.PodName)},
+			{Name: new("namespace"), Value: new(s.Namespace)},
+			{Name: new("pod"), Value: new(s.PodName)},
 		}
 		podCPU = append(podCPU, newCounter(cpuSec, nowMs, podLabels))
 		podMem = append(podMem, newGauge(memBytes, nowMs, podLabels))

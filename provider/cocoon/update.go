@@ -11,7 +11,6 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -243,7 +242,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sou
 		Pull:        snapshot != nil && snapshot.Image != "",
 	}
 	if shouldDropNICBeforeHibernate(spec) {
-		opts.NICs = ptr.To(1)
+		opts.NICs = new(1)
 	}
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
