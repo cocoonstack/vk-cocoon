@@ -33,6 +33,11 @@ type Result struct {
 // OnUpdate is called when readiness flips; receives the per-agent context.
 type OnUpdate func(ctx context.Context)
 
+// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
+type agent struct {
+	cancel context.CancelFunc
+}
+
 // Manager tracks probe results per pod and manages per-pod agent goroutines.
 type Manager struct {
 	agentRoot       context.Context
@@ -174,11 +179,6 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 			}
 		}
 	}
-}
-
-// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
-type agent struct {
-	cancel context.CancelFunc
 }
 
 // nextInitialInterval grows the pre-Ready poll interval exponentially until
