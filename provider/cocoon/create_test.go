@@ -278,6 +278,38 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	}
 }
 
+func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
+	rt := &fakeRuntime{runErr: errors.New("boot failed")}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "registry.example/cocoon/ubuntu:24.04",
+		Mode:   "run",
+		OS:     "linux",
+	})
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Fatal("first create should fail")
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
+		t.Fatal("failed create must not leave a provisional pod, or the kubelet retry becomes UpdatePod")
+	}
+
+	rt.runErr = nil
+	rt.runVM = &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("retry create: %v", err)
+	}
+	p.mu.RLock()
+	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
+	p.mu.RUnlock()
+	if got.State != meta.LifecycleStateReady {
+		t.Errorf("intent after retry = %q, want ready", got.State)
+	}
+}
+
 func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 	rt := &fakeRuntime{
 		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},

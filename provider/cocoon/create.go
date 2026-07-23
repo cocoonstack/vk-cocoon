@@ -64,6 +64,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			metrics.WakeTotal.WithLabelValues("failed").Inc()
 		}
 		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
+		// Drop the provisional claim (keep intent): a tracked VM-less pod turns the kubelet's create retry into an UpdatePod wake.
+		p.mu.Lock()
+		if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID == pod.UID {
+			delete(p.pods, meta.PodKey(pod.Namespace, pod.Name))
+		}
+		p.mu.Unlock()
 		return err
 	}
 	// A restore is a clone-from-hibernate; label its boot "clone" like wake does.
