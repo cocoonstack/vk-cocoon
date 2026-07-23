@@ -45,9 +45,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// removeLocalSnapshots drops the clone source and its fork snapshot so a
-// deleted VM's local state can't be preferred over the registry tag on a
-// later restore. Skip when the VM was never a named clone.
+// removeLocalSnapshots drops the clone source and its fork snapshot so a later restore cannot prefer stale local state over the registry tag.
 func (p *Provider) removeLocalSnapshots(vmName string) {
 	if vmName == "" {
 		return
