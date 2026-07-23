@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -192,15 +193,17 @@ func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
 	result := make(map[string]int64, len(names))
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		if len(parts) < 2 {
+		// Key test on raw bytes keeps non-matching lines allocation-free on the per-pod stats path.
+		rawKey, rest, ok := bytes.Cut(scanner.Bytes(), []byte(":"))
+		if !ok || !want[string(rawKey)] {
 			continue
 		}
-		key := strings.TrimSuffix(parts[0], ":")
-		if !want[key] {
+		key := string(rawKey)
+		parts := strings.Fields(string(rest))
+		if len(parts) < 1 {
 			continue
 		}
-		v, parseErr := strconv.ParseInt(parts[1], 10, 64)
+		v, parseErr := strconv.ParseInt(parts[0], 10, 64)
 		if parseErr != nil {
 			return nil, fmt.Errorf("%s: parse %s: %w", path, key, parseErr)
 		}
