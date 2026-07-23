@@ -458,6 +458,32 @@ func TestRepublishAfterRestartWithSeed(t *testing.T) {
 	}
 }
 
+func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.T) {
+	t.Parallel()
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(podA)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(podA, nil)
+	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateReady, "")
+
+	// podB shares podA's key but is a different incarnation (recreate under the same name).
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateFailed, "stale goroutine")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	got := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if got.State != meta.LifecycleStateReady {
+		t.Errorf("intent state = %q, want ready (write from a recreated pod's stale goroutine must drop)", got.State)
+	}
+	if annoState := podA.Annotations[meta.AnnotationLifecycleState]; annoState != string(meta.LifecycleStateReady) {
+		t.Errorf("pod A annotation = %q, want ready (must not be overwritten by the other incarnation)", annoState)
+	}
+}
+
 func TestForgetPodDropsLifecycleState(t *testing.T) {
 	t.Parallel()
 

@@ -41,10 +41,14 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
-	if tracked != nil {
-		gen = max(gen, meta.ReadCocoonSetGeneration(tracked))
-	}
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
+	if tracked != nil {
+		// A delete-then-recreate reuses the key; drop a write from the old incarnation.
+		if tracked.UID != pod.UID {
+			return status, false
+		}
+		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
+	}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
 		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
