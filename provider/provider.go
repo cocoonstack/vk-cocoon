@@ -1,6 +1,6 @@
 // Package provider holds the virtual-kubelet provider scaffolding shared
-// across cocoon backends: orphan policy, capacity detection, and the node
-// provider entry point.
+// across cocoon backends: orphan policy, capacity detection, and the
+// VM/node stats types.
 package provider
 
 // OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
