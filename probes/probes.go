@@ -61,9 +61,6 @@ func NewManager(ctx context.Context) *Manager {
 
 // Close cancels all agent goroutines.
 func (m *Manager) Close() {
-	if m == nil {
-		return
-	}
 	m.agentRootCancel()
 }
 
@@ -97,10 +94,6 @@ func (m *Manager) Forget(key string) {
 // Start launches (or replaces) a per-pod probe agent. The first probe runs
 // synchronously so CreatePod's initial notify reflects reachability.
 func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
-	if m == nil || probe == nil {
-		return
-	}
-
 	m.mu.Lock()
 	if prev, ok := m.agents[key]; ok {
 		prev.cancel()

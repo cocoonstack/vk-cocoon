@@ -63,8 +63,6 @@ const (
 	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
-var _ provider.Provider = (*Provider)(nil)
-
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
 	NodeName string

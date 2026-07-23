@@ -267,11 +267,7 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 	if err := c.SnapshotRemoveIfExists(ctx, opts.Name); err != nil {
 		return nil, nil, err
 	}
-	args := []string{"snapshot", "import", "--name", opts.Name}
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
-	}
-	cmd := c.command(ctx, args...)
+	cmd := c.command(ctx, "snapshot", "import", "--name", opts.Name)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, fmt.Errorf("stdin pipe: %w", err)

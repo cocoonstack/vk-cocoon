@@ -12,7 +12,7 @@ reporting per-VM status back to the kubelet.
 |---|---|---|
 | Application | `package main` | Entry point, node registration, metrics server, VM event watcher startup |
 | Provider | `provider/cocoon/` | `Provider` struct with lifecycle methods (CreatePod / DeletePod / UpdatePod / GetPodStatus), startup reconcile, orphan policy, VM event watcher, pod eviction |
-| Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
+| Provider shared | `provider/` | Orphan policy, VM/node stats types, and node-capacity helpers shared across backends |
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `cocoon` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | `Puller` and `Pusher` stream snapshots and cloud images to any OCI registry through `cocoon-common`'s `oci.Registry` backend (`cocoon-common/snapshot` + `cocoon-common/cloudimg`) |
 | Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |

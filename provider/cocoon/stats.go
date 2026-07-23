@@ -13,6 +13,7 @@ import (
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
 // vmSnapshot is a minimal copy of VM state taken under lock so /proc
@@ -188,22 +189,11 @@ func readNodeCPUSeconds() float64 {
 }
 
 func readNodeMemoryWorkingSet() int64 {
-	f, err := os.Open("/proc/meminfo")
+	fields, err := provider.ReadKeyedProcFile("/proc/meminfo", "MemTotal", "MemAvailable")
 	if err != nil {
 		return 0
 	}
-	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
-	var total, avail int64
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "MemTotal:") {
-			total = parseMemInfoValue(line)
-		} else if strings.HasPrefix(line, "MemAvailable:") {
-			avail = parseMemInfoValue(line)
-		}
-	}
-	return (total - avail) * 1024
+	return (fields["MemTotal"] - fields["MemAvailable"]) * 1024
 }
 
 func readProcessUsage(pid int) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
@@ -239,27 +229,11 @@ func readProcessCPUSeconds(pid int) float64 {
 }
 
 func readProcessMemoryWorkingSet(pid int) int64 {
-	f, err := os.Open("/proc/" + strconv.Itoa(pid) + "/status")
+	fields, err := provider.ReadKeyedProcFile("/proc/"+strconv.Itoa(pid)+"/status", "VmRSS")
 	if err != nil {
 		return 0
 	}
-	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if strings.HasPrefix(scanner.Text(), "VmRSS:") {
-			return parseMemInfoValue(scanner.Text()) * 1024
-		}
-	}
-	return 0
-}
-
-func parseMemInfoValue(line string) int64 {
-	fields := strings.Fields(line)
-	if len(fields) < 2 {
-		return 0
-	}
-	v, _ := strconv.ParseInt(fields[1], 10, 64)
-	return v
+	return fields["VmRSS"] * 1024
 }
 
 func newCounterFamily(name, help string, metrics ...*dto.Metric) *dto.MetricFamily {
