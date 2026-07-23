@@ -164,13 +164,18 @@ func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
 // republishLifecycleOnGenerationBump re-marks current state on a bare gen-stamp UpdatePod; otherwise observed-generation freezes.
 func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *corev1.Pod) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.mu.RLock()
+	p.mu.Lock()
 	cur, ok := p.lifecycleIntent[key]
-	p.mu.RUnlock()
 	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+		p.mu.Unlock()
 		return
 	}
-	p.markLifecycleState(ctx, pod, cur.State, cur.Message)
+	// Read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
+	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
+	p.mu.Unlock()
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	}
 }
 
 func (p *Provider) recordLifecycleFlushed(key, snap string) {
