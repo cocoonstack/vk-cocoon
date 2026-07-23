@@ -9,6 +9,8 @@ import (
 const (
 	metricNamespace = "cocoon"
 	metricSubsystem = "vk"
+
+	labelResult = "result"
 )
 
 // Prometheus collectors exported for registration in the global registry.
@@ -21,7 +23,7 @@ var (
 			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
 		// result=ok|failed|skipped; reason=adopted|noop|missing_vmname|no_vm
-		[]string{"op", "result", "reason"},
+		[]string{"op", labelResult, "reason"},
 	)
 
 	SnapshotPullTotal = prometheus.NewCounterVec(
@@ -31,7 +33,7 @@ var (
 			Name:      "snapshot_pull_total",
 			Help:      "Number of snapshot pulls from the registry by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	SnapshotSaveTotal = prometheus.NewCounterVec(
@@ -41,7 +43,7 @@ var (
 			Name:      "snapshot_save_total",
 			Help:      "Number of snapshot saves by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	SnapshotPushTotal = prometheus.NewCounterVec(
@@ -51,7 +53,7 @@ var (
 			Name:      "snapshot_push_total",
 			Help:      "Number of snapshot pushes to the registry by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	CloneFromDirTotal = prometheus.NewCounterVec(
@@ -61,7 +63,7 @@ var (
 			Name:      "clone_from_dir_total",
 			Help:      "Number of annotation-driven clone-from-dir attempts by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	VMTableSize = prometheus.NewGauge(
@@ -167,7 +169,7 @@ var (
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
-		[]string{"phase", "result"}, // phase=netresize|snapshot|push|remove, result=ok|failed
+		[]string{"phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
 	)
 
 	WakeTotal = prometheus.NewCounterVec(
@@ -177,7 +179,7 @@ var (
 			Name:      "wake_total",
 			Help:      "Number of wake operations by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	WakeIPWaitTotal = prometheus.NewCounterVec(
@@ -187,7 +189,7 @@ var (
 			Name:      "wake_ip_wait_total",
 			Help:      "Outcomes of the post-clone and wake DHCP lease wait.",
 		},
-		[]string{"result"}, // result=ok|timeout
+		[]string{labelResult}, // result=ok|timeout
 	)
 
 	WakeRenewNudgeTotal = prometheus.NewCounterVec(
@@ -197,7 +199,7 @@ var (
 			Name:      "wake_renew_nudge_total",
 			Help:      "ipconfig /renew nudges sent to Windows guests still lease-less mid lease-wait.",
 		},
-		[]string{"result"}, // result=ok|failed
+		[]string{labelResult}, // result=ok|failed
 	)
 
 	PostCloneTotal = prometheus.NewCounterVec(
@@ -207,7 +209,7 @@ var (
 			Name:      "postclone_total",
 			Help:      "Number of post-clone fixups by guest kind and result.",
 		},
-		[]string{"kind", "result"}, // kind=windows|linux_static|linux_fc|sac, result=ok|failed
+		[]string{"kind", labelResult}, // kind=windows|linux_static|linux_fc|sac, result=ok|failed
 	)
 
 	PostCloneRetryAttempts = prometheus.NewHistogramVec(
@@ -218,7 +220,7 @@ var (
 			Help:      "Attempts consumed by post-clone vsock exec by result.",
 			Buckets:   []float64{1, 2, 5, 10, 20, 40, 60},
 		},
-		[]string{"result"}, // result=ok|failed
+		[]string{labelResult}, // result=ok|failed
 	)
 )
 
