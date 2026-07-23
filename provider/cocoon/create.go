@@ -38,6 +38,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
 
+	// Claim this incarnation before the long bring-up so a forgotten predecessor's stale writers hit the UID guards.
+	p.trackPod(pod, nil)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
 	if existing := p.vmByName(spec.VMName); existing != nil {

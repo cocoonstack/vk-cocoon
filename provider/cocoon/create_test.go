@@ -243,6 +243,41 @@ func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
 	}
 }
 
+func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
+	// A predecessor's worker failing mid-bring-up must not stick the successor
+	// at Failed: the entry-time trackPod makes the UID guard drop it.
+	p := newTestProvider(t)
+	p.Probes = probes.NewManager(t.Context())
+
+	podB := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "registry.example/cocoon/ubuntu:24.04",
+		Mode:   "run",
+		OS:     "linux",
+	})
+	podB.UID = "b"
+	podA := podB.DeepCopy()
+	podA.UID = "a"
+
+	rt := &fakeRuntime{
+		runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"},
+		runHook: func() {
+			p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "stale predecessor")
+		},
+	}
+	p.Runtime = rt
+
+	if err := p.CreatePod(t.Context(), podB); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p.mu.RLock()
+	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
+	p.mu.RUnlock()
+	if got.State != meta.LifecycleStateReady {
+		t.Errorf("intent state = %q, want ready (stale predecessor write mid-bring-up must drop)", got.State)
+	}
+}
+
 func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 	rt := &fakeRuntime{
 		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},
@@ -1643,6 +1678,7 @@ type fakeRuntime struct {
 	runVM               *vm.VM
 	snapshots           map[string]*vm.Snapshot
 	listVMs             []vm.VM
+	runHook             func()
 	execCalls           []fakeExecCall
 	execStdout          string
 	execStderr          string
@@ -1708,6 +1744,9 @@ func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, er
 }
 
 func (f *fakeRuntime) Run(_ context.Context, opts vm.RunOptions) (*vm.VM, error) {
+	if f.runHook != nil {
+		f.runHook()
+	}
 	o := opts
 	f.ran = &o
 	if f.runErr != nil {
