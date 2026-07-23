@@ -86,7 +86,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if restoring {
 		p.dispatchHibernateRestore(pod, spec, v, "create")
 	}
-	if spec.OS == string(cocoonv1.OSWindows) && !restoring {
+	if spec.OS == string(cocoonv1.OSWindows) && !restoring && !cloned {
 		p.goBackground(func() {
 			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
 			if err != nil {

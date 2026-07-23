@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -353,4 +355,68 @@ type failingSACDialer struct{}
 
 func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
 	return nil, errors.New("simulated SAC dial failure")
+}
+
+// TestCreatePodWindowsClonedRunsSACAfterPostCloneExec locks the ordering fix: a
+// cloned Windows pod's post-clone exec must complete before the SAC static-IP
+// write starts. Waits on dedicated signals, not p.Close(), which cancels the
+// goroutine's context and would otherwise race its own exec/dial calls.
+func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	execDone := make(chan struct{})
+	sacDone := make(chan struct{})
+
+	rt := &fakeRuntime{
+		cloneVM: &vm.VM{
+			ID: "vmid", Name: "vk-ns-win-0",
+			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}},
+		},
+	}
+	rt.onExec = func() {
+		mu.Lock()
+		order = append(order, "exec")
+		mu.Unlock()
+		close(execDone)
+	}
+
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.GuestSAC = orderRecordingSACDialer{mu: &mu, order: &order, done: sacDone}
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-win-0", OS: "windows"})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	waitOrFatal(t, execDone, "post-clone exec")
+	waitOrFatal(t, sacDone, "sac dial")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != "exec" || order[1] != "sac" {
+		t.Errorf("order = %v, want [exec sac]", order)
+	}
+}
+
+func waitOrFatal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+type orderRecordingSACDialer struct {
+	mu    *sync.Mutex
+	order *[]string
+	done  chan struct{}
+}
+
+func (d orderRecordingSACDialer) Dial(context.Context, string) (guest.Session, error) {
+	d.mu.Lock()
+	*d.order = append(*d.order, "sac")
+	d.mu.Unlock()
+	close(d.done)
+	return nil, errors.New("stop before a real session")
 }

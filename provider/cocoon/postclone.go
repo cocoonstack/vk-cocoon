@@ -80,6 +80,17 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
+				if spec.OS == string(cocoonv1.OSWindows) {
+					if _, sacErr := p.applyWindowsStaticIP(ctx, pod, v); sacErr != nil {
+						metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
+						p.markPostCloneState(ctx, pod, postCloneStateFailed)
+						sacMsg := sacErr.Error()
+						p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate(op+": "+sacMsg, eventMessageMaxBytes))
+						p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(sacMsg, lifecycleMessageMaxBytes))
+						logger.Errorf(ctx, sacErr, "%s/%s windows static IP", pod.Namespace, pod.Name)
+						return
+					}
+				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
 					p.markReadyAfterIP(ctx, pod, v)
