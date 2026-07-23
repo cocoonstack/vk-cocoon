@@ -41,10 +41,14 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
-	if tracked != nil {
-		gen = max(gen, meta.ReadCocoonSetGeneration(tracked))
-	}
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
+	if tracked != nil {
+		// A delete-then-recreate reuses the key; drop a write from the old incarnation.
+		if tracked.UID != pod.UID {
+			return status, false
+		}
+		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
+	}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
 		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
@@ -53,9 +57,12 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		return status, false
 	}
 	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
+	// Creating/Hibernating mark the start of a new attempt, so they may clear it.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
+		state != meta.LifecycleStateCreating &&
+		state != meta.LifecycleStateHibernating &&
 		status.ObservedGeneration == cur.ObservedGeneration {
 		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
@@ -157,13 +164,18 @@ func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
 // republishLifecycleOnGenerationBump re-marks current state on a bare gen-stamp UpdatePod; otherwise observed-generation freezes.
 func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *corev1.Pod) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.mu.RLock()
+	p.mu.Lock()
 	cur, ok := p.lifecycleIntent[key]
-	p.mu.RUnlock()
 	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+		p.mu.Unlock()
 		return
 	}
-	p.markLifecycleState(ctx, pod, cur.State, cur.Message)
+	// Read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
+	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
+	p.mu.Unlock()
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	}
 }
 
 func (p *Provider) recordLifecycleFlushed(key, snap string) {

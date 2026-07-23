@@ -123,8 +123,7 @@ type RunOptions struct {
 
 // ImportOptions is the input to Runtime.SnapshotImport.
 type ImportOptions struct {
-	Name        string
-	Description string
+	Name string
 }
 
 // ImageImportOptions is the input to Runtime.ImageImport.

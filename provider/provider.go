@@ -1,13 +1,7 @@
 // Package provider holds the virtual-kubelet provider scaffolding shared
-// across cocoon backends: orphan policy, capacity detection, and the node
-// provider entry point.
+// across cocoon backends: orphan policy, capacity detection, and the
+// VM/node stats types.
 package provider
-
-import (
-	"context"
-
-	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
-)
 
 // OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
 type OrphanPolicy string
@@ -38,19 +32,4 @@ type NodeStats struct {
 	MemoryUsedBytes  int64
 	StorageAvailable int64
 	StorageTotal     int64
-}
-
-// Provider is the interface that all vk-cocoon provider implementations must satisfy.
-// It extends nodeutil.Provider with lifecycle hooks needed by the main binary.
-type Provider interface {
-	nodeutil.Provider
-
-	// StartupReconcile rebuilds in-memory state from K8s and the local runtime.
-	StartupReconcile(ctx context.Context) error
-	// StartVMWatcher launches a background goroutine that reacts to VM events.
-	StartVMWatcher(ctx context.Context)
-	// CollectVMStats returns per-VM and node-level stats for the Prometheus collector.
-	CollectVMStats() ([]VMStats, NodeStats)
-	// Close releases resources held by the provider.
-	Close()
 }

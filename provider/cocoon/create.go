@@ -38,6 +38,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
 
+	// Claim this incarnation before the long bring-up so a forgotten predecessor's stale writers hit the UID guards.
+	p.trackPod(pod, nil)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
 	if existing := p.vmByName(spec.VMName); existing != nil {
@@ -62,6 +64,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			metrics.WakeTotal.WithLabelValues("failed").Inc()
 		}
 		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
+		// Drop the provisional claim (keep intent): a tracked VM-less pod turns the kubelet's create retry into an UpdatePod wake.
+		p.mu.Lock()
+		if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID == pod.UID {
+			delete(p.pods, meta.PodKey(pod.Namespace, pod.Name))
+		}
+		p.mu.Unlock()
 		return err
 	}
 	// A restore is a clone-from-hibernate; label its boot "clone" like wake does.
@@ -86,25 +94,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if restoring {
 		p.dispatchHibernateRestore(pod, spec, v, "create")
 	}
-	if spec.OS == string(cocoonv1.OSWindows) && !restoring {
+	if spec.OS == string(cocoonv1.OSWindows) && !restoring && !cloned {
 		p.goBackground(func() {
-			ran, err := p.applyWindowsStaticIP(p.lifecycleCtx, pod, v)
-			if err != nil {
-				metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
-				p.markPostCloneState(p.lifecycleCtx, pod, postCloneStateFailed)
-				errMsg := err.Error()
-				p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate("create: "+errMsg, eventMessageMaxBytes))
-				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
-				log.WithFunc("Provider.CreatePod").Errorf(p.lifecycleCtx, err,
-					"%s/%s windows static IP", pod.Namespace, pod.Name)
-				return
-			}
-			if ran {
-				metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
-				// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
-				if !cloned && !p.lifecycleAlreadyFailed(pod) {
-					p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
-				}
+			ran, ok := p.runWindowsSAC(p.lifecycleCtx, pod, v, "create")
+			// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
+			if ok && ran && !cloned && !p.lifecycleAlreadyFailed(pod) {
+				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
 			}
 		})
 	}

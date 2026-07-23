@@ -267,11 +267,7 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.
 	if err := c.SnapshotRemoveIfExists(ctx, opts.Name); err != nil {
 		return nil, nil, err
 	}
-	args := []string{"snapshot", "import", "--name", opts.Name}
-	if opts.Description != "" {
-		args = append(args, "--description", opts.Description)
-	}
-	cmd := c.command(ctx, args...)
+	cmd := c.command(ctx, "snapshot", "import", "--name", opts.Name)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
@@ -402,7 +398,6 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// buildCloneArgs assembles the cocoon vm clone argv.
 func buildCloneArgs(opts CloneOptions) []string {
 	args := []string{"vm", "clone", "--output", "json"}
 	if opts.To != "" {
@@ -431,7 +426,6 @@ func buildCloneArgs(opts CloneOptions) []string {
 	return append(args, opts.From)
 }
 
-// buildRunArgs assembles the cocoon vm run argv.
 func buildRunArgs(opts RunOptions) []string {
 	args := []string{"vm", "run", "--output", "json"}
 	if opts.Name != "" {

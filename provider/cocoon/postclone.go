@@ -80,6 +80,11 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
+				if spec.OS == string(cocoonv1.OSWindows) {
+					if _, ok := p.runWindowsSAC(ctx, pod, v, op); !ok {
+						return
+					}
+				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
 					p.markReadyAfterIP(ctx, pod, v)
@@ -146,10 +151,32 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 	p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "")
 }
 
+// runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; ok=false means the pod was marked Failed.
+func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM, op string) (bool, bool) {
+	ran, err := p.applyWindowsStaticIP(ctx, pod, v)
+	if err != nil {
+		metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
+		p.markPostCloneState(ctx, pod, postCloneStateFailed)
+		errMsg := err.Error()
+		p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate(op+": "+errMsg, eventMessageMaxBytes))
+		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
+		log.WithFunc("Provider.runWindowsSAC").Errorf(ctx, err, "%s/%s windows static IP", pod.Namespace, pod.Name)
+		return false, false
+	}
+	if ran {
+		metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
+	}
+	return ran, true
+}
+
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
 	target := p.pods[key]
+	if target != nil && target.UID != pod.UID {
+		p.mu.Unlock()
+		return
+	}
 	if target == nil {
 		target = pod
 	}
@@ -187,6 +214,10 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec 
 // setPodAnnotation writes one annotation locally under p.mu and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
+	if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID != pod.UID {
+		p.mu.Unlock()
+		return
+	}
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}

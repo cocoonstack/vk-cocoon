@@ -31,7 +31,6 @@ type snapshotJSON struct {
 	Hypervisor  string `json:"hypervisor"`
 }
 
-// parseInspectJSON unmarshals a VM record.
 func parseInspectJSON(raw []byte) (*VM, error) {
 	var d inspectJSON
 	if err := json.Unmarshal(raw, &d); err != nil {
@@ -40,8 +39,7 @@ func parseInspectJSON(raw []byte) (*VM, error) {
 	return inspectJSONToVM(d), nil
 }
 
-// parseVMListJSON unmarshals the VM list output.
-// cocoon prints "No VMs found." instead of JSON for an empty list.
+// parseVMListJSON handles cocoon printing "No VMs found." instead of JSON for an empty list.
 func parseVMListJSON(raw []byte) ([]VM, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("No VMs found.")) {
@@ -63,7 +61,6 @@ func parseVMListJSON(raw []byte) ([]VM, error) {
 	return out, nil
 }
 
-// parseSnapshotJSON unmarshals a snapshot record.
 func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
 	var d snapshotJSON
 	if err := json.Unmarshal(raw, &d); err != nil {

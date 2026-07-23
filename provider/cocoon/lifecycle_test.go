@@ -458,6 +458,73 @@ func TestRepublishAfterRestartWithSeed(t *testing.T) {
 	}
 }
 
+func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.T) {
+	t.Parallel()
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(podA)
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(podA, nil)
+	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateReady, "")
+
+	// podB shares podA's key but is a different incarnation (recreate under the same name).
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateFailed, "stale goroutine")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	got := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if got.State != meta.LifecycleStateReady {
+		t.Errorf("intent state = %q, want ready (write from a recreated pod's stale goroutine must drop)", got.State)
+	}
+	if annoState := podA.Annotations[meta.AnnotationLifecycleState]; annoState != string(meta.LifecycleStateReady) {
+		t.Errorf("pod A annotation = %q, want ready (must not be overwritten by the other incarnation)", annoState)
+	}
+}
+
+func TestApplyLifecycleLockedSameGenFailedAllowsNewAttemptViaHibernating(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateFailed, "transient timeout")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateHibernating, "")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateHibernated, "")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateHibernated) {
+		t.Errorf("state = %q, want hibernated (a new attempt via Hibernating must un-stick same-gen Failed)", got)
+	}
+}
+
+func TestApplyLifecycleLockedSameGenFailedStaysStickyWithoutNewAttempt(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	cs := fake.NewSimpleClientset(pod)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateFailed, "transient timeout")
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateFailed) {
+		t.Errorf("state = %q, want failed (Ready with no intervening new-attempt state must still drop)", got)
+	}
+}
+
 func TestForgetPodDropsLifecycleState(t *testing.T) {
 	t.Parallel()
 

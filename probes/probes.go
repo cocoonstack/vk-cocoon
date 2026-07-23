@@ -11,9 +11,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
-// Probe timing defaults. Pre-Ready uses exponential backoff so a fast guest
-// flips to Ready within ~100ms instead of paying a fixed 2s wait; the cap
-// bounds slow guests. Once Ready, a coarse steady interval suffices.
+// Pre-Ready polling starts at 100ms so a fast guest flips Ready in ~100ms instead of paying a fixed wait; the cap bounds slow guests.
 const (
 	defaultInitialInterval    = 100 * time.Millisecond
 	defaultInitialBackoffMax  = 1 * time.Second
@@ -35,6 +33,11 @@ type Result struct {
 
 // OnUpdate is called when readiness flips; receives the per-agent context.
 type OnUpdate func(ctx context.Context)
+
+// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
+type agent struct {
+	cancel context.CancelFunc
+}
 
 // Manager tracks probe results per pod and manages per-pod agent goroutines.
 type Manager struct {
@@ -59,9 +62,6 @@ func NewManager(ctx context.Context) *Manager {
 
 // Close cancels all agent goroutines.
 func (m *Manager) Close() {
-	if m == nil {
-		return
-	}
 	m.agentRootCancel()
 }
 
@@ -95,10 +95,6 @@ func (m *Manager) Forget(key string) {
 // Start launches (or replaces) a per-pod probe agent. The first probe runs
 // synchronously so CreatePod's initial notify reflects reachability.
 func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
-	if m == nil || probe == nil {
-		return
-	}
-
 	m.mu.Lock()
 	if prev, ok := m.agents[key]; ok {
 		prev.cancel()
@@ -128,7 +124,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	go m.run(ctx, key, probe, onUpdate, ready)
 }
 
-// applyResult writes one probe outcome into the result map.
 func (m *Manager) applyResult(key string, ready bool, message string) {
 	m.Set(key, Result{
 		Ready:   ready,
@@ -136,7 +131,6 @@ func (m *Manager) applyResult(key string, ready bool, message string) {
 	})
 }
 
-// run is the per-pod agent loop. Starts fast, slows to steady state once Ready.
 func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
 	interval := defaultInitialInterval
 	if lastReady {
@@ -179,11 +173,6 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 			}
 		}
 	}
-}
-
-// agent is a per-pod probe goroutine, canceled by Forget or shutdown.
-type agent struct {
-	cancel context.CancelFunc
 }
 
 // nextInitialInterval grows the pre-Ready poll interval exponentially until

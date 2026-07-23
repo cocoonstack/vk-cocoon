@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -123,7 +124,7 @@ func detectCPU() (resource.Quantity, error) {
 }
 
 func detectMemory() (resource.Quantity, error) {
-	fields, err := readProcMemInfoFields("MemTotal")
+	fields, err := ReadKeyedProcFile("/proc/meminfo", "MemTotal")
 	if err != nil {
 		return resource.Quantity{}, err
 	}
@@ -141,7 +142,7 @@ func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 		}
 		return q, corev1.ResourceHugePagesPrefix + "2Mi", nil
 	}
-	fields, err := readProcMemInfoFields("HugePages_Total", "Hugepagesize")
+	fields, err := ReadKeyedProcFile("/proc/meminfo", "HugePages_Total", "Hugepagesize")
 	if err != nil {
 		return resource.Quantity{}, "", nil //nolint:nilerr // missing fields = no hugepages
 	}
@@ -176,12 +177,12 @@ func detectStorageOrOverride() (total, avail resource.Quantity, err error) {
 	return totalQ, availQ, nil
 }
 
-// readProcMemInfoFields reads the named fields from /proc/meminfo in a
-// single pass. Values are returned in kB (the unit /proc/meminfo uses).
-func readProcMemInfoFields(names ...string) (map[string]int64, error) {
-	f, err := os.Open("/proc/meminfo")
+// ReadKeyedProcFile reads the named "Key: value" fields from path (e.g.
+// /proc/meminfo, /proc/<pid>/status) in a single pass, in native unit (kB).
+func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
+	f, err := os.Open(path) //nolint:gosec // path is a fixed /proc file, never user input
 	if err != nil {
-		return nil, fmt.Errorf("open /proc/meminfo: %w", err)
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
 
@@ -192,17 +193,19 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 	result := make(map[string]int64, len(names))
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		if len(parts) < 2 {
+		// Key test on raw bytes keeps non-matching lines allocation-free on the per-pod stats path.
+		rawKey, rest, ok := bytes.Cut(scanner.Bytes(), []byte(":"))
+		if !ok || !want[string(rawKey)] {
 			continue
 		}
-		key := strings.TrimSuffix(parts[0], ":")
-		if !want[key] {
+		key := string(rawKey)
+		parts := strings.Fields(string(rest))
+		if len(parts) < 1 {
 			continue
 		}
-		v, parseErr := strconv.ParseInt(parts[1], 10, 64)
+		v, parseErr := strconv.ParseInt(parts[0], 10, 64)
 		if parseErr != nil {
-			return nil, fmt.Errorf("/proc/meminfo: parse %s: %w", key, parseErr)
+			return nil, fmt.Errorf("%s: parse %s: %w", path, key, parseErr)
 		}
 		result[key] = v
 		if len(result) == len(want) {
@@ -210,12 +213,12 @@ func readProcMemInfoFields(names ...string) (map[string]int64, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read /proc/meminfo: %w", err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	if len(result) != len(want) {
 		for _, n := range names {
 			if _, ok := result[n]; !ok {
-				return nil, fmt.Errorf("/proc/meminfo: %s not found", n)
+				return nil, fmt.Errorf("%s: %s not found", path, n)
 			}
 		}
 	}
