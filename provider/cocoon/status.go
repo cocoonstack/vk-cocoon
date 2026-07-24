@@ -50,3 +50,53 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 	}
 	return status, nil
 }
+
+func podStatusMatches(current, expected corev1.PodStatus) bool {
+	if current.Phase != expected.Phase || current.PodIP != expected.PodIP {
+		return false
+	}
+	if !conditionMatches(current.Conditions, expected.Conditions, corev1.PodReady) ||
+		!conditionMatches(current.Conditions, expected.Conditions, corev1.PodInitialized) {
+		return false
+	}
+	return containerStatusMatches(current.ContainerStatuses, expected.ContainerStatuses)
+}
+
+func conditionMatches(current, expected []corev1.PodCondition, conditionType corev1.PodConditionType) bool {
+	currentStatus, currentFound := conditionStatus(current, conditionType)
+	expectedStatus, expectedFound := conditionStatus(expected, conditionType)
+	return currentFound == expectedFound && currentStatus == expectedStatus
+}
+
+func conditionStatus(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.ConditionStatus, bool) {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Status, true
+		}
+	}
+	return "", false
+}
+
+func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {
+	currentStatus, currentFound := findContainerStatus(current, containerName)
+	expectedStatus, expectedFound := findContainerStatus(expected, containerName)
+	if currentFound != expectedFound {
+		return false
+	}
+	if !currentFound {
+		return true
+	}
+	return currentStatus.Ready == expectedStatus.Ready &&
+		(currentStatus.State.Running != nil) == (expectedStatus.State.Running != nil) &&
+		(currentStatus.State.Waiting != nil) == (expectedStatus.State.Waiting != nil) &&
+		(currentStatus.State.Terminated != nil) == (expectedStatus.State.Terminated != nil)
+}
+
+func findContainerStatus(statuses []corev1.ContainerStatus, name string) (corev1.ContainerStatus, bool) {
+	for _, status := range statuses {
+		if status.Name == name {
+			return status, true
+		}
+	}
+	return corev1.ContainerStatus{}, false
+}

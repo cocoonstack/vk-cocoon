@@ -38,7 +38,8 @@ const (
 
 	// initialStatusPushDelay waits out the kubelet pod-informer's knownPods
 	// population window so the first post-restart status push isn't dropped.
-	initialStatusPushDelay = 10 * time.Second
+	initialStatusPushDelay  = 10 * time.Second
+	statusReconcileInterval = 30 * time.Second
 
 	// containerName is the synthetic container name used in pod status and metrics.
 	containerName = "agent"
@@ -173,13 +174,14 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 // deferred initial push so adopted pods (post-restart) leave Pending.
 // virtual-kubelet calls NotifyPods before WaitForCacheSync; pushing
 // synchronously hits enqueuePodStatusUpdate's empty knownPods and is
-// dropped after a ~3s poll budget. pushInitialStatus sleeps past that
-// window before walking tracked pods.
-func (p *Provider) NotifyPods(ctx context.Context, notifier func(*corev1.Pod)) {
+// dropped after a ~3s poll budget. The reconciler waits past that window.
+func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
 	p.mu.Unlock()
-	go p.pushInitialStatus(ctx)
+	p.goBackground(func() {
+		p.runStatusReconciler(p.lifecycleCtx)
+	})
 }
 
 // StartVMWatcher launches a background goroutine that subscribes to cocoon's
@@ -200,23 +202,55 @@ func (p *Provider) goBackground(f func()) {
 	p.bgWG.Go(f)
 }
 
-// pushInitialStatus runs once after the cache-sync grace window and
-// pushes each tracked pod's status to the kubelet.
-func (p *Provider) pushInitialStatus(ctx context.Context) {
+// runStatusReconciler repairs status notifications dropped during startup or
+// an apiserver outage without touching the VM lifecycle.
+func (p *Provider) runStatusReconciler(ctx context.Context) {
 	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
 		return
 	}
+	p.reconcilePodStatuses(ctx)
+
+	ticker := time.NewTicker(statusReconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.reconcilePodStatuses(ctx)
+		}
+	}
+}
+
+func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 	p.mu.RLock()
 	pods := slices.Collect(maps.Values(p.pods))
 	p.mu.RUnlock()
 	if len(pods) == 0 {
 		return
 	}
-	log.WithFunc("Provider.pushInitialStatus").
-		Infof(ctx, "pushing initial status for %d tracked pods", len(pods))
+	logger := log.WithFunc("Provider.reconcilePodStatuses")
 	for _, pod := range pods {
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		current := pod.DeepCopy()
+		if p.Clientset != nil {
+			var err error
+			current, err = p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+			if err != nil {
+				logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
+				continue
+			}
+		}
+		status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+		if err != nil {
+			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
+			continue
+		}
+		if podStatusMatches(current.Status, *status) {
+			continue
+		}
+		current.Status = *status
+		logger.Infof(ctx, "republishing drifted status for pod %s/%s", pod.Namespace, pod.Name)
+		p.notify(current)
 	}
 }
 
