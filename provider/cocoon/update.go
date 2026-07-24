@@ -14,7 +14,9 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
+	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -37,6 +39,8 @@ const (
 	guestIpconfigTimeout     = 20 * time.Second
 	hibernateRollbackTimeout = 30 * time.Second
 )
+
+var errStaleLocalSnapshot = errors.New("local snapshot does not match registry tag")
 
 // Non-hibernate spec changes stay no-ops: patching the pod re-enters UpdatePod.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
@@ -378,13 +382,26 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 }
 
 // resolveWakeSource returns the clone source name and its snapshot metadata —
-// the local snapshot when present, else pulled from the registry.
+// the registry-verified local snapshot when present, else pulled from the
+// registry.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, *vm.Snapshot, error) {
 	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
-		return vmName, snapshot, nil
-	}
-	if !errors.Is(err, vm.ErrSnapshotNotFound) {
+		switch verifyErr := p.verifyLocalSnapshot(ctx, vmName, snapshot); {
+		case verifyErr == nil:
+			metrics.SnapshotVerifyTotal.WithLabelValues("ok").Inc()
+			return vmName, snapshot, nil
+		case errors.Is(verifyErr, errStaleLocalSnapshot):
+			metrics.SnapshotVerifyTotal.WithLabelValues("stale").Inc()
+			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
+				"local snapshot %s is stale (%s), discarding and pulling", vmName, verifyErr)
+			p.removeLocalSnapshots(vmName)
+		default:
+			// Registry unreachable: never trust an unverified local copy.
+			metrics.SnapshotVerifyTotal.WithLabelValues("error").Inc()
+			return "", nil, fmt.Errorf("verify local snapshot %s: %w", vmName, verifyErr)
+		}
+	} else if !errors.Is(err, vm.ErrSnapshotNotFound) {
 		return "", nil, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
 	if p.Puller == nil {
@@ -403,6 +420,39 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 		return "", nil, fmt.Errorf("inspect imported snapshot %s: %w", importName, err)
 	}
 	return importName, snapshot, nil
+}
+
+// verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
+// in the hibernate tag's config blob — equality proves the local copy is
+// byte-identical to the registry artifact; a stale one would roll the user back.
+func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) error {
+	if p.Registry == nil {
+		// Registry-less deployments never push: a local snapshot is current by construction.
+		return nil
+	}
+	exists, err := p.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	if err != nil {
+		return fmt.Errorf("check hibernate tag: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
+	}
+	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	if err != nil {
+		return fmt.Errorf("get hibernate manifest: %w", err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse hibernate manifest: %w", err)
+	}
+	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
+	if err != nil {
+		return fmt.Errorf("fetch snapshot config: %w", err)
+	}
+	if cfg.SnapshotID != local.ID {
+		return fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
+	}
+	return nil
 }
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the
