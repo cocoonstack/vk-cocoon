@@ -226,8 +226,6 @@ type buildOpts struct {
 	recorder     record.EventRecorder
 }
 
-// buildRegistry builds the OCI registry backend from OCI_REGISTRY. The keychain
-// resolves GCP ADC (google.Keychain) before falling back to docker config.
 func buildRegistry(opts buildOpts) (oci.Registry, error) {
 	if opts.ociRegistry == "" {
 		return nil, errors.New("OCI_REGISTRY must be set")

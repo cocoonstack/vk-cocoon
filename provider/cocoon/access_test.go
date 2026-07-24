@@ -58,9 +58,7 @@ func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-zero exit to surface as error")
 	}
-	// vk's RemoteCommand handler does the same type assertion to map child
-	// exit codes onto the kubectl wire protocol; if this assertion fails
-	// users get a 500 instead of the right exit status.
+	// vk's RemoteCommand handler makes the same assertion to map child exit codes onto the kubectl wire protocol.
 	var exitErr utilexec.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("expected utilexec.ExitError, got %T: %v", err, err)
@@ -107,10 +105,6 @@ type stubAttachIO struct {
 	stderr *bufferCloser
 }
 
-type bufferCloser struct{ bytes.Buffer }
-
-func (*bufferCloser) Close() error { return nil }
-
 func newStubAttachIO(stdin string) *stubAttachIO {
 	return &stubAttachIO{
 		stdin:  strings.NewReader(stdin),
@@ -124,6 +118,10 @@ func (s *stubAttachIO) Stdout() io.WriteCloser    { return s.stdout }
 func (s *stubAttachIO) Stderr() io.WriteCloser    { return s.stderr }
 func (*stubAttachIO) TTY() bool                   { return false }
 func (*stubAttachIO) Resize() <-chan api.TermSize { return nil }
+
+type bufferCloser struct{ bytes.Buffer }
+
+func (*bufferCloser) Close() error { return nil }
 
 func newRunningPod(t *testing.T, p *Provider, name, vmID, ip string, windows bool) *corev1.Pod {
 	t.Helper()

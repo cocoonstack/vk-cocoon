@@ -49,8 +49,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 }
 
 // EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`.
-// Caller MUST have classified raw as KindCloudImage; this skips the fetch +
-// classify so callers that already verified the manifest don't pay twice.
+// Caller MUST have classified raw as KindCloudImage.
 func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName string, raw []byte, force bool) error {
 	localName = cmp.Or(localName, name)
 	if !force {

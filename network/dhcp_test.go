@@ -59,7 +59,6 @@ func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
 	}
 }
 
-// newTestParser writes data to a temp leases.json and returns a parser for it.
 func newTestParser(t *testing.T, data string) *LeaseParser {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "leases.json")

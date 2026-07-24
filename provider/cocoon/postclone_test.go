@@ -278,9 +278,7 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 }
 
 func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
-	// execErr=context.Canceled simulates the inner Exec returning canceled
-	// after lifecycleCtx fires; pre-cancel the request ctx so loopCtx exits
-	// after a single iteration.
+	// execErr=context.Canceled simulates Exec canceled after lifecycleCtx fires; the pre-canceled request ctx makes loopCtx exit after one iteration.
 	rt := &fakeRuntime{execErr: context.Canceled}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -352,16 +350,7 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	}
 }
 
-type failingSACDialer struct{}
-
-func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
-	return nil, errors.New("simulated SAC dial failure")
-}
-
-// TestCreatePodWindowsClonedRunsSACAfterPostCloneExec locks the ordering fix: a
-// cloned Windows pod's post-clone exec must complete before the SAC static-IP
-// write starts. Waits on dedicated signals, not p.Close(), which cancels the
-// goroutine's context and would otherwise race its own exec/dial calls.
+// TestCreatePodWindowsClonedRunsSACAfterPostCloneExec locks exec-before-SAC ordering; it waits on dedicated signals because p.Close() would cancel the goroutine's context and race its exec/dial calls.
 func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
@@ -442,6 +431,12 @@ func waitOrFatal(t *testing.T, ch <-chan struct{}, what string) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", what)
 	}
+}
+
+type failingSACDialer struct{}
+
+func (failingSACDialer) Dial(context.Context, string) (guest.Session, error) {
+	return nil, errors.New("simulated SAC dial failure")
 }
 
 type orderRecordingSACDialer struct {

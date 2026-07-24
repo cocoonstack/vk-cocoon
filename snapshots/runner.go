@@ -10,7 +10,6 @@ import (
 
 var _ snapshot.CocoonRunner = runnerAdapter{}
 
-// runnerAdapter wraps vm.Runtime to satisfy snapshot.CocoonRunner.
 type runnerAdapter struct {
 	Runtime vm.Runtime
 }

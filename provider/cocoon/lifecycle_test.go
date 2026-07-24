@@ -548,10 +548,7 @@ func TestForgetPodDropsLifecycleState(t *testing.T) {
 	}
 }
 
-// Regression: a bare UpdatePod hands trackPod a framework pod snapshot still
-// carrying lifecycle-state=creating after vk advanced to ready out-of-band.
-// trackPod must re-assert the authoritative intent, else the framework syncs the
-// stale annotation back to the apiserver and strands a healthy VM at creating.
+// Regression: trackPod must re-assert the authoritative intent, else the framework syncs a stale creating annotation back to the apiserver and strands a healthy VM.
 func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 	t.Parallel()
 

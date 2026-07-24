@@ -38,8 +38,7 @@ const (
 	hibernateRollbackTimeout = 30 * time.Second
 )
 
-// UpdatePod handles hibernate/wake transitions; other spec changes are no-ops
-// to avoid echoing the patched pod back as another UpdatePod.
+// Non-hibernate spec changes stay no-ops: patching the pod re-enters UpdatePod.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
@@ -378,18 +377,6 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 	return nil
 }
 
-// lastNonEmptyLine returns the last non-blank line of s, trimmed. ipconfig
-// prints a banner first and the actual error last, so the tail is the signal.
-func lastNonEmptyLine(s string) string {
-	last := ""
-	for line := range strings.SplitSeq(s, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			last = trimmed
-		}
-	}
-	return last
-}
-
 // resolveWakeSource returns the clone source name and its snapshot metadata —
 // the local snapshot when present, else pulled from the registry.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, *vm.Snapshot, error) {
@@ -434,6 +421,18 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
+// lastNonEmptyLine returns the last non-blank line of s, trimmed. ipconfig
+// prints a banner first and the actual error last, so the tail is the signal.
+func lastNonEmptyLine(s string) string {
+	last := ""
+	for line := range strings.SplitSeq(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			last = trimmed
+		}
+	}
+	return last
 }
 
 // shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same

@@ -13,7 +13,6 @@ const (
 	labelResult = "result"
 )
 
-// Prometheus collectors exported for registration in the global registry.
 var (
 	PodLifecycleTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

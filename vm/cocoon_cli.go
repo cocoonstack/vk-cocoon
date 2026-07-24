@@ -227,8 +227,7 @@ func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadClo
 
 // SnapshotSave runs `cocoon snapshot save`, handling "already exists" idempotently.
 // The v-k workqueue retries UpdatePod rapidly, and a crashed hibernate can leave
-// a stale snapshot that blocks every retry. When "already exists" is detected,
-// we rm the stale snapshot and re-issue save.
+// a stale snapshot that blocks every retry.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
 	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err == nil {
@@ -386,7 +385,6 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // path comes from operator config, not untrusted input
 }
 
-// runJSON runs cocoon and returns stdout as raw JSON.
 func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := c.command(ctx, args...)
 	var stdout, stderr bytes.Buffer
@@ -483,12 +481,10 @@ func parseVMFromStatusJSON(data []byte) VM {
 	return *inspectJSONToVM(d)
 }
 
-// cocoonCmdError formats a consistent error message for cocoon subprocess failures.
 func cocoonCmdError(op, ref string, err error, output []byte) error {
 	return fmt.Errorf("cocoon %s %s: %w (output: %s)", op, ref, err, strings.TrimSpace(string(output)))
 }
 
-// cocoonWait wraps cmd.Wait with a labeled error for streaming subcommands.
 func cocoonWait(cmd *exec.Cmd, op string) func() error {
 	return func() error {
 		if err := cmd.Wait(); err != nil {

@@ -181,7 +181,6 @@ func (p *Provider) indexOrphanByName(v *vm.VM) {
 	p.mu.Unlock()
 }
 
-// podItems returns the Items slice from a PodList, or nil if the list is nil.
 func podItems(list *corev1.PodList) []corev1.Pod {
 	if list == nil {
 		return nil

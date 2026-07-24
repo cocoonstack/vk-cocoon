@@ -122,11 +122,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-// markReadyAfterIP defers lifecycle-state=ready until the clone's DHCP lease lands,
-// the same contract the wake path enforces. ready is the signal vm-service reads the
-// pod IP on, but the post-clone exec runs over vsock and can finish first — marking
-// ready then would promise an IP resolveVMIP can't yet return. On timeout mark
-// failed, never ready-without-IP.
+// markReadyAfterIP defers ready until the clone's DHCP lease lands, because ready promises vm-service an IP resolveVMIP can return; on timeout mark failed, never ready-without-IP.
 func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
 	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
@@ -237,8 +233,7 @@ func (p *Provider) willRunSAC(spec meta.VMSpec, v *vm.VM) bool {
 	return slices.ContainsFunc(v.NetworkConfigs, isStaticNIC)
 }
 
-// applyWindowsStaticIP sets static IPs via SAC. ran=true only when SAC
-// actually executed, so the caller can avoid counting skips as successes.
+// applyWindowsStaticIP reports ran=true only when SAC actually executed, so callers do not count skips as successes.
 func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) (bool, error) {
 	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
 		return false, nil

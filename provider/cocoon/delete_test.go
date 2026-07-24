@@ -6,11 +6,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// TestDeletePodForgottenVMRemovesLocalSnapshots locks the GC fix: when the
-// operator deletes a pod whose VM is already gone (hibernate() removed +
-// forgot it), DeletePod must still remove the local clone-source and fork
-// snapshots keyed by the pod's VM name, or they leak on disk forever and a
-// later restore can prefer stale local state over the registry tag.
+// TestDeletePodForgottenVMRemovesLocalSnapshots locks the GC fix: deleting a pod whose VM was already forgotten must still remove its local snapshots.
 func TestDeletePodForgottenVMRemovesLocalSnapshots(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)

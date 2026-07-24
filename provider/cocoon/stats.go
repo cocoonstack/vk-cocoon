@@ -29,8 +29,7 @@ type vmSnapshot struct {
 	VMName     string
 }
 
-// GetStatsSummary returns a kubelet-compatible stats summary with real
-// resource usage. metrics-server and kubectl top consume this endpoint.
+// metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
 	nodeCPU, nodeMemory := readNodeUsage()
@@ -63,7 +62,6 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 	}, nil
 }
 
-// GetMetricsResource returns kubelet /metrics/resource prometheus metrics.
 func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	nowMs := time.Now().UnixMilli()
 

@@ -15,7 +15,6 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
-// defaultReservePercent and defaultMaxPods tune node capacity reporting.
 const (
 	defaultReservePercent = 20
 	defaultMaxPods        = 256
@@ -97,7 +96,6 @@ func StorageBytes() (total, available int64) {
 	return statTotalBytes(stat), statAvailBytes(stat)
 }
 
-// reserveQuantity returns q * (100 - pct) / 100, rounding down.
 func reserveQuantity(q resource.Quantity, pct int) resource.Quantity {
 	v := q.Value()
 	alloc := v * int64(100-pct) / 100

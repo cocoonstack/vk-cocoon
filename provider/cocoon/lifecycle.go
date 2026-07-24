@@ -34,8 +34,7 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	}
 }
 
-// applyLifecycleLocked is the markLifecycleState body without the lock;
-// caller holds p.mu and flushes the returned status outside the lock when applied.
+// applyLifecycleLocked requires p.mu held; the caller flushes the returned status outside the lock when applied.
 func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
@@ -56,8 +55,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 			cur.State, cur.ObservedGeneration)
 		return status, false
 	}
-	// Same-gen Failed is sticky — closes the lifecycleAlreadyFailed TOCTOU.
-	// Creating/Hibernating mark the start of a new attempt, so they may clear it.
+	// Same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&

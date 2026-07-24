@@ -153,7 +153,6 @@ func (p *Provider) Close() {
 	}
 }
 
-// GetPod returns a deep copy of the stored pod.
 func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -164,7 +163,6 @@ func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Po
 	return pod.DeepCopy(), nil
 }
 
-// GetPods returns every pod the provider owns.
 func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -437,7 +435,6 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		return
 	}
 
-	// Double-check: inspect the VM via cocoon CLI with a short inline retry.
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):

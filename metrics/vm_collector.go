@@ -6,10 +6,13 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
+// CollectFunc returns the live VM and node stats for a single scrape.
+type CollectFunc func() ([]provider.VMStats, provider.NodeStats)
+
 // VMCollector is a prometheus.Collector that reads live VM and node
 // stats from a provider callback on each scrape.
 type VMCollector struct {
-	collectFn func() ([]provider.VMStats, provider.NodeStats)
+	collectFn CollectFunc
 
 	vmCPUDesc     *prometheus.Desc
 	vmMemDesc     *prometheus.Desc
@@ -23,7 +26,7 @@ type VMCollector struct {
 }
 
 // NewVMCollector creates a collector. collectFn is called on every scrape.
-func NewVMCollector(collectFn func() ([]provider.VMStats, provider.NodeStats)) *VMCollector {
+func NewVMCollector(collectFn CollectFunc) *VMCollector {
 	labels := []string{"vm", "pod", "namespace", "backend"}
 	name := func(n string) string { return prometheus.BuildFQName(metricNamespace, metricSubsystem, n) }
 	return &VMCollector{

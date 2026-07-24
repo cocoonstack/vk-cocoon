@@ -27,7 +27,6 @@ import (
 // individual caller, so a stalled registry stream needs a deadline of its own.
 const importDetachTimeout = 30 * time.Minute
 
-// CreatePod admits a pod by pulling its snapshot/image and creating the VM.
 func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.CreatePod")
 	logger.Infof(ctx, "create pod %s/%s", pod.Namespace, pod.Name)
@@ -293,21 +292,6 @@ func (p *Provider) detachedImportContext() (context.Context, context.CancelFunc)
 	return context.WithTimeout(p.lifecycleCtx, importDetachTimeout)
 }
 
-// awaitFlight waits on a singleflight result or the caller's cancellation,
-// whichever comes first; a canceled caller abandons the flight, which keeps
-// running for its remaining waiters.
-func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
-	select {
-	case res := <-ch:
-		if res.Err != nil {
-			return zero, res.Err
-		}
-		return res.Val.(T), nil
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	}
-}
-
 // ensureRunImage materializes the base image locally and returns the ref
 // `cocoon vm run` should be invoked with. A cloud-image artifact is imported
 // into the local store and booted from there (repo:tag), not the registry.
@@ -479,6 +463,21 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	p.mu.Lock()
 	pod.Status = *status
 	p.mu.Unlock()
+}
+
+// awaitFlight waits on a singleflight result or the caller's cancellation,
+// whichever comes first; a canceled caller abandons the flight, which keeps
+// running for its remaining waiters.
+func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return zero, res.Err
+		}
+		return res.Val.(T), nil
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
 }
 
 // parseCloneFromDirAnnotation returns the validated absolute, canonical

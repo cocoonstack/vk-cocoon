@@ -194,14 +194,12 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(n)
 	names := make([]string, n)
 	errs := make([]error, n)
 	for i := range n {
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			names[i], errs[i] = p.ensureForkSnapshot(t.Context(), "vk-ns-demo-0")
-		}(i)
+		})
 	}
 	<-entered // leader is parked in SnapshotSave; release it and let followers dedup or reuse
 	close(release)
@@ -1353,7 +1351,6 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	// annotation patch failed, so the pod has no VMID yet the VM is live.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
-	// No VMRuntime applied.
 
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
@@ -1406,7 +1403,6 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
 		t.Errorf("hibernated pod should be tracked: %v", err)
 	}
-	// No VM should be associated.
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Errorf("hibernated pod should have no VM, got %+v", got)
 	}
@@ -1691,6 +1687,11 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	}
 }
 
+type fakeInspectStep struct {
+	vm  *vm.VM
+	err error
+}
+
 type fakeRuntime struct {
 	cloned        *vm.CloneOptions
 	ran           *vm.RunOptions
@@ -1742,10 +1743,8 @@ type fakeRuntime struct {
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
 	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
-	onExec func()
-	// removeErr, when set, makes Remove fail with this error.
-	removeErr error
-	// snapshotSaveErr, when set, makes SnapshotSave fail with this error.
+	onExec          func()
+	removeErr       error
 	snapshotSaveErr error
 	// snapshotSaveHook runs at SnapshotSave entry so a test can hold it in-flight.
 	snapshotSaveHook func()
@@ -1756,11 +1755,6 @@ type fakeRuntime struct {
 	inspectMu  sync.Mutex
 	inspectSeq []fakeInspectStep
 	inspectN   int
-}
-
-type fakeInspectStep struct {
-	vm  *vm.VM
-	err error
 }
 
 func (f *fakeRuntime) Clone(_ context.Context, opts vm.CloneOptions) (*vm.VM, error) {
@@ -1833,15 +1827,6 @@ func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
 	f.snapshotSaveCount++
 	f.registerSnapshot(name)
 	return nil
-}
-
-func (f *fakeRuntime) registerSnapshot(name string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.snapshots == nil {
-		f.snapshots = map[string]*vm.Snapshot{}
-	}
-	f.snapshots[name] = &vm.Snapshot{Name: name}
 }
 
 func (f *fakeRuntime) SnapshotRemoveIfExists(_ context.Context, name string) error {
@@ -2006,6 +1991,15 @@ func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) 
 	ch := make(chan vm.VMEvent)
 	close(ch)
 	return ch, nil
+}
+
+func (f *fakeRuntime) registerSnapshot(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.snapshots == nil {
+		f.snapshots = map[string]*vm.Snapshot{}
+	}
+	f.snapshots[name] = &vm.Snapshot{Name: name}
 }
 
 type nopWriteCloser struct{}

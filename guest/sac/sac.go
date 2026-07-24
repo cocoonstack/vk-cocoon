@@ -38,9 +38,6 @@ type Dialer struct {
 	WaitReady time.Duration // total Dial budget: connect + SAC> prompt; 0 = 60s
 }
 
-// Dial connects to the SAC console at target (a Unix socket path),
-// waits for the SAC> prompt, and returns a ready Session. Connect and
-// prompt wait share one WaitReady budget.
 func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error) {
 	deadline := time.Now().Add(d.waitReady())
 	conn, err := dial(ctx, target, deadline)
@@ -110,7 +107,6 @@ func NetHasIP(output string, netNum int, ip string) bool {
 	})
 }
 
-// dial connects to the SAC socket, retrying until deadline.
 func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn, error) {
 	var lastErr error
 	for {
@@ -136,7 +132,6 @@ func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn,
 	}
 }
 
-// waitPrompt sends CR+LF and waits until the SAC> prompt appears.
 func waitPrompt(ctx context.Context, conn net.Conn, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	buf := make([]byte, readBufSize)
@@ -166,7 +161,6 @@ func waitPrompt(ctx context.Context, conn net.Conn, timeout time.Duration) error
 	}
 }
 
-// sacCommand sends a command and reads the response until SAC> appears.
 func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Duration) (string, error) {
 	drain(conn)
 

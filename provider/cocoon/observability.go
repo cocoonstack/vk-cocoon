@@ -15,8 +15,7 @@ const (
 	lifecycleMessageMaxBytes = 4096
 )
 
-// failOp records a terminal Pod failure: counter + Warning Event + Failed
-// annotation + log. op ∈ {create,update,delete}. Truncate AFTER prefix concat.
+// failOp records a terminal Pod failure; op is one of create, update, delete.
 func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op string, err error) {
 	metrics.PodLifecycleTotal.WithLabelValues(op, "failed", "").Inc()
 	msg := err.Error()

@@ -380,50 +380,6 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 	}
 }
 
-// newHibernateFixture builds a Provider+pod pre-loaded with VMID/IP
-// annotations, ready for hibernate-flow assertions.
-func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSLinux),
-	})
-	pod.Annotations[meta.AnnotationVMID] = vmID
-	pod.Annotations[meta.AnnotationIP] = ip
-	return p, pod
-}
-
-func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provider, *corev1.Pod, *vm.VM) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = &fakeRuntime{}
-	p.Probes = probes.NewManager(t.Context())
-	p.wakeFreshIPBudget = budget
-	p.wakeFreshIPInterval = interval
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSWindows),
-	})
-	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
-	p.trackPod(pod, v)
-	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
-	return p, pod, v
-}
-
-func execArgvs(rt *fakeRuntime) []string {
-	var out []string
-	for _, c := range rt.execCalls {
-		out = append(out, strings.Join(c.argv, " "))
-	}
-	return out
-}
-
 func TestHibernateReleasesLeaseBeforeNICDrop(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
@@ -684,7 +640,6 @@ func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
 }
 
 func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
-	// A lease landing while the renew exec blocks past the deadline must win over timeout.
 	p, pod, _ := newDropNICWakeFixture(t, 100*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
 	p.wakeRenewNudgeDelay = 20 * time.Millisecond
@@ -697,4 +652,46 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
 		t.Fatal("lease landed during the nudge exec; verdict must be success")
 	}
+}
+
+func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Probes = probes.NewManager(t.Context())
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSLinux),
+	})
+	pod.Annotations[meta.AnnotationVMID] = vmID
+	pod.Annotations[meta.AnnotationIP] = ip
+	return p, pod
+}
+
+func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provider, *corev1.Pod, *vm.VM) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	p.Probes = probes.NewManager(t.Context())
+	p.wakeFreshIPBudget = budget
+	p.wakeFreshIPInterval = interval
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
+	p.trackPod(pod, v)
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
+	return p, pod, v
+}
+
+func execArgvs(rt *fakeRuntime) []string {
+	var out []string
+	for _, c := range rt.execCalls {
+		out = append(out, strings.Join(c.argv, " "))
+	}
+	return out
 }

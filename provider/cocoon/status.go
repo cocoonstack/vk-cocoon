@@ -9,7 +9,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// GetPodStatus derives status from the VM record and latest probe result.
 func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
 	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {

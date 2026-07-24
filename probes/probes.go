@@ -181,7 +181,6 @@ func nextInitialInterval(d time.Duration) time.Duration {
 	return min(time.Duration(float64(d)*defaultInitialBackoffStep), defaultInitialBackoffMax)
 }
 
-// runProbe runs probe with a bounded 3s timeout.
 func runProbe(ctx context.Context, probe Probe) (bool, string) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

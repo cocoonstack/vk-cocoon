@@ -10,7 +10,6 @@ import (
 
 var _ cloudimg.BlobReader = blobReader{}
 
-// blobReader adapts a Registry to cloudimg.BlobReader.
 type blobReader struct {
 	registry oci.Registry
 	name     string
