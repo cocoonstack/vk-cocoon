@@ -251,8 +251,9 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.Clientset = opts.clientset
 	p.Recorder = opts.recorder
 	p.Runtime = runtime
-	p.Puller = &snapshots.Puller{Registry: registry, Runtime: runtime}
-	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime}
+	transfer := snapshots.TransferConfigFromEnv()
+	p.Puller = &snapshots.Puller{Registry: registry, Runtime: runtime, Transfer: transfer}
+	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime, Transfer: transfer}
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {
