@@ -35,6 +35,16 @@ var (
 		[]string{labelResult},
 	)
 
+	SnapshotVerifyTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "snapshot_verify_total",
+			Help:      "Local snapshot verification against the registry tag at wake: result=ok|stale|error.",
+		},
+		[]string{labelResult},
+	)
+
 	SnapshotSaveTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -230,6 +240,7 @@ func Register(reg prometheus.Registerer) {
 		SnapshotSaveTotal,
 		SnapshotPullTotal,
 		SnapshotPushTotal,
+		SnapshotVerifyTotal,
 		CloneFromDirTotal,
 		VMTableSize,
 		OrphanVMTotal,
