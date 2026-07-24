@@ -8,16 +8,26 @@ import (
 	"errors"
 	"fmt"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/cocoonstack/cocoon-common/cloudimg"
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/snapshot"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+// Two pullGate slots × pullBudgetMiB cap buffered v2 pulls at ~2 GiB node-wide
+// (the v2 reader is always on); v1 pulls stream with O(1) memory, ungated.
+const pullBudgetMiB = 1024
+
+var pullGate = semaphore.NewWeighted(2)
+
 // Puller streams a snapshot or cloud image from an OCI registry into the local cocoon runtime.
 type Puller struct {
 	Registry oci.Registry
 	Runtime  vm.Runtime
+	Transfer TransferConfig
 }
 
 // PullSnapshot fetches and imports a snapshot from the registry. localName defaults to name.
@@ -28,14 +38,24 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 	}
 	localName = cmp.Or(localName, name)
 
+	// Gate before opening the importer so a queued pull doesn't hold a cocoon subprocess.
+	if snapshotNeedsPullGate(raw) {
+		if err = pullGate.Acquire(ctx, 1); err != nil {
+			return err
+		}
+		defer pullGate.Release(1)
+	}
+
 	importer, wait, err := p.Runtime.SnapshotImport(ctx, localName)
 	if err != nil {
 		return fmt.Errorf("open cocoon snapshot import: %w", err)
 	}
 
 	if err := snapshot.Stream(ctx, raw, p.Registry, snapshot.StreamOptions{
-		Name:   name,
-		Writer: importer,
+		Name:            name,
+		Writer:          importer,
+		Concurrency:     p.Transfer.Concurrency,
+		MemoryBudgetMiB: pullBudgetMiB,
 	}); err != nil {
 		_ = importer.Close()
 		_ = wait()
@@ -57,7 +77,6 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 		case err == nil:
 			return nil
 		case errors.Is(err, vm.ErrImageNotFound):
-			// fall through to re-import
 		default:
 			return fmt.Errorf("inspect local image %s: %w", localName, err)
 		}
@@ -78,4 +97,14 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 		return fmt.Errorf("close importer: %w", err)
 	}
 	return wait()
+}
+
+func snapshotNeedsPullGate(raw []byte) bool {
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return m.ArtifactType == manifest.ArtifactTypeSnapshotV2 ||
+		m.MediaType == manifest.MediaTypeOCIIndex ||
+		m.MediaType == manifest.MediaTypeDockerIndex
 }
