@@ -2,7 +2,6 @@ package cocoon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/projecteru2/core/log"
@@ -22,9 +21,6 @@ import (
 // Unmatched VMs are handled per OrphanPolicy.
 func (p *Provider) StartupReconcile(ctx context.Context) error {
 	logger := log.WithFunc("Provider.StartupReconcile")
-	if p.Clientset == nil {
-		return errors.New("clientset is required for startup reconcile")
-	}
 
 	var (
 		pods *corev1.PodList

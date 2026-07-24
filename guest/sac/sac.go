@@ -133,32 +133,10 @@ func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn,
 }
 
 func waitPrompt(ctx context.Context, conn net.Conn, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	buf := make([]byte, readBufSize)
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return errors.New("timeout waiting for SAC> prompt")
-		}
-		_ = conn.SetWriteDeadline(time.Now().Add(defaultRWTimeout))
-		if _, err := conn.Write([]byte("\r\n")); err != nil {
-			return fmt.Errorf("write prompt probe: %w", err)
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(defaultRWTimeout))
-		n, err := conn.Read(buf)
-		if n > 0 && strings.Contains(string(buf[:n]), sacPrompt) {
-			return nil
-		}
-		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			return fmt.Errorf("read prompt: %w", err)
-		}
+	if _, err := readUntilPrompt(ctx, conn, timeout, "\r\n"); err != nil {
+		return fmt.Errorf("await SAC prompt: %w", err)
 	}
+	return nil
 }
 
 func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Duration) (string, error) {
@@ -168,7 +146,15 @@ func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Dur
 	if _, err := conn.Write([]byte(cmd + "\r\n")); err != nil {
 		return "", fmt.Errorf("write command %q: %w", cmd, err)
 	}
+	out, err := readUntilPrompt(ctx, conn, timeout, "")
+	if err != nil {
+		return out, fmt.Errorf("response to %q: %w", cmd, err)
+	}
+	return out, nil
+}
 
+// A non-empty probe is re-sent each iteration to wake a quiet console.
+func readUntilPrompt(ctx context.Context, conn net.Conn, timeout time.Duration, probe string) (string, error) {
 	var sb strings.Builder
 	buf := make([]byte, readBufSize)
 	deadline := time.Now().Add(timeout)
@@ -177,7 +163,13 @@ func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Dur
 			return sb.String(), err
 		}
 		if time.Now().After(deadline) {
-			return sb.String(), fmt.Errorf("timeout waiting for response to %q", cmd)
+			return sb.String(), errors.New("timeout waiting for SAC> prompt")
+		}
+		if probe != "" {
+			_ = conn.SetWriteDeadline(time.Now().Add(defaultRWTimeout))
+			if _, err := conn.Write([]byte(probe)); err != nil {
+				return sb.String(), fmt.Errorf("write prompt probe: %w", err)
+			}
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(defaultRWTimeout))
 		n, err := conn.Read(buf)
@@ -192,7 +184,7 @@ func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Dur
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
-			return sb.String(), fmt.Errorf("read response: %w", err)
+			return sb.String(), fmt.Errorf("read: %w", err)
 		}
 	}
 }

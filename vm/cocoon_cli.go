@@ -130,20 +130,12 @@ func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
 
 // ImageImport spawns `cocoon image import <name>` and returns its stdin
 // pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar.
-func (c *CocoonCLI) ImageImport(ctx context.Context, opts ImageImportOptions) (io.WriteCloser, func() error, error) {
-	if opts.Name == "" {
+func (c *CocoonCLI) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
+	if name == "" {
 		return nil, nil, errors.New("cocoon image import: name is empty")
 	}
-	cmd := c.command(ctx, "image", "import", opts.Name)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		return nil, nil, fmt.Errorf("start cocoon image import: %w", err)
-	}
-	return stdin, cocoonWait(cmd, "cocoon image import"), nil
+	cmd := c.command(ctx, "image", "import", name)
+	return startCmdPipe(cmd, cmd.StdinPipe, "cocoon image import")
 }
 
 // Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound.
@@ -262,34 +254,18 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 // SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe.
 // Stale snapshots at the same name are removed up-front for idempotency
 // (same retry-loop reasoning as SnapshotSave).
-func (c *CocoonCLI) SnapshotImport(ctx context.Context, opts ImportOptions) (io.WriteCloser, func() error, error) {
-	if err := c.SnapshotRemoveIfExists(ctx, opts.Name); err != nil {
+func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
+	if err := c.SnapshotRemoveIfExists(ctx, name); err != nil {
 		return nil, nil, err
 	}
-	cmd := c.command(ctx, "snapshot", "import", "--name", opts.Name)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		return nil, nil, fmt.Errorf("start cocoon snapshot import: %w", err)
-	}
-	return stdin, cocoonWait(cmd, "cocoon snapshot import"), nil
+	cmd := c.command(ctx, "snapshot", "import", "--name", name)
+	return startCmdPipe(cmd, cmd.StdinPipe, "cocoon snapshot import")
 }
 
 // SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdout.Close()
-		return nil, nil, fmt.Errorf("start cocoon snapshot export: %w", err)
-	}
-	return stdout, cocoonWait(cmd, "cocoon snapshot export"), nil
+	return startCmdPipe(cmd, cmd.StdoutPipe, "cocoon snapshot export")
 }
 
 // SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
@@ -498,6 +474,19 @@ func cocoonWait(cmd *exec.Cmd, op string) func() error {
 // stderr-embedded wrapped error produced by runJSON. Restricted to
 // VM-specific phrases so an unrelated binary/config "not found" stderr
 // cannot be promoted to an authoritative VMGone.
+func startCmdPipe[P io.Closer](cmd *exec.Cmd, pipe func() (P, error), op string) (P, func() error, error) {
+	var zero P
+	p, err := pipe()
+	if err != nil {
+		return zero, nil, fmt.Errorf("%s pipe: %w", op, err)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = p.Close()
+		return zero, nil, fmt.Errorf("start %s: %w", op, err)
+	}
+	return p, cocoonWait(cmd, op), nil
+}
+
 func isCocoonNotFound(err error) bool {
 	if err == nil {
 		return false

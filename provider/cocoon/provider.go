@@ -143,9 +143,7 @@ func NewProvider(ctx context.Context) *Provider {
 // Wait has returned.
 func (p *Provider) Close() {
 	p.mu.Lock()
-	if p.lifecycleStop != nil {
-		p.lifecycleStop()
-	}
+	p.lifecycleStop()
 	p.mu.Unlock()
 	p.recheckWG.Wait()
 	p.bgWG.Wait()
@@ -231,14 +229,10 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 	}
 	logger := log.WithFunc("Provider.reconcilePodStatuses")
 	for _, pod := range pods {
-		current := pod.DeepCopy()
-		if p.Clientset != nil {
-			var err error
-			current, err = p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-			if err != nil {
-				logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
-				continue
-			}
+		current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
+			continue
 		}
 		status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
 		if err != nil {
@@ -663,15 +657,13 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
-	if p.Clientset != nil {
-		if err := p.deletePodWithRetry(ctx, pod); err != nil {
-			// Leave in-memory state intact so the next VM event re-enters
-			// evictPod instead of stranding the pod half-detached.
-			logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
-				pod.Namespace, pod.Name)
-			metrics.PodEvictFailureTotal.Inc()
-			return
-		}
+	if err := p.deletePodWithRetry(ctx, pod); err != nil {
+		// Leave in-memory state intact so the next VM event re-enters
+		// evictPod instead of stranding the pod half-detached.
+		logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
+			pod.Namespace, pod.Name)
+		metrics.PodEvictFailureTotal.Inc()
+		return
 	}
 
 	p.mu.Lock()

@@ -1853,9 +1853,9 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 
 // SnapshotImport mirrors cocoon's contract: the name is registered only when
 // the import completes (wait), and the argv child dies with a canceled ctx.
-func (f *fakeRuntime) SnapshotImport(ctx context.Context, opts vm.ImportOptions) (io.WriteCloser, func() error, error) {
+func (f *fakeRuntime) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	f.mu.Lock()
-	f.snapshotImports = append(f.snapshotImports, opts.Name)
+	f.snapshotImports = append(f.snapshotImports, name)
 	hook := f.importHook
 	f.mu.Unlock()
 	if hook != nil {
@@ -1865,7 +1865,7 @@ func (f *fakeRuntime) SnapshotImport(ctx context.Context, opts vm.ImportOptions)
 		return nil, nil, err
 	}
 	wait := func() error {
-		f.registerSnapshot(opts.Name)
+		f.registerSnapshot(name)
 		return nil
 	}
 	return nopWriteCloser{}, wait, nil
@@ -1901,9 +1901,9 @@ func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
 
 // ImageImport mirrors SnapshotImport's contract minus the rm-first: the name
 // becomes visible to Image() only when the import completes (wait).
-func (f *fakeRuntime) ImageImport(ctx context.Context, opts vm.ImageImportOptions) (io.WriteCloser, func() error, error) {
+func (f *fakeRuntime) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	f.mu.Lock()
-	f.imageImports = append(f.imageImports, opts.Name)
+	f.imageImports = append(f.imageImports, name)
 	hook := f.importHook
 	f.mu.Unlock()
 	if hook != nil {
@@ -1918,7 +1918,7 @@ func (f *fakeRuntime) ImageImport(ctx context.Context, opts vm.ImageImportOption
 		if f.imagesPresent == nil {
 			f.imagesPresent = map[string]bool{}
 		}
-		f.imagesPresent[opts.Name] = true
+		f.imagesPresent[name] = true
 		return nil
 	}
 	return nopWriteCloser{}, wait, nil

@@ -28,7 +28,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 	}
 	localName = cmp.Or(localName, name)
 
-	importer, wait, err := p.Runtime.SnapshotImport(ctx, vm.ImportOptions{Name: localName})
+	importer, wait, err := p.Runtime.SnapshotImport(ctx, localName)
 	if err != nil {
 		return fmt.Errorf("open cocoon snapshot import: %w", err)
 	}
@@ -63,7 +63,7 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 		}
 	}
 
-	importer, wait, err := p.Runtime.ImageImport(ctx, vm.ImageImportOptions{Name: localName})
+	importer, wait, err := p.Runtime.ImageImport(ctx, localName)
 	if err != nil {
 		return fmt.Errorf("open cocoon image import: %w", err)
 	}
