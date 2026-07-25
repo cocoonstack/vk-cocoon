@@ -105,9 +105,9 @@ func TestBuildCloneArgs(t *testing.T) {
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-mm", "--restore-mode", "mmap", "snap-a"},
 		},
 		{
-			name: "restore-mode copy emits no flag",
+			name: "restore-mode copy is spelled out, not left to cocoon's mmap default",
 			opts: CloneOptions{From: "snap-a", To: "vm-cp", Backend: "cloud-hypervisor", RestoreMode: RestoreCopy},
-			want: []string{"vm", "clone", "--output", "json", "--name", "vm-cp", "snap-a"},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-cp", "--restore-mode", "copy", "snap-a"},
 		},
 		{
 			name: "empty backend treated as cloud-hypervisor for restore-mode",

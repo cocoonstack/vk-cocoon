@@ -383,12 +383,10 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
 	}
-	// FromDir forces --pull because the dir holds no base image layers.
 	if opts.Pull || opts.FromDir != "" {
 		args = append(args, "--pull")
 	}
-	// copy emits no flag, keeping the argv valid on cocoon builds predating --restore-mode.
-	if opts.RestoreMode != "" && opts.RestoreMode != RestoreCopy && opts.Backend != BackendFirecracker {
+	if opts.RestoreMode != "" && opts.Backend != BackendFirecracker {
 		args = append(args, "--restore-mode", string(opts.RestoreMode))
 	}
 	if opts.NICs != nil && opts.Backend != BackendFirecracker {
