@@ -383,14 +383,9 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
 	}
-	// FromDir forces --pull because the dir holds no base image layers.
 	if opts.Pull || opts.FromDir != "" {
 		args = append(args, "--pull")
 	}
-	// Always spell the mode out: cocoon defaults an absent flag to mmap for plain
-	// private-anon snapshots (cocoon#159/#163), so omitting it for copy silently
-	// inverted the Windows choice into the lazy restore it exists to avoid.
-	// Needs cocoon >= v0.5.1, the first release carrying --restore-mode.
 	if opts.RestoreMode != "" && opts.Backend != BackendFirecracker {
 		args = append(args, "--restore-mode", string(opts.RestoreMode))
 	}
