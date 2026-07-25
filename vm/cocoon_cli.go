@@ -387,8 +387,11 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.Pull || opts.FromDir != "" {
 		args = append(args, "--pull")
 	}
-	// copy emits no flag, keeping the argv valid on cocoon builds predating --restore-mode.
-	if opts.RestoreMode != "" && opts.RestoreMode != RestoreCopy && opts.Backend != BackendFirecracker {
+	// Always spell the mode out: cocoon defaults an absent flag to mmap for plain
+	// private-anon snapshots (cocoon#159/#163), so omitting it for copy silently
+	// inverted the Windows choice into the lazy restore it exists to avoid.
+	// Needs cocoon >= v0.5.1, the first release carrying --restore-mode.
+	if opts.RestoreMode != "" && opts.Backend != BackendFirecracker {
 		args = append(args, "--restore-mode", string(opts.RestoreMode))
 	}
 	if opts.NICs != nil && opts.Backend != BackendFirecracker {
