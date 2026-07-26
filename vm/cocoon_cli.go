@@ -135,7 +135,7 @@ func (c *CocoonCLI) ImageImport(ctx context.Context, name string) (io.WriteClose
 		return nil, nil, errors.New("cocoon image import: name is empty")
 	}
 	cmd := c.command(ctx, "image", "import", name)
-	return startCmdPipe(cmd, cmd.StdinPipe, "cocoon image import")
+	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon image import")
 }
 
 // Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound.
@@ -259,13 +259,13 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCl
 		return nil, nil, err
 	}
 	cmd := c.command(ctx, "snapshot", "import", "--name", name)
-	return startCmdPipe(cmd, cmd.StdinPipe, "cocoon snapshot import")
+	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon snapshot import")
 }
 
 // SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
-	return startCmdPipe(cmd, cmd.StdoutPipe, "cocoon snapshot export")
+	return startCmdPipe(ctx, cmd, cmd.StdoutPipe, "cocoon snapshot export")
 }
 
 // SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
@@ -472,13 +472,15 @@ func cocoonWait(cmd *exec.Cmd, op string) func() error {
 // stderr-embedded wrapped error produced by runJSON. Restricted to
 // VM-specific phrases so an unrelated binary/config "not found" stderr
 // cannot be promoted to an authoritative VMGone.
-func startCmdPipe[P io.Closer](cmd *exec.Cmd, pipe func() (P, error), op string) (P, func() error, error) {
+func startCmdPipe[P io.Closer](ctx context.Context, cmd *exec.Cmd, pipe func() (P, error), op string) (P, func() error, error) {
 	var zero P
 	p, err := pipe()
 	if err != nil {
 		return zero, nil, fmt.Errorf("%s pipe: %w", op, err)
 	}
-	widenPipe(p)
+	if err := widenPipe(p); err != nil {
+		log.WithFunc("vm.startCmdPipe").Debugf(ctx, "widen %s pipe: %v", op, err)
+	}
 	if err := cmd.Start(); err != nil {
 		_ = p.Close()
 		return zero, nil, fmt.Errorf("start %s: %w", op, err)

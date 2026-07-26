@@ -2,4 +2,4 @@
 
 package vm
 
-func widenPipe(any) {}
+func widenPipe(any) error { return nil }
