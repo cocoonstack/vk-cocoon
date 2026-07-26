@@ -17,9 +17,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Two pullGate slots × pullBudgetMiB cap buffered v2 pulls at ~2 GiB node-wide
-// (the v2 reader is always on); v1 pulls stream with O(1) memory, ungated.
-const pullBudgetMiB = 1024
+const defaultPullBudgetMiB = 2048
 
 var pullGate = semaphore.NewWeighted(2)
 
@@ -55,7 +53,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 		Name:            name,
 		Writer:          importer,
 		Concurrency:     p.Transfer.Concurrency,
-		MemoryBudgetMiB: pullBudgetMiB,
+		MemoryBudgetMiB: cmp.Or(p.Transfer.PullBudgetMiB, defaultPullBudgetMiB),
 	}); err != nil {
 		_ = importer.Close()
 		_ = wait()

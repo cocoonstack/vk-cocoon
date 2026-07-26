@@ -27,3 +27,12 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `VK_NODE_STORAGE` | auto-detected | Override storage capacity (auto: `statfs` on `COCOON_ROOT_DIR`). |
 | `VK_NODE_HUGEPAGES` | auto-detected | Override hugepages capacity (auto: `/proc/meminfo`; keyed by the host's default page size). |
 | `VK_NODE_PODS` | `256` | Maximum pod count. |
+| `SNAPSHOT_ZSTD_LEVEL` | `0` | Snapshot writer zstd level; `0` keeps compression disabled. |
+| `SNAPSHOT_CHUNK_SIZE_MIB` | `0` | Snapshot writer chunk size; `0` keeps chunking disabled. |
+| `SNAPSHOT_TRANSFER_CONCURRENCY` | `8` | Parallel chunk transfers for encoded snapshots. |
+| `SNAPSHOT_MEMORY_BUDGET_MIB` | `9216` | Push pipeline buffer cap per active push. |
+| `SNAPSHOT_PULL_BUDGET_MIB` | `2048` | Pull prefetch buffer cap per active pull. |
+
+Keep zstd and chunking disabled until every fleet reader and snapshot tool
+supports the v2 snapshot format. The push and pull memory budgets can be tuned
+independently without changing the writer format.
