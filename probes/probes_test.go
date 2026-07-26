@@ -77,13 +77,7 @@ func TestForgetCancelsAgent(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
 
-	stopped := make(chan struct{})
-	probe := func(ctx context.Context) (bool, string) {
-		select {
-		case <-ctx.Done():
-			close(stopped)
-		default:
-		}
+	probe := func(_ context.Context) (bool, string) {
 		return false, "pending"
 	}
 

@@ -9,6 +9,7 @@ package vm
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,10 +48,7 @@ type CocoonCLI struct {
 
 // NewCocoonCLI returns a CocoonCLI; empty binary → defaultCocoonBinary. For non-root setups, point binary at a wrapper or setcap the cocoon binary.
 func NewCocoonCLI(binary string) *CocoonCLI {
-	if binary == "" {
-		binary = defaultCocoonBinary
-	}
-	return &CocoonCLI{binary: binary}
+	return &CocoonCLI{binary: cmp.Or(binary, defaultCocoonBinary)}
 }
 
 // Clone runs `cocoon vm clone --output json` and parses the emitted VM
@@ -177,8 +175,7 @@ func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env ma
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return utilexec.CodeExitError{Err: fmt.Errorf("cocoon vm exec %s: exit %d", vmID, exitErr.ExitCode()), Code: exitErr.ExitCode()}
 		}
 		return fmt.Errorf("cocoon vm exec %s: %w", vmID, err)
@@ -468,10 +465,6 @@ func cocoonWait(cmd *exec.Cmd, op string) func() error {
 	}
 }
 
-// isCocoonNotFound detects cocoon's VM-not-found signal inside the
-// stderr-embedded wrapped error produced by runJSON. Restricted to
-// VM-specific phrases so an unrelated binary/config "not found" stderr
-// cannot be promoted to an authoritative VMGone.
 func startCmdPipe[P io.Closer](ctx context.Context, cmd *exec.Cmd, pipe func() (P, error), op string) (P, func() error, error) {
 	var zero P
 	p, err := pipe()
@@ -488,6 +481,10 @@ func startCmdPipe[P io.Closer](ctx context.Context, cmd *exec.Cmd, pipe func() (
 	return p, cocoonWait(cmd, op), nil
 }
 
+// isCocoonNotFound detects cocoon's VM-not-found signal inside the
+// stderr-embedded wrapped error produced by runJSON. Restricted to
+// VM-specific phrases so an unrelated binary/config "not found" stderr
+// cannot be promoted to an authoritative VMGone.
 func isCocoonNotFound(err error) bool {
 	if err == nil {
 		return false

@@ -15,7 +15,6 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/guest"
-	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -210,7 +209,6 @@ func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.GuestSAC = failingSACDialer{}
 
 	pod := newPodWithSpec(meta.VMSpec{

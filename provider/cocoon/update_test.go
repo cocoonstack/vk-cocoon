@@ -64,7 +64,6 @@ func TestHibernateDropsNICOnCHWindows(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -102,7 +101,6 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 			rt := &fakeRuntime{}
 			p := newTestProvider(t)
 			p.Runtime = rt
-			p.Probes = probes.NewManager(t.Context())
 
 			pod := newPodWithSpec(meta.VMSpec{
 				VMName:  "vk-ns-demo-0",
@@ -187,7 +185,6 @@ func TestHibernateFailsOnNICDropUnsupported(t *testing.T) {
 	rt := &fakeRuntime{netResizeErr: vm.ErrNetResizeUnsupported}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -216,7 +213,6 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	rt := &fakeRuntime{netResizeErr: dropErr}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -384,7 +380,6 @@ func TestHibernateReleasesLeaseBeforeNICDrop(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -408,7 +403,6 @@ func TestHibernateReleaseFailureDoesNotBlock(t *testing.T) {
 	rt := &fakeRuntime{execErr: errors.New("agent down")}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -427,7 +421,6 @@ func TestHibernateSkipsReleaseOnNonDropNIC(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -446,7 +439,6 @@ func TestHibernateRollbackRenews(t *testing.T) {
 	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
@@ -470,7 +462,6 @@ func TestHibernateRenewsWhenNICDropFails(t *testing.T) {
 	rt := &fakeRuntime{netResizeErr: errors.New("resize boom")}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
@@ -494,7 +485,6 @@ func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
 	rt := &fakeRuntime{execErr: errors.New("vsock timeout"), netResizeErr: errors.New("resize boom")}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
@@ -515,7 +505,6 @@ func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -540,7 +529,6 @@ func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
 	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), snapshotSaveHook: cancel}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
@@ -619,7 +607,6 @@ func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	p.wakeFreshIPBudget = 120 * time.Millisecond
 	p.wakeFreshIPInterval = 10 * time.Millisecond
 	p.wakeRenewNudgeDelay = 20 * time.Millisecond
@@ -658,7 +645,6 @@ func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provi
 	t.Helper()
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
@@ -673,7 +659,6 @@ func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provi
 	t.Helper()
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
-	p.Probes = probes.NewManager(t.Context())
 	p.wakeFreshIPBudget = budget
 	p.wakeFreshIPInterval = interval
 

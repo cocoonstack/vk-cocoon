@@ -369,7 +369,7 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 		if ip == "" {
 			return false, "waiting for dhcp lease"
 		}
-		if port := p.probePort(ctx, namespace, name); port != "" {
+		if port := p.probePort(namespace, name); port != "" {
 			return p.probeTCP(ctx, ip, port)
 		}
 		if err := p.Pinger.Ping(ctx, ip); err != nil {
@@ -379,9 +379,13 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 	}
 }
 
-func (p *Provider) probePort(ctx context.Context, namespace, name string) string {
-	pod, _ := p.GetPod(ctx, namespace, name)
-	if pod == nil {
+// probePort reads the annotation under RLock without GetPod's full
+// DeepCopy — this runs on every probe tick.
+func (p *Provider) probePort(namespace, name string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	pod, ok := p.pods[meta.PodKey(namespace, name)]
+	if !ok {
 		return ""
 	}
 	return pod.Annotations[meta.AnnotationProbePort]
@@ -408,13 +412,11 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 				return
 			}
 			logger.Errorf(ctx, err, "vm watcher start failed, retrying in %s", backoff)
-			select {
-			case <-ctx.Done():
+			if !commonk8s.SleepCtx(ctx, backoff) {
 				return
-			case <-time.After(backoff):
-				backoff = min(backoff*2, 60*time.Second)
-				continue
 			}
+			backoff = min(backoff*2, 60*time.Second)
+			continue
 		}
 		backoff = time.Second
 		logger.Info(ctx, "vm event watcher started")
@@ -433,10 +435,8 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 		}
 		logger.Warn(ctx, "vm event watcher exited, restarting in 2s")
 		p.gcStaleRestarts()
-		select {
-		case <-ctx.Done():
+		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
 			return
-		case <-time.After(2 * time.Second):
 		}
 	}
 }

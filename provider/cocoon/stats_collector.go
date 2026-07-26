@@ -1,16 +1,8 @@
 package cocoon
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
-)
-
-const (
-	runDirCH = "cloudhypervisor"
-	runDirFC = "firecracker"
 )
 
 // CollectVMStats returns per-VM and node-level stats for the Prometheus
@@ -31,7 +23,7 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 			Backend:    s.Backend,
 			CPUSeconds: readProcessCPUSeconds(s.PID),
 			MemoryRSS:  readProcessMemoryWorkingSet(s.PID),
-			DiskCOW:    readCOWSize(s.ID, s.Hypervisor),
+			DiskCOW:    vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID),
 			NetRxBytes: rxBytes,
 			NetTxBytes: txBytes,
 		})
@@ -44,36 +36,4 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 	node.StorageTotal, node.StorageAvailable = provider.StorageBytes()
 
 	return out, node
-}
-
-// readCOWSize returns the actual disk usage of a VM's writable overlay.
-func readCOWSize(vmID, hypervisor string) int64 {
-	dir := hypervisorRunDir(hypervisor)
-	for _, name := range cowFileNames(dir) {
-		if fi, err := os.Stat(vmRunPath(dir, vmID, name)); err == nil {
-			return fi.Size()
-		}
-	}
-	return 0
-}
-
-// vmRunPath builds a path inside a VM's runtime directory, the layout cocoon writes on disk.
-func vmRunPath(runDir, vmID, file string) string {
-	return fmt.Sprintf("%s/run/%s/%s/%s", provider.CocoonRootDir(), runDir, vmID, file)
-}
-
-// hypervisorRunDir maps the inspect "hypervisor" field to the actual
-// run directory name (cocoon uses "cloudhypervisor" without a hyphen).
-func hypervisorRunDir(hypervisor string) string {
-	if hypervisor == vm.BackendFirecracker {
-		return runDirFC
-	}
-	return runDirCH
-}
-
-func cowFileNames(dir string) []string {
-	if dir == runDirFC {
-		return []string{"cow.raw"}
-	}
-	return []string{"overlay.qcow2", "cow.raw"}
 }

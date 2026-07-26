@@ -32,12 +32,12 @@ type vmSnapshot struct {
 // metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
-	nodeCPU, nodeMemory := readNodeUsage()
+	nodeCPU, nodeMemory := cpuMemStats(readNodeCPUSeconds(), readNodeMemoryWorkingSet())
 
 	snapshots := p.snapshotTrackedVMs()
 	podStats := make([]statsv1alpha1.PodStats, 0, len(snapshots))
 	for _, s := range snapshots {
-		cpu, mem := readProcessUsage(s.PID)
+		cpu, mem := cpuMemStats(readProcessCPUSeconds(s.PID), readProcessMemoryWorkingSet(s.PID))
 		ps := statsv1alpha1.PodStats{
 			PodRef:    statsv1alpha1.PodReference{Name: s.PodName, Namespace: s.Namespace},
 			StartTime: now,
@@ -160,10 +160,6 @@ func splitPodKey(key string) (string, string) {
 	return ns, name
 }
 
-func readNodeUsage() (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	return cpuMemStats(readNodeCPUSeconds(), readNodeMemoryWorkingSet())
-}
-
 func readNodeCPUSeconds() float64 {
 	f, err := os.Open("/proc/stat")
 	if err != nil {
@@ -192,10 +188,6 @@ func readNodeMemoryWorkingSet() int64 {
 		return 0
 	}
 	return (fields["MemTotal"] - fields["MemAvailable"]) * 1024
-}
-
-func readProcessUsage(pid int) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	return cpuMemStats(readProcessCPUSeconds(pid), readProcessMemoryWorkingSet(pid))
 }
 
 // cpuMemStats packs raw CPU seconds and working-set bytes into the

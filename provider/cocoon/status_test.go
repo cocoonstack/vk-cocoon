@@ -18,7 +18,6 @@ func TestReconcilePodStatusesRepublishesReadinessDrift(t *testing.T) {
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
 
@@ -47,7 +46,6 @@ func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.Probes = probes.NewManager(t.Context())
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
 
