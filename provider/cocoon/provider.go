@@ -285,9 +285,7 @@ func (p *Provider) dropVMLocked(key string) {
 		return
 	}
 	delete(p.lastRestart, v.ID)
-	if v.Name != "" {
-		delete(p.vmsByName, v.Name)
-	}
+	delete(p.vmsByName, v.Name)
 	delete(p.vmsByPod, key)
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
@@ -678,19 +676,17 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 	}
 
 	pod.Status.Phase = corev1.PodFailed
-	if reason != "" {
-		pod.Status.ContainerStatuses = []corev1.ContainerStatus{
-			{
-				Name: containerName,
-				State: corev1.ContainerState{
-					Terminated: &corev1.ContainerStateTerminated{
-						ExitCode: 1,
-						Reason:   reason,
-						Message:  message,
-					},
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{
+			Name: containerName,
+			State: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{
+					ExitCode: 1,
+					Reason:   reason,
+					Message:  message,
 				},
 			},
-		}
+		},
 	}
 	p.notify(pod)
 }
@@ -735,10 +731,8 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 // annotations and patches the API server. Used by hibernate and startup
 // reconcile to clear stale runtime state.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
-	if pod.Annotations != nil {
-		delete(pod.Annotations, meta.AnnotationVMID)
-		delete(pod.Annotations, meta.AnnotationIP)
-	}
+	delete(pod.Annotations, meta.AnnotationVMID)
+	delete(pod.Annotations, meta.AnnotationIP)
 	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
 		meta.AnnotationVMID: nil,
 		meta.AnnotationIP:   nil,

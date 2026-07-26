@@ -264,11 +264,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 
 // imagePresent reports whether an image with this digest is in the local store under any name.
 func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
-	if digest == "" {
-		return false
-	}
-	_, err := p.Runtime.Image(ctx, digest)
-	return err == nil
+	return digest != "" && p.Runtime.Image(ctx, digest) == nil
 }
 
 // ensureSnapshotBaseImage materializes a snapshot's OCI-ref base image before a

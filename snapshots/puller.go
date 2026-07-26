@@ -71,7 +71,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName string, raw []byte, force bool) error {
 	localName = cmp.Or(localName, name)
 	if !force {
-		switch _, err := p.Runtime.Image(ctx, localName); {
+		switch err := p.Runtime.Image(ctx, localName); {
 		case err == nil:
 			return nil
 		case errors.Is(err, vm.ErrImageNotFound):

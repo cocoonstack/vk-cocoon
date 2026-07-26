@@ -33,8 +33,6 @@ const (
 	// provider/cocoon can reuse it without importing CRD types.
 	BackendFirecracker = "firecracker"
 
-	netResizeUnsupportedMarker = "backend does not support net resize"
-
 	// maxEventLineBytes bounds one `cocoon vm status --event` JSON line.
 	maxEventLineBytes = 1 << 20
 )
@@ -111,19 +109,20 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 	return nil
 }
 
-// Image runs `cocoon image inspect`; "not found in any backend" maps to ErrImageNotFound.
-func (c *CocoonCLI) Image(ctx context.Context, name string) (*Image, error) {
+// Image runs `cocoon image inspect` as a local-presence probe; "not found
+// in any backend" maps to ErrImageNotFound.
+func (c *CocoonCLI) Image(ctx context.Context, name string) error {
 	if name == "" {
-		return nil, errors.New("cocoon image inspect: name is empty")
+		return errors.New("cocoon image inspect: name is empty")
 	}
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {
 		if strings.Contains(strings.ToLower(string(out)), "not found in any backend") {
-			return nil, fmt.Errorf("cocoon image inspect %s: %w", name, ErrImageNotFound)
+			return fmt.Errorf("cocoon image inspect %s: %w", name, ErrImageNotFound)
 		}
-		return nil, cocoonCmdError("image inspect", name, err, out)
+		return cocoonCmdError("image inspect", name, err, out)
 	}
-	return &Image{Name: name}, nil
+	return nil
 }
 
 // ImageImport spawns `cocoon image import <name>` and returns its stdin
@@ -293,9 +292,6 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {
-		if isNetResizeUnsupported(out) {
-			return cocoonCmdError("vm net", vmID, ErrNetResizeUnsupported, out)
-		}
 		return cocoonCmdError("vm net", vmID, err, out)
 	}
 	return nil
@@ -501,10 +497,6 @@ func isCocoonSnapshotNotFound(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "snapshot not found") ||
 		strings.Contains(s, "no such snapshot")
-}
-
-func isNetResizeUnsupported(out []byte) bool {
-	return strings.Contains(strings.ToLower(string(out)), netResizeUnsupportedMarker)
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.
