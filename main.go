@@ -196,8 +196,6 @@ func main() {
 
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
-	// Snapshot transfer is producer-CPU-bound for reasons the stage timings can't
-	// name; pprof on the node-local metrics port is the only way to see where.
 	metricsMux.HandleFunc("/debug/pprof/", pprof.Index)
 	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	metricsServer := commonhttpx.NewServer(metricsAddr, metricsMux)
