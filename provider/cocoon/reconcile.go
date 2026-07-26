@@ -169,7 +169,7 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 // indexOrphanByName exposes an orphan VM to vmByName so the next
 // CreatePod for its pod takes the adopt branch.
 func (p *Provider) indexOrphanByName(v *vm.VM) {
-	if v == nil || v.Name == "" {
+	if v.Name == "" {
 		return
 	}
 	p.mu.Lock()

@@ -31,9 +31,6 @@ var (
 
 	// ErrSnapshotNotFound is the sibling of ErrVMNotFound for snapshot inspect.
 	ErrSnapshotNotFound = errors.New("snapshot not found")
-
-	// ErrNetResizeUnsupported signals the backend (firecracker) has no NetResize.
-	ErrNetResizeUnsupported = errors.New("net resize unsupported by backend")
 )
 
 // NetworkInfo holds CNI-assigned addressing for a NIC. Nil for DHCP networks.
@@ -121,11 +118,6 @@ type RunOptions struct {
 	NoDirectIO bool
 }
 
-// Image is the subset of `cocoon image inspect` callers need for idempotency checks.
-type Image struct {
-	Name string
-}
-
 // VMEvent is a single event from the cocoon event stream.
 type VMEvent struct {
 	Event string `json:"event"` // ADDED, MODIFIED, DELETED
@@ -148,7 +140,9 @@ type Runtime interface {
 	SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string, force bool) error
-	Image(ctx context.Context, name string) (*Image, error)
+	// Image probes local presence via `cocoon image inspect`;
+	// absence is ErrImageNotFound.
+	Image(ctx context.Context, name string) error
 	ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 	// NetResize hot-resizes a live VM's NIC count.

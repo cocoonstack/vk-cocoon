@@ -181,33 +181,6 @@ func TestHibernateKeepsVMIDOnSaveFailure(t *testing.T) {
 	}
 }
 
-func TestHibernateFailsOnNICDropUnsupported(t *testing.T) {
-	rt := &fakeRuntime{netResizeErr: vm.ErrNetResizeUnsupported}
-	p := newTestProvider(t)
-	p.Runtime = rt
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
-		Backend: string(cocoonv1.BackendCloudHypervisor),
-		OS:      string(cocoonv1.OSWindows),
-	})
-	v := &vm.VM{ID: "vmid-2", Name: "vk-ns-demo-0"}
-
-	err := p.hibernate(t.Context(), pod, v)
-	if err == nil {
-		t.Fatalf("hibernate must fail when NIC drop is unsupported on CH+Windows")
-	}
-	if !errors.Is(err, vm.ErrNetResizeUnsupported) {
-		t.Errorf("error must wrap ErrNetResizeUnsupported, got %v", err)
-	}
-	if rt.savedSnapshot.vmID != "" {
-		t.Errorf("snapshot save must not run after NIC drop failure, got %q", rt.savedSnapshot.vmID)
-	}
-	if meta.ReadLifecycleState(pod) != meta.LifecycleStateFailed {
-		t.Errorf("lifecycle state = %q, want %q", meta.ReadLifecycleState(pod), meta.LifecycleStateFailed)
-	}
-}
-
 func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	dropErr := errors.New("transient")
 	rt := &fakeRuntime{netResizeErr: dropErr}

@@ -1848,14 +1848,14 @@ func (f *fakeRuntime) EnsureImage(_ context.Context, image string, force bool) e
 	return nil
 }
 
-func (f *fakeRuntime) Image(_ context.Context, name string) (*vm.Image, error) {
+func (f *fakeRuntime) Image(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.imageInspectCalls = append(f.imageInspectCalls, name)
 	if f.imagesPresent[name] {
-		return &vm.Image{Name: name}, nil
+		return nil
 	}
-	return nil, fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
+	return fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
 }
 
 // ImageImport mirrors SnapshotImport's contract minus the rm-first: the name
