@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/vk-cocoon/guest"
 )
 
@@ -124,10 +125,8 @@ func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn,
 			return conn, nil
 		}
 		lastErr = err
-		select {
-		case <-ctx.Done():
+		if !commonk8s.SleepCtx(ctx, retryInterval) {
 			return nil, ctx.Err()
-		case <-time.After(retryInterval):
 		}
 	}
 }
@@ -180,8 +179,7 @@ func readUntilPrompt(ctx context.Context, conn net.Conn, timeout time.Duration, 
 			}
 		}
 		if err != nil {
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 				continue
 			}
 			return sb.String(), fmt.Errorf("read: %w", err)

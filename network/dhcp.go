@@ -2,6 +2,7 @@
 package network
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,10 +36,7 @@ type LeaseParser struct {
 
 // NewLeaseParser returns a parser; empty path uses the default.
 func NewLeaseParser(path string) *LeaseParser {
-	if path == "" {
-		path = DefaultLeasesPath
-	}
-	return &LeaseParser{Path: path}
+	return &LeaseParser{Path: cmp.Or(path, DefaultLeasesPath)}
 }
 
 // LookupByMAC returns the lease matching mac (case-insensitive).

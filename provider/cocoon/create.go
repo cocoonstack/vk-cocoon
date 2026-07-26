@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -561,7 +560,7 @@ func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	resources := pod.Spec.Containers[0].Resources
 	cpu := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceCPU)
 	memory := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
-	return quantityCPURoundUp(cpu), quantityBytes(memory)
+	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 
 func selectQuantity(requests, limits corev1.ResourceList, name corev1.ResourceName) resource.Quantity {
@@ -585,12 +584,11 @@ func quantityCPURoundUp(q resource.Quantity) int {
 	return int((milli + 999) / 1000)
 }
 
-func quantityBytes(q resource.Quantity) string {
+// quantityArg renders a non-zero quantity as-is; vm's normalizeSizeArg
+// owns the byte conversion for cocoon's CLI flags.
+func quantityArg(q resource.Quantity) string {
 	if q.IsZero() {
 		return ""
 	}
-	if bytes := q.Value(); bytes > 0 {
-		return strconv.FormatInt(bytes, 10)
-	}
-	return ""
+	return q.String()
 }

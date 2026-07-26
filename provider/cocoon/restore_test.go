@@ -5,7 +5,6 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -24,7 +23,6 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 			rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 			p := newTestProvider(t)
 			p.Runtime = rt
-			p.Probes = probes.NewManager(t.Context())
 
 			pod := newPodWithSpec(meta.VMSpec{
 				VMName:  vmName,
@@ -70,7 +68,6 @@ func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  vmName,
@@ -108,7 +105,6 @@ func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  vmName,
@@ -144,7 +140,6 @@ func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  vmName,

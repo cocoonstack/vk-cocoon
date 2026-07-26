@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
@@ -124,13 +125,6 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	go m.run(ctx, key, probe, onUpdate, ready)
 }
 
-func (m *Manager) applyResult(key string, ready bool, message string) {
-	m.Set(key, Result{
-		Ready:   ready,
-		Message: message,
-	})
-}
-
 func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
 	interval := defaultInitialInterval
 	if lastReady {
@@ -139,16 +133,12 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 	failures := 0
 
 	for {
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !commonk8s.SleepCtx(ctx, interval) {
 			return
-		case <-timer.C:
 		}
 
 		ready, message := runProbe(ctx, probe)
-		m.applyResult(key, ready, message)
+		m.Set(key, Result{Ready: ready, Message: message})
 
 		switch {
 		case ready && !lastReady:

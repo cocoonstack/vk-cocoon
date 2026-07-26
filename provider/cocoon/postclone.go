@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -243,7 +243,7 @@ func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v 
 	}
 
 	logger := log.WithFunc("Provider.applyWindowsStaticIP")
-	sockPath := vmRunPath(runDirCH, v.ID, "console.sock")
+	sockPath := vm.ConsoleSocketPath(provider.CocoonRootDir(), v.ID)
 
 	sess, err := p.GuestSAC.Dial(ctx, sockPath)
 	if err != nil {
@@ -380,8 +380,7 @@ func buildWindowsPostCloneArgv() []string {
 
 // isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).
 func isCloudimgVM(vmID string) bool {
-	_, err := os.Stat(vmRunPath(runDirCH, vmID, "overlay.qcow2"))
-	return err == nil
+	return vm.HasCloudimgOverlay(provider.CocoonRootDir(), vmID)
 }
 
 func isStaticNIC(nc *vm.NetworkConfig) bool {

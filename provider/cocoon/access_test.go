@@ -14,7 +14,6 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -22,7 +21,6 @@ func TestRunInContainerLinuxRoutesToRuntimeExec(t *testing.T) {
 	rt := &fakeRuntime{execStdout: "hello\n", execExitCode: 0}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newRunningPod(t, p, "demo-0", "vmid-1", "10.0.0.5", false)
 	aio := newStubAttachIO("stdin-bytes")
@@ -51,7 +49,6 @@ func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 	rt := &fakeRuntime{execExitCode: 7}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newRunningPod(t, p, "demo-0", "vmid-1", "10.0.0.5", false)
 	err := p.RunInContainer(t.Context(), pod.Namespace, pod.Name, "", []string{"sh", "-c", "exit 7"}, newStubAttachIO(""))
@@ -72,7 +69,6 @@ func TestRunInContainerSurfacesRuntimeError(t *testing.T) {
 	rt := &fakeRuntime{execErr: errors.New("dial agent: connection refused")}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 
 	pod := newRunningPod(t, p, "demo-0", "vmid-1", "10.0.0.5", false)
 	err := p.RunInContainer(t.Context(), pod.Namespace, pod.Name, "", []string{"echo", "hi"}, newStubAttachIO(""))
@@ -88,7 +84,6 @@ func TestRunInContainerNoLiveVMRejected(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Probes = probes.NewManager(t.Context())
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ghost-0", Namespace: "ns"}}
 	err := p.RunInContainer(t.Context(), pod.Namespace, pod.Name, "", []string{"echo", "hi"}, newStubAttachIO(""))
 	if err == nil || !strings.Contains(err.Error(), "no live VM") {
