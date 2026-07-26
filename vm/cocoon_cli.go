@@ -478,6 +478,7 @@ func startCmdPipe[P io.Closer](cmd *exec.Cmd, pipe func() (P, error), op string)
 	if err != nil {
 		return zero, nil, fmt.Errorf("%s pipe: %w", op, err)
 	}
+	widenPipe(p)
 	if err := cmd.Start(); err != nil {
 		_ = p.Close()
 		return zero, nil, fmt.Errorf("start %s: %w", op, err)
