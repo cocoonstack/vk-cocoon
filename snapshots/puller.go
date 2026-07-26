@@ -17,11 +17,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Two pullGate slots × the pull budget cap buffered v2 pulls node-wide (the v2
-// reader is always on); v1 pulls stream with O(1) memory, ungated. The budget is
-// what sets the prefetch window, and the window is what parallelizes digest
-// verification — the measured pull bottleneck — so it is worth tuning per node:
-// 2048 MiB admits a window of 8 at the fleet's 256 MiB chunk stride.
 const defaultPullBudgetMiB = 2048
 
 var pullGate = semaphore.NewWeighted(2)
