@@ -214,7 +214,7 @@ func TestCleanupWakeImportSkipsLocalHit(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	p.cleanupWakeImport("vk-ns-demo-0", "vk-ns-demo-0")
+	p.cleanupWakeImport(t.Context(), "vk-ns-demo-0", "vk-ns-demo-0")
 	p.Close() // drain bg goroutines (none expected)
 
 	if len(rt.snapshotRemoveCalls) != 0 {
@@ -228,7 +228,7 @@ func TestCleanupWakeImportDropsCrossNodeImport(t *testing.T) {
 	p.Runtime = rt
 
 	importName := "vk-ns-demo-0" + hibernateImportSuffix
-	p.cleanupWakeImport("vk-ns-demo-0", importName)
+	p.cleanupWakeImport(t.Context(), "vk-ns-demo-0", importName)
 	p.Close() // drain bg goroutines
 
 	want := []string{importName}

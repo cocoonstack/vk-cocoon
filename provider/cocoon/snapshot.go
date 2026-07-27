@@ -15,8 +15,8 @@ const snapshotCleanupTimeout = 10 * time.Second
 // context so caller cancel (vk shutdown, kubelet deadline) can't abort
 // the rm mid-flight. Per-call timeout, so a slow first remove can't
 // starve a follow-up one in the same cleanup pass.
-func (p *Provider) removeSnapshotDetached(funcLabel, name string) {
-	ctx, cancel := context.WithTimeout(context.Background(), snapshotCleanupTimeout)
+func (p *Provider) removeSnapshotDetached(ctx context.Context, funcLabel, name string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotCleanupTimeout)
 	defer cancel()
 	if err := p.Runtime.SnapshotRemoveIfExists(ctx, name); err != nil {
 		log.WithFunc(funcLabel).Errorf(ctx, err, "remove snapshot %s", name)

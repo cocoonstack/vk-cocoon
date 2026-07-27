@@ -20,7 +20,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	if v == nil {
-		p.removeLocalSnapshots(spec.VMName)
+		p.removeLocalSnapshots(ctx, spec.VMName)
 		p.forgetPod(pod.Namespace, pod.Name)
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "no_vm").Inc()
 		return nil
@@ -35,7 +35,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
-	p.removeLocalSnapshots(v.Name)
+	p.removeLocalSnapshots(ctx, v.Name)
 
 	p.forgetPod(pod.Namespace, pod.Name)
 	pod.Status.Phase = corev1.PodSucceeded
@@ -45,7 +45,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 }
 
 // removeLocalSnapshots drops the clone source and its fork snapshot so a later restore cannot prefer stale local state over the registry tag.
-func (p *Provider) removeLocalSnapshots(vmName string) {
+func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	if vmName == "" {
 		return
 	}
@@ -53,7 +53,7 @@ func (p *Provider) removeLocalSnapshots(vmName string) {
 	var wg sync.WaitGroup
 	for _, name := range []string{vmName, forkSnapshotName(vmName)} {
 		wg.Go(func() {
-			p.removeSnapshotDetached("Provider.DeletePod", name)
+			p.removeSnapshotDetached(ctx, "Provider.DeletePod", name)
 		})
 	}
 	wg.Wait()

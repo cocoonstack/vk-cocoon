@@ -231,7 +231,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 // hot-adds a fresh NIC that Windows enumerates as new hardware. The local import
 // copy (cross-node pull) is dropped whether the clone succeeds or fails.
 func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string, snapshot *vm.Snapshot) (*vm.VM, error) {
-	defer p.cleanupWakeImport(spec.VMName, sourceName)
+	defer p.cleanupWakeImport(ctx, spec.VMName, sourceName)
 	if err := p.ensureSnapshotBaseImage(ctx, snapshot); err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 			metrics.SnapshotVerifyTotal.WithLabelValues("stale").Inc()
 			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
 				"local snapshot %s is stale (%s), discarding and pulling", vmName, verifyErr)
-			p.removeLocalSnapshots(vmName)
+			p.removeLocalSnapshots(ctx, vmName)
 		default:
 			// Registry unreachable: never trust an unverified local copy.
 			metrics.SnapshotVerifyTotal.WithLabelValues("error").Inc()
@@ -457,12 +457,12 @@ func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the
 // local snapshot live for the next wake.
-func (p *Provider) cleanupWakeImport(vmName, sourceName string) {
+func (p *Provider) cleanupWakeImport(ctx context.Context, vmName, sourceName string) {
 	if sourceName == vmName {
 		return
 	}
 	p.goBackground(func() {
-		p.removeSnapshotDetached("Provider.cleanupWakeImport", sourceName)
+		p.removeSnapshotDetached(ctx, "Provider.cleanupWakeImport", sourceName)
 	})
 }
 
