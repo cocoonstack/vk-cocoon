@@ -62,6 +62,14 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 	switch op {
 	case resumeOpHibernate:
 		run(func() {
+			// A VM that crashed while hibernate was owed boots first: nothing
+			// else re-delivers the hibernate once supervision restarts it.
+			if v.State != vm.StateRunning {
+				if err := p.Runtime.Start(p.lifecycleCtx, v.ID); err != nil {
+					p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
+					return
+				}
+			}
 			if err := p.hibernate(p.lifecycleCtx, pod, v); err != nil {
 				return
 			}
@@ -113,22 +121,23 @@ func (p *Provider) resumeBusy(key string) bool {
 }
 
 // owedOpFor decides what a tracked pod is still owed. Deleting pods belong to
-// DeletePod; hibernate resumes only on a running VM — stopped VMs are cocoon
-// daemon supervision's jurisdiction.
+// DeletePod; a hibernate owed on a crashed VM still dispatches (the resume
+// boots it first — nothing else re-delivers the hibernate afterwards).
 func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if pod.DeletionTimestamp != nil || v == nil {
 		return ""
 	}
 	if meta.ReadHibernateState(pod) {
-		if v.State == vm.StateRunning {
-			return resumeOpHibernate
-		}
+		return resumeOpHibernate
+	}
+	lc := meta.ReadLifecycleState(pod)
+	pcs := pod.Annotations[annotationPostCloneState]
+	// Empty lifecycle with a post-clone marker means the Creating patch was
+	// lost to apiserver flakiness; the marker still records owed work.
+	if lc != meta.LifecycleStateCreating && (lc != "" || pcs == "") {
 		return ""
 	}
-	if meta.ReadLifecycleState(pod) != meta.LifecycleStateCreating {
-		return ""
-	}
-	switch pod.Annotations[annotationPostCloneState] {
+	switch pcs {
 	case postCloneStateFailed:
 		return ""
 	case postCloneStateRunning:
@@ -136,7 +145,15 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	case postCloneStateDone:
 		return resumeOpReadyWait
 	default:
-		if postCloneNeeded(meta.ParseVMSpec(pod), v) {
+		spec := meta.ParseVMSpec(pod)
+		// A drop-NIC restore runs no post-clone (its finalize only waits for
+		// the lease), and a fresh clone writes the running marker within ms of
+		// dispatch — so no marker on a drop-NIC spec means restore, and the
+		// PnP fixup must not run over the hot-added NIC.
+		if shouldDropNICBeforeHibernate(spec) {
+			return resumeOpReadyWait
+		}
+		if postCloneNeeded(spec, v) {
 			return resumeOpPostClone
 		}
 		return resumeOpReadyWait

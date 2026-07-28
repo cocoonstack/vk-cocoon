@@ -34,24 +34,30 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 	}{
 		{
 			// Points 5+6: hibernate interrupted before Remove leaves the VM
-			// alive (NIC-less or already saved) — re-enter and converge.
+			// alive (NIC-less or already saved) — re-enter and converge. The
+			// stale post-clone marker must not survive into the next incarnation.
 			name: "hibernating with live VM re-enters hibernate",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
 				meta.HibernateState(true).Apply(pod)
+				pod.Annotations[annotationPostCloneState] = postCloneStateDone
 			},
 			vms:       []vm.VM{running},
 			wantSaves: 1,
 			wantLC:    meta.LifecycleStateHibernated,
 		},
 		{
-			name: "hibernating with stopped VM is left to daemon supervision",
+			// A VM that crashed while hibernate was owed boots first, then
+			// hibernates — nothing else re-delivers the op after supervision
+			// restarts it.
+			name: "hibernating with stopped VM starts it then hibernates",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
 				meta.HibernateState(true).Apply(pod)
 			},
-			vms:    []vm.VM{stopped},
-			wantLC: "",
+			vms:       []vm.VM{stopped},
+			wantSaves: 1,
+			wantLC:    meta.LifecycleStateHibernated,
 		},
 		{
 			// Point 3: post-clone interrupted mid-run; FC always needs the fixup.
@@ -85,6 +91,34 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			},
 			vms:    []vm.VM{running},
 			wantLC: meta.LifecycleStateReady,
+		},
+		{
+			// A drop-NIC (CH+Windows) restore runs no post-clone; absent
+			// marker must resume the lease wait, never the PnP fixup.
+			name: "drop-nic restore without marker resumes ready wait",
+			spec: meta.VMSpec{
+				VMName:  vmName,
+				Mode:    "clone",
+				OS:      string(cocoonv1.OSWindows),
+				Backend: string(cocoonv1.BackendCloudHypervisor),
+			},
+			annotate: func(pod *corev1.Pod) {
+				pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+			},
+			vms:    []vm.VM{running},
+			wantLC: meta.LifecycleStateReady,
+		},
+		{
+			// The Creating patch can be lost to apiserver flakiness while the
+			// post-clone marker landed; the marker alone records owed work.
+			name: "empty lifecycle with running marker still resumes",
+			spec: meta.VMSpec{VMName: vmName, Mode: "clone", Backend: vm.BackendFirecracker},
+			annotate: func(pod *corev1.Pod) {
+				pod.Annotations[annotationPostCloneState] = postCloneStateRunning
+			},
+			vms:      []vm.VM{running},
+			wantExec: true,
+			wantLC:   meta.LifecycleStateReady,
 		},
 		{
 			name: "post-clone failed stays parked for the operator",
@@ -166,6 +200,11 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			}
 			if got := meta.ReadLifecycleState(tracked); got != tc.wantLC {
 				t.Errorf("lifecycle = %q, want %q", got, tc.wantLC)
+			}
+			if tc.wantLC == meta.LifecycleStateHibernated {
+				if v, ok := tracked.Annotations[annotationPostCloneState]; ok {
+					t.Errorf("post-clone marker must not survive hibernate, got %q", v)
+				}
 			}
 		})
 	}

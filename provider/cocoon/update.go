@@ -47,18 +47,20 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
+	// A resumed full op (dispatchOwedWork) runs outside the framework's
+	// per-pod serialization. Backing off before the lookup is what makes it
+	// safe: claims only shrink after startup, so a post-check read cannot see
+	// mid-resume state, and nothing below re-reads a VM the resume removed.
+	if key := meta.PodKey(pod.Namespace, pod.Name); p.resumeBusy(key) {
+		return fmt.Errorf("resumed operation still in flight for %s", key)
+	}
 	v := p.vmForPod(pod.Namespace, pod.Name)
-	p.trackPod(pod, v)
+	// Track the pod only: re-asserting v here could resurrect a VM row a
+	// concurrent path (resumed hibernate's forget) has just dropped.
+	p.trackPod(pod, nil)
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 	haveVM := v != nil
-
-	// wantHibernate == haveVM ⟺ an arm below would act. A resumed full op
-	// (dispatchOwedWork) runs outside the framework's per-pod serialization;
-	// back off and let the framework retry after it.
-	if key := meta.PodKey(pod.Namespace, pod.Name); wantHibernate == haveVM && p.resumeBusy(key) {
-		return fmt.Errorf("resumed operation still in flight for %s", key)
-	}
 
 	switch {
 	case wantHibernate && haveVM:

@@ -733,17 +733,19 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 	return nil
 }
 
-// clearRuntimeAnnotations removes VMID/IP from the pod's in-memory
-// annotations (under p.mu against GetPod's DeepCopy) and patches the API
-// server. Used by hibernate and startup reconcile.
+// clearRuntimeAnnotations removes VMID/IP and the post-clone marker from the
+// pod's in-memory annotations (under p.mu against GetPod's DeepCopy) and
+// patches the API server; both callers mean this VM incarnation is gone.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.Lock()
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
+	delete(pod.Annotations, annotationPostCloneState)
 	p.mu.Unlock()
 	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
-		meta.AnnotationVMID: nil,
-		meta.AnnotationIP:   nil,
+		meta.AnnotationVMID:      nil,
+		meta.AnnotationIP:        nil,
+		annotationPostCloneState: nil,
 	})
 }
 
