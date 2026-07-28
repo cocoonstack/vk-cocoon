@@ -32,7 +32,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 		deleting  bool
 		vms       []vm.VM
 		snapshots map[string]*vm.Snapshot
-		wantSaves int
 		wantExec  bool
 		wantLC    meta.LifecycleState
 	}{
@@ -46,9 +45,8 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 				meta.HibernateState(true).Apply(pod)
 				pod.Annotations[annotationPostCloneState] = postCloneStateDone
 			},
-			vms:       []vm.VM{running},
-			wantSaves: 1,
-			wantLC:    meta.LifecycleStateHibernated,
+			vms:    []vm.VM{running},
+			wantLC: meta.LifecycleStateHibernated,
 		},
 		{
 			// A VM that crashed while hibernate was owed boots first, then
@@ -59,9 +57,8 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			annotate: func(pod *corev1.Pod) {
 				meta.HibernateState(true).Apply(pod)
 			},
-			vms:       []vm.VM{stopped},
-			wantSaves: 1,
-			wantLC:    meta.LifecycleStateHibernated,
+			vms:    []vm.VM{stopped},
+			wantLC: meta.LifecycleStateHibernated,
 		},
 		{
 			// Point 3: post-clone interrupted mid-run; FC always needs the fixup.
@@ -204,8 +201,12 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			}
 			p.Close()
 
-			if rt.snapshotSaveCount != tc.wantSaves {
-				t.Errorf("snapshot saves = %d, want %d", rt.snapshotSaveCount, tc.wantSaves)
+			wantSaves := 0
+			if tc.wantLC == meta.LifecycleStateHibernated {
+				wantSaves = 1
+			}
+			if rt.snapshotSaveCount != wantSaves {
+				t.Errorf("snapshot saves = %d, want %d", rt.snapshotSaveCount, wantSaves)
 			}
 			if gotExec := len(rt.execCalls) > 0; gotExec != tc.wantExec {
 				t.Errorf("exec ran = %v (calls %d), want %v", gotExec, len(rt.execCalls), tc.wantExec)

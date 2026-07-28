@@ -137,7 +137,7 @@ var (
 			Name:      "startup_resume_total",
 			Help:      "Interrupted operations re-dispatched by startup reconcile, by op.",
 		},
-		[]string{"op"}, // hibernate|post_clone|ready_wait
+		[]string{"op"}, // hibernate|post_clone|ready_wait|classify_drop_nic
 	)
 
 	HibernateEvidenceTotal = prometheus.NewCounterVec(

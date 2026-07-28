@@ -47,16 +47,12 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
-	// A resumed full op (dispatchOwedWork) runs outside the framework's
-	// per-pod serialization. Backing off before the lookup is what makes it
-	// safe: claims only shrink after startup, so a post-check read cannot see
-	// mid-resume state, and nothing below re-reads a VM the resume removed.
-	if key := meta.PodKey(pod.Namespace, pod.Name); p.resumeBusy(key) {
-		return fmt.Errorf("resumed operation still in flight for %s", key)
+	// Before the lookup, so a post-check read can never see mid-resume state.
+	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
+		return err
 	}
 	v := p.vmForPod(pod.Namespace, pod.Name)
-	// Track the pod only: re-asserting v here could resurrect a VM row a
-	// concurrent path (resumed hibernate's forget) has just dropped.
+	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
@@ -215,8 +211,8 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
-	// Belt on hibernate's clear: a marker (or stale VMID) that survived an API
-	// outage there must not describe the incarnation this wake creates.
+	// Annotations that survived a failed clear at hibernate must not describe
+	// the incarnation this wake creates.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}

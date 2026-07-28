@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -19,11 +20,11 @@ const (
 	resumeOpClassifyNIC = "classify_drop_nic"
 )
 
-// dispatchOwedWork resumes the step a vk restart interrupted, derived from
-// observed state only: the pod's persisted annotations plus the adopted VM.
-// Callbacks are one-shot, so nothing else re-delivers this work (#54).
+// dispatchOwedWork resumes the step a vk restart interrupted (#54):
+// callbacks are one-shot, so nothing else re-delivers this work.
 func (p *Provider) dispatchOwedWork() {
 	type owed struct {
+		key string
 		pod *corev1.Pod
 		v   *vm.VM
 		op  string
@@ -32,7 +33,7 @@ func (p *Provider) dispatchOwedWork() {
 	work := make([]owed, 0, len(p.pods))
 	for key, pod := range p.pods {
 		if op := owedOpFor(pod, p.vmsByPod[key]); op != "" {
-			work = append(work, owed{pod: pod, v: p.vmsByPod[key], op: op})
+			work = append(work, owed{key: key, pod: pod, v: p.vmsByPod[key], op: op})
 		}
 	}
 	p.mu.RUnlock()
@@ -43,15 +44,13 @@ func (p *Provider) dispatchOwedWork() {
 			w.op, w.pod.Namespace, w.pod.Name, w.v.ID)
 		metrics.StartupResumeTotal.WithLabelValues(w.op).Inc()
 		p.emitNormalf(w.pod, "ResumedAfterRestart", "op=%s", w.op)
-		p.dispatchResume(w.pod, w.v, w.op)
+		p.dispatchResume(w.key, w.pod, w.v, w.op)
 	}
 }
 
-// dispatchResume claims the pod for the whole resumed op — every resume runs
-// outside the framework's per-pod serialization, so UpdatePod's acting arms
-// must back off from all of them, not just hibernate.
-func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
-	key := meta.PodKey(pod.Namespace, pod.Name)
+// dispatchResume claims the pod for the whole resumed op: resumes run
+// outside the framework's per-pod serialization; UpdatePod backs off.
+func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op string) {
 	if !p.claimResume(key) {
 		return
 	}
@@ -65,8 +64,7 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 	switch op {
 	case resumeOpHibernate:
 		run(func() {
-			// A VM that crashed while hibernate was owed boots first: nothing
-			// else re-delivers the hibernate once supervision restarts it.
+			// Boot a crashed VM first; nothing re-delivers the hibernate later.
 			if v.State != vm.StateRunning {
 				if err := p.Runtime.Start(p.lifecycleCtx, v.ID); err != nil {
 					p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
@@ -85,10 +83,8 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v) })
 	case resumeOpClassifyNIC:
 		run(func() {
-			// Evidence ⟺ restore, by CreatePod's fresh-boot guard — and the
-			// stricter source/image conflict gates have already passed, because
-			// this op only dispatches once a VM exists (owedOpFor's v != nil),
-			// which is always after deriveRestoreFromEvidence ran.
+			// Evidence ⟺ restore: CreatePod's fresh-boot guard and its conflict
+			// gates already ran before this VM could exist (v != nil here).
 			evidence, ok := p.classifyNICRecovery(pod, spec.VMName)
 			switch {
 			case !ok:
@@ -101,10 +97,9 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 	}
 }
 
-// classifyNICRecovery retries the evidence lookup until the registry answers —
-// guessing on an error could mark a fresh clone Ready without its fixup (the
-// NopPinger deployment would never surface it). The deadline context owns the
-// budget so even a hanging registry unblocks; exhaustion fails loud.
+// classifyNICRecovery retries the evidence lookup until the registry answers:
+// guessing could mark a fresh clone Ready without its fixup. The deadline ctx
+// owns the budget so even a hanging lookup unblocks; exhaustion fails loud.
 func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence, ok bool) {
 	delay, maxDelay, budget := p.recheckBackoff()
 	ctx, cancel := context.WithTimeout(p.lifecycleCtx, budget)
@@ -126,9 +121,8 @@ func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence
 	}
 }
 
-// resumeReadyAfterIP re-runs the SAC pass when owed (post-clone-state is
-// written before SAC runs, so done does not imply SAC ran), then holds
-// Ready until the lease lands.
+// resumeReadyAfterIP re-runs the SAC pass when owed (done is written before
+// SAC runs), then holds Ready until the lease lands.
 func (p *Provider) resumeReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM) {
 	if p.willRunSAC(spec, v) {
 		if _, ok := p.runWindowsSAC(ctx, pod, v, "reconcile"); !ok {
@@ -161,9 +155,16 @@ func (p *Provider) resumeBusy(key string) bool {
 	return held
 }
 
-// owedOpFor decides what a tracked pod is still owed. Deleting pods belong to
-// DeletePod; a hibernate owed on a crashed VM still dispatches (the resume
-// boots it first — nothing else re-delivers the hibernate afterwards).
+// backoffIfResuming rejects a pod-mutating callback while a resumed op holds
+// the claim; claims only shrink after startup, so check-then-act is safe.
+func (p *Provider) backoffIfResuming(namespace, name string) error {
+	if key := meta.PodKey(namespace, name); p.resumeBusy(key) {
+		return fmt.Errorf("resumed operation still in flight for %s", key)
+	}
+	return nil
+}
+
+// owedOpFor decides what a tracked pod is still owed.
 func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if pod.DeletionTimestamp != nil || v == nil {
 		return ""
@@ -187,11 +188,8 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		return resumeOpReadyWait
 	default:
 		spec := meta.ParseVMSpec(pod)
-		// No marker on a drop-NIC spec is either an interrupted restore (no
-		// post-clone, finalize only waits for the lease — PnP must not run
-		// over the hot-added NIC) or a fresh clone caught in the ms before
-		// its running marker. Only hibernate evidence can tell; resolved
-		// asynchronously at dispatch.
+		// Marker-less drop-NIC = interrupted restore (PnP must not touch the
+		// hot-added NIC) or a pre-marker fresh clone; evidence decides, async.
 		if shouldDropNICBeforeHibernate(spec) {
 			return resumeOpClassifyNIC
 		}

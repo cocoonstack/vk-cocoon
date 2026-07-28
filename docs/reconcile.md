@@ -30,6 +30,18 @@ On every restart vk-cocoon:
    - `alert`: log + bump `cocoon_vk_orphan_vm_total`, leave the VM alone.
    - `keep`: no log, no metric.
 
+6. Dispatches the work a restart interrupted (`dispatchOwedWork`),
+   derived per tracked pod from persisted facts only: a hibernate
+   annotation with a VM re-enters `hibernate()` (booting a crashed VM
+   first); `lifecycle=creating` splits on `post-clone-state` (`running`
+   re-runs the fixup, `done` re-checks SAC then holds Ready until the
+   lease lands, absent derives the plan — for CH+Windows drop-NIC specs
+   hibernate evidence decides restore vs fresh, retried under the
+   recheck budget); `failed` stays parked. Every resumed op claims the
+   pod for its duration; `UpdatePod` and `DeletePod` back off with an
+   error while the claim is held. Dispatches are counted on
+   `cocoon_vk_startup_resume_total` and emit `ResumedAfterRestart`.
+
 A pod whose annotated VMID does **not** appear in the local runtime list
 logs a warning and is left to `CreatePod` to recreate on the next
 reconcile.
