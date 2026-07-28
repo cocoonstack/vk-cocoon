@@ -12,6 +12,7 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/ociutil"
+
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

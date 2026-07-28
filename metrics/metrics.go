@@ -130,6 +130,16 @@ var (
 		[]string{"outcome"}, // collected|busy|not-creating|not-found|error
 	)
 
+	StartupResumeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "startup_resume_total",
+			Help:      "Interrupted operations re-dispatched by startup reconcile, by op.",
+		},
+		[]string{"op"}, // hibernate|post_clone|ready_wait|classify_drop_nic
+	)
+
 	HibernateEvidenceTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -268,6 +278,7 @@ func Register(reg prometheus.Registerer) {
 		PodEvictFailureTotal,
 		ReconcileAdoptByNameTotal,
 		StaleCreateReconcileTotal,
+		StartupResumeTotal,
 		HibernateEvidenceTotal,
 		VMBootDuration,
 		SnapshotSaveDuration,

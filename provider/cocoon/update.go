@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -47,18 +48,24 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
+	// Before the lookup, so a post-check read can never see mid-resume state.
+	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
+		return err
+	}
 	v := p.vmForPod(pod.Namespace, pod.Name)
-	p.trackPod(pod, v)
+	// Pod only: re-asserting v could resurrect a row a resume just dropped.
+	p.trackPod(pod, nil)
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
+	haveVM := v != nil
 
 	switch {
-	case wantHibernate && v != nil:
+	case wantHibernate && haveVM:
 		if err := p.hibernate(ctx, pod, v); err != nil {
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
-	case !wantHibernate && v == nil:
+	case !wantHibernate && !haveVM:
 		if err := p.wake(ctx, pod); err != nil {
 			return err
 		}
@@ -205,6 +212,11 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
+	// Annotations that survived a failed clear at hibernate must not describe
+	// the incarnation this wake creates.
+	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
+		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
+	}
 	sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
@@ -257,45 +269,18 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sou
 
 // dispatchHibernateRestore schedules the post-restore step. A CH+Windows restore
 // hot-added a fresh NIC, so Ready waits on that NIC's DHCP lease (no PnP rebind);
-// other backends re-derive networking via runPostCloneSetup.
+// other backends re-derive networking via runPostCloneSetup. The wake accounting
+// rides to the outcome — a restore counts as a wake regardless of trigger.
 func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, op string) {
 	if shouldDropNICBeforeHibernate(spec) {
 		p.goBackground(func() {
-			p.finalizeDropNICWake(p.lifecycleCtx, pod, v)
+			p.markReadyAfterIP(p.lifecycleCtx, pod, v, true)
 		})
 		return
 	}
-	// A restore counts as a wake regardless of trigger (cross-node create or update).
-	metrics.WakeTotal.WithLabelValues("ok").Inc()
 	p.goBackground(func() {
-		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", op)
+		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", op, true)
 	})
-}
-
-// finalizeDropNICWake holds Ready until the fresh NIC's lease lands.
-func (p *Provider) finalizeDropNICWake(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
-	if ctx.Err() != nil {
-		return
-	}
-	if gotIP {
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
-		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
-			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
-			metrics.WakeTotal.WithLabelValues("ok").Inc()
-		}
-		return
-	}
-	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
-	err := fmt.Errorf("wake %s: dhcp lease for fresh NIC not observed within %s", v.Name, budget)
-	msg := err.Error()
-	if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
-		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
-		metrics.WakeTotal.WithLabelValues("failed").Inc()
-		p.emitWarningf(pod, "WakeIPWaitTimeout", "%s", truncate("update: "+msg, eventMessageMaxBytes))
-		log.WithFunc("Provider.finalizeDropNICWake").Errorf(ctx, err, "%s/%s update", pod.Namespace, pod.Name)
-	}
 }
 
 // markLifecycleStateForWake gates on (pod tracked) ∧ (hibernate not requested) ∧ (VM

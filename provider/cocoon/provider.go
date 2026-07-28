@@ -23,6 +23,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
+
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -92,6 +93,7 @@ type Provider struct {
 	vmsByName      map[string]*vm.VM
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
+	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
 	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
@@ -133,6 +135,7 @@ func NewProvider(ctx context.Context) *Provider {
 		vmsByName:        map[string]*vm.VM{},
 		lastRestart:      map[string]time.Time{},
 		pendingRecheck:   map[string]struct{}{},
+		resumedOps:       map[string]struct{}{},
 		lifecycleIntent:  map[string]meta.LifecycleStatus{},
 		lifecycleFlushed: map[string]string{},
 	}
@@ -270,12 +273,18 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	}
 	p.pods[key] = pod
 	if v != nil {
-		p.vmsByPod[key] = v
-		if v.Name != "" {
-			p.vmsByName[v.Name] = v
-		}
+		p.setVMLocked(key, v)
 	}
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
+}
+
+// setVMLocked writes v into both VM tables; the write half of dropVMLocked.
+// Caller must hold p.mu for writing.
+func (p *Provider) setVMLocked(key string, v *vm.VM) {
+	p.vmsByPod[key] = v
+	if v.Name != "" {
+		p.vmsByName[v.Name] = v
+	}
 }
 
 // dropVMLocked removes the VM record for key. Caller must hold p.mu for writing.
@@ -329,10 +338,7 @@ func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	}
 	updated := *v
 	updated.IP = ip
-	p.vmsByPod[key] = &updated
-	if updated.Name != "" {
-		p.vmsByName[updated.Name] = &updated
-	}
+	p.setVMLocked(key, &updated)
 	return true
 }
 
@@ -506,10 +512,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				updated := *old
 				updated.PID = fresh.PID
 				updated.NetworkConfigs = fresh.NetworkConfigs
-				p.vmsByPod[affectedKey] = &updated
-				if updated.Name != "" {
-					p.vmsByName[updated.Name] = &updated
-				}
+				p.setVMLocked(affectedKey, &updated)
 			}
 			p.mu.Unlock()
 		}
@@ -731,17 +734,19 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 	return nil
 }
 
-// clearRuntimeAnnotations removes VMID/IP from the pod's in-memory
-// annotations (under p.mu against GetPod's DeepCopy) and patches the API
-// server. Used by hibernate and startup reconcile.
+// clearRuntimeAnnotations removes VMID/IP and the post-clone marker from the
+// pod's in-memory annotations (under p.mu against GetPod's DeepCopy) and
+// patches the API server; both callers mean this VM incarnation is gone.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.Lock()
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
+	delete(pod.Annotations, annotationPostCloneState)
 	p.mu.Unlock()
 	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
-		meta.AnnotationVMID: nil,
-		meta.AnnotationIP:   nil,
+		meta.AnnotationVMID:      nil,
+		meta.AnnotationIP:        nil,
+		annotationPostCloneState: nil,
 	})
 }
 

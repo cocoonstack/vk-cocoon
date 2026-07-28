@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
@@ -16,6 +17,9 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.DeletePod")
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
+	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
+		return err
+	}
 	spec := meta.ParseVMSpec(pod)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)

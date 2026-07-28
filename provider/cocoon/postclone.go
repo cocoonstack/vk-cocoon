@@ -19,6 +19,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -48,10 +49,10 @@ const (
 
 // runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state;
 // on exhaustion it leaves a manual hint annotation for the operator.
-func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string) {
+func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wake bool) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
-		p.markReadyAfterIP(ctx, pod, v)
+		p.markReadyAfterIP(ctx, pod, v, wake)
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
@@ -87,7 +88,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
-					p.markReadyAfterIP(ctx, pod, v)
+					p.markReadyAfterIP(ctx, pod, v, wake)
 				}
 				return
 			}
@@ -114,6 +115,9 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	}
 	metrics.PostCloneTotal.WithLabelValues(kind, "failed").Inc()
 	metrics.PostCloneRetryAttempts.WithLabelValues("failed").Observe(float64(len(attemptErrs)))
+	if wake {
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+	}
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
 	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, joinedErr)
 	joinedMsg := joinedErr.Error()
@@ -122,29 +126,42 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-// markReadyAfterIP defers ready until the clone's DHCP lease lands, because ready promises vm-service an IP resolveVMIP can return; on timeout mark failed, never ready-without-IP.
-func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
+// markReadyAfterIP defers ready until the clone's DHCP lease lands, because
+// ready promises vm-service an IP resolveVMIP can return; on timeout mark
+// failed, never ready-without-IP. wake=true owns the wake accounting: WakeTotal
+// counts at the outcome, not at dispatch. Metrics and events gate on the wake
+// marker so a VM hibernated/replaced mid-wait counts nothing.
+func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM, wake bool) {
 	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
 		return
 	}
-	if !gotIP {
-		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
-		budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
-		err := fmt.Errorf("clone %s: dhcp lease not observed within %s", v.Name, budget)
-		msg := err.Error()
-		// wake marker: don't clobber a concurrent hibernate/delete with a clone failure.
-		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
-			p.emitWarningf(pod, "PostCloneIPWaitTimeout", "%s", truncate(msg, eventMessageMaxBytes))
-			log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s post-clone ip wait timeout", pod.Namespace, pod.Name)
+	if gotIP {
+		p.refreshStatus(ctx, pod)
+		p.notify(pod)
+		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
+			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
+			if wake {
+				metrics.WakeTotal.WithLabelValues("ok").Inc()
+			}
 		}
 		return
 	}
-	metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
-	p.refreshStatus(ctx, pod)
-	p.notify(pod)
-	// wake marker: don't publish Ready over a VM hibernated/replaced mid-wait.
-	p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "")
+	kind, event := "clone", "PostCloneIPWaitTimeout"
+	if wake {
+		kind, event = "wake", "WakeIPWaitTimeout"
+	}
+	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+	err := fmt.Errorf("%s %s: dhcp lease not observed within %s", kind, v.Name, budget)
+	msg := err.Error()
+	if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
+		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
+		if wake {
+			metrics.WakeTotal.WithLabelValues("failed").Inc()
+		}
+		p.emitWarningf(pod, event, "%s", truncate(msg, eventMessageMaxBytes))
+		log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s ip wait timeout", pod.Namespace, pod.Name)
+	}
 }
 
 // runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; ok=false means the pod was marked Failed.
@@ -343,15 +360,21 @@ type postClonePlan struct {
 // planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
 // on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
 func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
+	if !postCloneNeeded(spec, v) {
+		return postClonePlan{}, false
+	}
 	if spec.OS == string(cocoonv1.OSWindows) {
 		argv := buildWindowsPostCloneArgv()
 		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
 	}
-	if !needsPostClone(spec.Backend, v.NetworkConfigs) {
-		return postClonePlan{}, false
-	}
 	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
+}
+
+// postCloneNeeded is planPostClone's decision alone — cheap and syscall-free,
+// so lock-holding callers (owedOpFor) can ask without building the plan.
+func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
+	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
 }
 
 func truncate(s string, n int) string {

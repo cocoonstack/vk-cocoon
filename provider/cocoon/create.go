@@ -19,6 +19,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/ociutil"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -100,7 +101,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	if cloned && !restoring {
 		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create")
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create", false)
 		})
 	}
 	// First probe is synchronous so refreshStatus below sees its result.
@@ -142,6 +143,7 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 // deriveRestoreFromEvidence re-derives a wake lost to a vk restart: the pod
 // looks freshly creatable, but fresh-booting a name whose guest state sits in
 // a hibernate snapshot lets the next hibernate overwrite it (#54).
+// classifyNICRecovery (resume.go) relies on these gates running pre-bringUpVM.
 func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
 	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
 	if err != nil {
@@ -492,13 +494,13 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 		meta.AnnotationIP:   v.IP,
 	}
 	var lastErr error
-	for range 3 {
+	for range lifecyclePatchAttempts {
 		err := p.patchPodAnnotations(ctx, namespace, name, annos)
 		if err == nil {
 			return
 		}
 		lastErr = err
-		if !commonk8s.SleepCtx(ctx, 500*time.Millisecond) {
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
 			return
 		}
 	}
@@ -506,7 +508,7 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
-	if p.Probes == nil {
+	if p.Probes == nil || pod.DeletionTimestamp != nil {
 		return
 	}
 	key := meta.PodKey(pod.Namespace, pod.Name)

@@ -53,6 +53,7 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_reconcile_adopt_by_name_total` | Counter | Startup reconcile adoptions matched by VM name |
 | `cocoon_vk_stale_create_reconcile_total{outcome}` | Counter | Creating placeholders routed through the stale-create verb at startup (`outcome=collected\|busy\|not-creating\|not-found\|error`) |
 | `cocoon_vk_hibernate_evidence_total{verdict}` | Counter | Fresh boots intercepted by hibernate evidence (`verdict=restored\|image_conflict\|source_conflict\|unavailable`) |
+| `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched by startup reconcile (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
 
 All per-VM stats are read from `/proc` using the hypervisor PID tracked
 in memory — no shell-out to `cocoon` on each scrape. The tracking table
@@ -72,12 +73,16 @@ they are input-validation noise rather than runtime-lifecycle failures,
 and the rejection is already visible to the caller as the synchronous
 error return.
 
-- **Warning reasons**: `CreateBringUpFailed`, `HibernateNetResizeFailed`,
+- **Warning reasons**: `CreateBringUpFailed`, `HibernateEvidenceFailed`,
+  `HibernateEvidenceUnavailable`, `HibernateSnapshotExists`,
+  `HibernateNetResizeFailed`,
   `HibernateSnapshotFailed`, `HibernatePushFailed`,
   `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`,
   `WakeIPWaitTimeout`, `WindowsStaticIPFailed`,
   `PostCloneIPWaitTimeout`,
   `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`,
   `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`,
-  `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`.
-- **Normal reasons**: `Hibernated`, `Woken`, `PostCloneSucceeded`.
+  `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`,
+  `ResumeStartFailed`, `ResumeClassifyFailed`.
+- **Normal reasons**: `Hibernated`, `Woken`, `PostCloneSucceeded`,
+  `ResumedAfterRestart`.
