@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,6 +54,10 @@ const (
 	// inlineInspectAttempts bounds handleVMGone's synchronous retry; beyond
 	// a single CLI hiccup the deferred recheck takes over.
 	inlineInspectAttempts = 2
+
+	// reconcileFanOut bounds the per-pod fan-outs on the reconcile paths
+	// (stale creates, startup probes, status drift).
+	reconcileFanOut = 8
 
 	// Default tunables for the recheck path. Overridable via Provider
 	// fields so tests can shrink them without racing on package globals.
@@ -103,6 +108,12 @@ type Provider struct {
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
 	lifecycleFlushed map[string]string
+
+	// Shared scrape sample; see sampleStats.
+	statsMu   sync.Mutex
+	statsAt   time.Time
+	statsVMs  []vmSample
+	statsNode provider.NodeStats
 
 	// Recheck tunables. Zero values fall back to the defaultXxx
 	// constants, so production code never sets them; tests shrink them
@@ -231,24 +242,30 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 		return
 	}
 	logger := log.WithFunc("Provider.reconcilePodStatuses")
+	var g errgroup.Group
+	g.SetLimit(reconcileFanOut)
 	for _, pod := range pods {
-		current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-		if err != nil {
-			logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
-			continue
-		}
-		status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
-		if err != nil {
-			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
-			continue
-		}
-		if podStatusMatches(current.Status, *status) {
-			continue
-		}
-		current.Status = *status
-		logger.Infof(ctx, "republishing drifted status for pod %s/%s", pod.Namespace, pod.Name)
-		p.notify(current)
+		g.Go(func() error {
+			current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+			if err != nil {
+				logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
+				return nil
+			}
+			status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+			if err != nil {
+				logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
+				return nil
+			}
+			if podStatusMatches(current.Status, *status) {
+				return nil
+			}
+			current.Status = *status
+			logger.Infof(ctx, "republishing drifted status for pod %s/%s", pod.Namespace, pod.Name)
+			p.notify(current)
+			return nil
+		})
 	}
+	_ = g.Wait() // workers log their own failures, never return errors
 }
 
 func (p *Provider) notify(pod *corev1.Pod) {

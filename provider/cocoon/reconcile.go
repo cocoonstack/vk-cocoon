@@ -20,8 +20,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-const staleCreateConcurrency = 8
-
 // StartupReconcile rebuilds the in-memory tables from K8s pods and
 // cocoon VMs so restarts don't leak VMs or lose pod associations.
 // Unmatched VMs are handled per OrphanPolicy.
@@ -65,6 +63,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 	}
 	matched := make(map[string]bool, len(vms))
+	var probePods []*corev1.Pod
 
 	for i := range podItems(pods) {
 		pod := &pods.Items[i]
@@ -72,6 +71,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		if runtime.VMID == "" {
 			if v := p.adoptByVMName(ctx, pod, vmByName); v != nil {
 				matched[v.ID] = true
+				probePods = append(probePods, pod)
 				continue
 			}
 			p.reconcileNoVMID(ctx, pod)
@@ -91,8 +91,9 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
-		p.startProbeIfEnabled(pod)
+		probePods = append(probePods, pod)
 	}
+	p.startProbesFanOut(probePods)
 
 	for i := range vms {
 		if matched[vms[i].ID] {
@@ -112,7 +113,7 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
 	var g errgroup.Group
-	g.SetLimit(staleCreateConcurrency)
+	g.SetLimit(reconcileFanOut)
 	for i := range vms {
 		v := &vms[i]
 		if v.State != vm.StateCreating {
@@ -198,6 +199,21 @@ func (p *Provider) watchBusyCreate(vmID string) {
 	})
 }
 
+// startProbesFanOut starts adopted pods' probes with bounded concurrency:
+// each first probe is synchronous (up to its timeout), and this path gates
+// node registration.
+func (p *Provider) startProbesFanOut(pods []*corev1.Pod) {
+	var g errgroup.Group
+	g.SetLimit(reconcileFanOut)
+	for _, pod := range pods {
+		g.Go(func() error {
+			p.startProbeIfEnabled(pod)
+			return nil
+		})
+	}
+	_ = g.Wait() // probe starts never return errors
+}
+
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
 // VM is already gone, so wake can start clean.
 func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
@@ -228,7 +244,6 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	p.seedLifecycleIntentFromPod(pod)
-	p.startProbeIfEnabled(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v
 }

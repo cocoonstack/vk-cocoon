@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cocoonstack/vk-cocoon/vm"
+
 	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
@@ -16,6 +18,8 @@ import (
 
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
+
+const statsSampleTTL = 2 * time.Second
 
 // vmSnapshot is a minimal copy of VM state taken under lock so /proc
 // reads happen outside the critical section.
@@ -30,15 +34,25 @@ type vmSnapshot struct {
 	VMName     string
 }
 
+// vmSample is one cached stats reading for a tracked VM.
+type vmSample struct {
+	vmSnapshot
+	cpuSeconds float64
+	memBytes   int64
+	diskCOW    int64
+	rxBytes    uint64
+	txBytes    uint64
+}
+
 // metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
-	nodeCPU, nodeMemory := cpuMemStats(readNodeCPUSeconds(), readNodeMemoryWorkingSet())
+	samples, node := p.sampleStats()
+	nodeCPU, nodeMemory := cpuMemStats(node.CPUSeconds, node.MemoryUsedBytes)
 
-	snapshots := p.snapshotTrackedVMs()
-	podStats := make([]statsv1alpha1.PodStats, 0, len(snapshots))
-	for _, s := range snapshots {
-		cpu, mem := cpuMemStats(readProcessCPUSeconds(s.PID), readProcessMemoryWorkingSet(s.PID))
+	podStats := make([]statsv1alpha1.PodStats, 0, len(samples))
+	for _, s := range samples {
+		cpu, mem := cpuMemStats(s.cpuSeconds, s.memBytes)
 		ps := statsv1alpha1.PodStats{
 			PodRef:    statsv1alpha1.PodReference{Name: s.PodName, Namespace: s.Namespace},
 			StartTime: now,
@@ -46,7 +60,7 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 				Name: containerName, StartTime: now, CPU: cpu, Memory: mem,
 			}},
 		}
-		if net := buildNetworkStats(s.PID, s.Tap); net != nil {
+		if net := buildNetworkStats(s); net != nil {
 			ps.Network = net
 		}
 		podStats = append(podStats, ps)
@@ -65,21 +79,21 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 
 func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	nowMs := time.Now().UnixMilli()
+	samples, node := p.sampleStats()
 
 	families := []*dto.MetricFamily{
 		newCounterFamily("node_cpu_usage_seconds_total",
 			"Cumulative cpu time consumed by the node in core-seconds",
-			newCounter(readNodeCPUSeconds(), nowMs, nil)),
+			newCounter(node.CPUSeconds, nowMs, nil)),
 		newGaugeFamily("node_memory_working_set_bytes",
 			"Current working set of the node in bytes",
-			newGauge(float64(readNodeMemoryWorkingSet()), nowMs, nil)),
+			newGauge(float64(node.MemoryUsedBytes), nowMs, nil)),
 	}
 
-	snapshots := p.snapshotTrackedVMs()
 	var containerCPU, containerMem, podCPU, podMem []*dto.Metric
-	for _, s := range snapshots {
-		cpuSec := readProcessCPUSeconds(s.PID)
-		memBytes := float64(readProcessMemoryWorkingSet(s.PID))
+	for _, s := range samples {
+		cpuSec := s.cpuSeconds
+		memBytes := float64(s.memBytes)
 
 		containerLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
@@ -114,6 +128,37 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	return families, nil
 }
 
+// sampleStats returns the shared short-TTL stats snapshot. Three scrape
+// consumers (stats summary, metrics resource, Prometheus collector) land
+// independently; without the TTL each pays its own /proc+statfs sweep.
+func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
+	p.statsMu.Lock()
+	defer p.statsMu.Unlock()
+	if time.Since(p.statsAt) < statsSampleTTL {
+		return p.statsVMs, p.statsNode
+	}
+	snaps := p.snapshotTrackedVMs()
+	vms := make([]vmSample, 0, len(snaps))
+	for _, s := range snaps {
+		cpu, rss := readProcStatCPURSS(s.PID)
+		sample := vmSample{
+			vmSnapshot: s, cpuSeconds: cpu, memBytes: rss,
+			diskCOW: vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID),
+		}
+		if s.Tap != "" {
+			sample.rxBytes, sample.txBytes = readProcNetDev(s.PID, s.Tap)
+		}
+		vms = append(vms, sample)
+	}
+	node := provider.NodeStats{
+		CPUSeconds:      readNodeCPUSeconds(),
+		MemoryUsedBytes: readNodeMemoryWorkingSet(),
+	}
+	node.StorageTotal, node.StorageAvailable = provider.StorageBytes()
+	p.statsVMs, p.statsNode, p.statsAt = vms, node, time.Now()
+	return vms, node
+}
+
 // snapshotTrackedVMs copies the minimal VM data needed for stats under
 // RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
 func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
@@ -141,17 +186,14 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	return out
 }
 
-func buildNetworkStats(pid int, tap string) *statsv1alpha1.NetworkStats {
-	if tap == "" || pid == 0 {
+func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
+	if s.Tap == "" || (s.rxBytes == 0 && s.txBytes == 0) {
 		return nil
 	}
-	rx, tx := readProcNetDev(pid, tap)
-	if rx == 0 && tx == 0 {
-		return nil
-	}
+	rx, tx := s.rxBytes, s.txBytes
 	return &statsv1alpha1.NetworkStats{
 		InterfaceStats: statsv1alpha1.InterfaceStats{
-			Name: tap, RxBytes: &rx, TxBytes: &tx,
+			Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
 		},
 	}
 }
@@ -200,31 +242,30 @@ func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
 }
 
-func readProcessCPUSeconds(pid int) float64 {
+func readProcStatCPURSS(pid int) (cpuSeconds float64, rssBytes int64) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	s := string(data)
+	return parseProcStat(string(data), os.Getpagesize())
+}
+
+// parseProcStat extracts utime+stime and RSS from a /proc/<pid>/stat line
+// (fields 14, 15 and 24; split after the parenthesized comm, which may
+// contain spaces). One read answers both scrape questions.
+func parseProcStat(s string, pageSize int) (cpuSeconds float64, rssBytes int64) {
 	idx := strings.LastIndex(s, ")")
 	if idx < 0 || idx+2 >= len(s) {
-		return 0
+		return 0, 0
 	}
 	fields := strings.Fields(s[idx+2:])
-	if len(fields) < 13 {
-		return 0
+	if len(fields) < 22 {
+		return 0, 0
 	}
 	utime, _ := strconv.ParseInt(fields[11], 10, 64)
 	stime, _ := strconv.ParseInt(fields[12], 10, 64)
-	return float64(utime+stime) / 100 // CLK_TCK
-}
-
-func readProcessMemoryWorkingSet(pid int) int64 {
-	fields, err := provider.ReadKeyedProcFile("/proc/"+strconv.Itoa(pid)+"/status", "VmRSS")
-	if err != nil {
-		return 0
-	}
-	return fields["VmRSS"] * 1024
+	rssPages, _ := strconv.ParseInt(fields[21], 10, 64)
+	return float64(utime+stime) / 100, rssPages * int64(pageSize) // CLK_TCK
 }
 
 func newCounterFamily(name, help string, metrics ...*dto.Metric) *dto.MetricFamily {
