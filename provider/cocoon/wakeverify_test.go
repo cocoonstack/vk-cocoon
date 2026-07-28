@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/ociutil"
+	"github.com/cocoonstack/cocoon-common/snapshot"
 
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -79,7 +81,7 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	}}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Registry = wakeVerifyRegistry{tagExists: false, hasManifestErr: errors.New("registry down")}
+	p.Registry = wakeVerifyRegistry{manifestErr: errors.New("registry down")}
 
 	_, _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "registry down") {
@@ -94,10 +96,10 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 // blob) so resolveWakeSource's local-cache verification can run against it.
 type wakeVerifyRegistry struct {
 	fakeRegistry
-	tagExists      bool
-	hasManifestErr error
-	manifestRaw    []byte
-	blobs          map[string][]byte
+	tagExists   bool
+	manifestErr error
+	manifestRaw []byte
+	blobs       map[string][]byte
 }
 
 func newWakeVerifyRegistry(t *testing.T, snapshotID string) wakeVerifyRegistry {
@@ -111,11 +113,13 @@ func newWakeVerifyRegistryWithImage(t *testing.T, snapshotID, baseImage string) 
 	return wakeVerifyRegistry{tagExists: true, manifestRaw: raw, blobs: blobs}
 }
 
-func (r wakeVerifyRegistry) HasManifest(context.Context, string, string) (bool, error) {
-	return r.tagExists, r.hasManifestErr
-}
-
 func (r wakeVerifyRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
+	if r.manifestErr != nil {
+		return nil, "", r.manifestErr
+	}
+	if !r.tagExists {
+		return nil, "", fmt.Errorf("get manifest: %w", snapshot.ErrManifestNotFound)
+	}
 	return r.manifestRaw, "", nil
 }
 

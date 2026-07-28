@@ -208,7 +208,7 @@ func TestCreatePodEvidenceFailClosedOnRegistryError(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.Registry = wakeVerifyRegistry{hasManifestErr: errors.New("registry down")}
+	p.Registry = wakeVerifyRegistry{manifestErr: errors.New("registry down")}
 
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "snapshot-repo:latest", Mode: "clone"})
 	err := p.CreatePod(t.Context(), pod)

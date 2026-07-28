@@ -20,8 +20,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-const staleCreateConcurrency = 8
-
 // StartupReconcile rebuilds the in-memory tables from K8s pods and
 // cocoon VMs so restarts don't leak VMs or lose pod associations.
 // Unmatched VMs are handled per OrphanPolicy.
@@ -65,6 +63,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 	}
 	matched := make(map[string]bool, len(vms))
+	var probePods []*corev1.Pod
 
 	for i := range podItems(pods) {
 		pod := &pods.Items[i]
@@ -72,6 +71,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		if runtime.VMID == "" {
 			if v := p.adoptByVMName(ctx, pod, vmByName); v != nil {
 				matched[v.ID] = true
+				probePods = append(probePods, pod)
 				continue
 			}
 			p.reconcileNoVMID(ctx, pod)
@@ -91,8 +91,11 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
-		p.startProbeIfEnabled(pod)
+		probePods = append(probePods, pod)
 	}
+	// First probes run synchronously (3s worst case each) and this path
+	// gates node registration — start them bounded-parallel.
+	fanOut(startupFanOut, probePods, p.startProbeIfEnabled)
 
 	for i := range vms {
 		if matched[vms[i].ID] {
@@ -112,7 +115,7 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
 	var g errgroup.Group
-	g.SetLimit(staleCreateConcurrency)
+	g.SetLimit(startupFanOut)
 	for i := range vms {
 		v := &vms[i]
 		if v.State != vm.StateCreating {
@@ -228,7 +231,6 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	p.seedLifecycleIntentFromPod(pod)
-	p.startProbeIfEnabled(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v
 }

@@ -434,17 +434,14 @@ func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local
 }
 
 // fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;
-// ok=false means the registry has no such tag.
+// ok=false is the registry's authoritative no-such-tag (typed 404), and any
+// other error keeps the evidence checks failing closed.
 func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*manifest.OCIManifest, bool, error) {
-	exists, err := p.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	if err != nil {
-		return nil, false, fmt.Errorf("check hibernate tag: %w", err)
-	}
-	if !exists {
-		return nil, false, nil
-	}
 	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	if err != nil {
+	switch {
+	case errors.Is(err, commonsnapshot.ErrManifestNotFound):
+		return nil, false, nil
+	case err != nil:
 		return nil, false, fmt.Errorf("get hibernate manifest: %w", err)
 	}
 	m, err := manifest.Parse(raw)
