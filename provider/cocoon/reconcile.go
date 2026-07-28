@@ -48,6 +48,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	if err := g.Wait(); err != nil {
 		return err
 	}
+	vms = p.reconcileStaleCreates(ctx, vms)
 
 	vmByID := make(map[string]*vm.VM, len(vms))
 	vmByName := make(map[string]*vm.VM, len(vms))
@@ -96,6 +97,41 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 
 	logger.Infof(ctx, "startup reconcile: %d pods adopted, %d orphan VMs", len(matched), len(vms)-len(matched))
 	return nil
+}
+
+// reconcileStaleCreates strips creating placeholders from the startup VM list
+// so no adoption path ever sees one — adopting a skeleton deadlocks its pod.
+// cocoon's lock-checked verb decides skeleton vs in-flight clone; on busy or
+// any error the record is left alone and only excluded from the indexes.
+func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.VM {
+	logger := log.WithFunc("Provider.reconcileStaleCreates")
+	kept := make([]vm.VM, 0, len(vms))
+	for i := range vms {
+		v := &vms[i]
+		if v.State != vm.StateCreating {
+			kept = append(kept, *v)
+			continue
+		}
+		outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
+		if err != nil {
+			metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
+			logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); skipping adoption", v.ID, v.Name)
+			continue
+		}
+		metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
+		if outcome == vm.StaleCreateNotCreating {
+			// The create committed between List and the verb; adopt the live record.
+			fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
+			if inspectErr != nil {
+				logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
+				continue
+			}
+			kept = append(kept, *fresh)
+			continue
+		}
+		logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
+	}
+	return kept
 }
 
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose

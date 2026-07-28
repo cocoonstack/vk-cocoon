@@ -104,7 +104,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	metrics.HibernateTotal.WithLabelValues("snapshot", "ok").Inc()
 	if p.Pusher != nil {
 		pushStart := time.Now()
-		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
+		// spec.Image rides as the baseimage annotation so a later evidence-derived
+		// restore can veto a fresh boot from a different image (hibernateEvidence).
+		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
 			p.rollbackHibernateNIC(ctx, v, dropNIC)
