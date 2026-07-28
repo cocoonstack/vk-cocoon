@@ -6,8 +6,8 @@ defaults to `10250` and is set by `VK_KUBELET_PORT`.
 ## `:10250/stats/summary` — kubelet stats API
 
 Consumed by metrics-server and `kubectl top`. Reports per-pod CPU
-(cumulative nanoseconds from `/proc/<pid>/stat`) and memory (RSS from
-`/proc/<pid>/status`), plus per-pod network I/O from the TAP device
+(cumulative nanoseconds) and memory (RSS field 24) from one
+`/proc/<pid>/stat` read, plus per-pod network I/O from the TAP device
 inside each VM's network namespace (`/proc/<pid>/net/dev`). Node-level
 CPU and memory are read from `/proc/stat` and `/proc/meminfo`.
 
@@ -55,12 +55,13 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_hibernate_evidence_total{verdict}` | Counter | Fresh boots intercepted by hibernate evidence (`verdict=restored\|image_conflict\|source_conflict\|unavailable`) |
 | `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched by startup reconcile (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
 
-All per-VM stats are read from `/proc` using the hypervisor PID tracked
-in memory — no shell-out to `cocoon` on each scrape. The tracking table
-is snapshot-copied under RLock and `/proc` reads happen outside the lock
-to avoid blocking CreatePod/DeletePod. When a VM is restarted in-place
-(event watcher → `cocoon vm start`), the PID is re-inspected and
-refreshed.
+All three metrics surfaces share one complete sample for two seconds,
+so reported values may trail `/proc` by up to that interval. Per-VM
+stats use the hypervisor PID tracked in memory — no shell-out to `cocoon`
+on each scrape. The tracking table is snapshot-copied under RLock and
+`/proc` reads happen outside the lock to avoid blocking
+CreatePod/DeletePod. When a VM is restarted in-place (event watcher →
+`cocoon vm start`), the PID is re-inspected and refreshed.
 
 ## Kubernetes Events
 
