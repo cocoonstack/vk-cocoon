@@ -3,7 +3,6 @@ package cocoon
 import (
 	"cmp"
 	"context"
-	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -104,24 +103,27 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 
 // classifyNICRecovery retries the evidence lookup until the registry answers —
 // guessing on an error could mark a fresh clone Ready without its fixup (the
-// NopPinger deployment would never surface it). Budget exhaustion fails loud.
+// NopPinger deployment would never surface it). The deadline context owns the
+// budget so even a hanging registry unblocks; exhaustion fails loud.
 func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence, ok bool) {
-	ctx := p.lifecycleCtx
+	budget := cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
+	ctx, cancel := context.WithTimeout(p.lifecycleCtx, budget)
+	defer cancel()
 	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
 	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
-	deadline := time.Now().Add(cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget))
 	for {
 		evidence, _, err := p.hibernateEvidence(ctx, vmName)
 		if err == nil {
 			return evidence, true
 		}
-		if time.Now().After(deadline) {
-			p.failOp(ctx, pod, "ResumeClassifyFailed", "reconcile", err)
+		switch {
+		case p.lifecycleCtx.Err() != nil:
+			return false, false
+		case ctx.Err() != nil:
+			p.failOp(p.lifecycleCtx, pod, "ResumeClassifyFailed", "reconcile", err)
 			return false, false
 		}
-		if !commonk8s.SleepCtx(ctx, delay) {
-			return false, false
-		}
+		commonk8s.SleepCtx(ctx, delay)
 		delay = min(delay*2, maxDelay)
 	}
 }

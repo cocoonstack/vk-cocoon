@@ -298,6 +298,41 @@ func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
 	}
 }
 
+func TestStartupDispatchClassifyFailsLoudOnHangingRegistry(t *testing.T) {
+	// A registry that accepts but never answers must not hold the claim and
+	// park the pod in Creating forever; the budget deadline fails it loudly.
+	const vmName = "vk-ns-demo-0"
+	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Mode:    "clone",
+		OS:      string(cocoonv1.OSWindows),
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+	})
+	pod.Spec.NodeName = "cocoon-pool"
+	meta.VMRuntime{VMID: winVM.ID, IP: winVM.IP}.Apply(pod)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+
+	rt := &fakeRuntime{listVMs: []vm.VM{winVM}}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.Registry = blockingEvidenceRegistry{}
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+	p.deferredRecheckBudget = 30 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateFailed)
+	p.Close()
+	if len(rt.execCalls) != 0 {
+		t.Errorf("no fixup may run while classification is unresolved, execs = %d", len(rt.execCalls))
+	}
+}
+
 func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
 	meta.HibernateState(true).Apply(pod)
@@ -359,4 +394,13 @@ func (r *flakyEvidenceRegistry) HasManifest(context.Context, string, string) (bo
 		return false, errors.New("registry down")
 	}
 	return false, nil
+}
+
+// blockingEvidenceRegistry accepts the lookup and never answers until the
+// caller's context dies.
+type blockingEvidenceRegistry struct{ fakeRegistry }
+
+func (blockingEvidenceRegistry) HasManifest(ctx context.Context, _, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
 }
