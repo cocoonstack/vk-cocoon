@@ -1,11 +1,14 @@
 package cocoon
 
 import (
+	"cmp"
 	"context"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -86,14 +89,40 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 	case resumeOpClassifyNIC:
 		spec := meta.ParseVMSpec(pod)
 		run(func() {
-			// Evidence ⟺ restore, by CreatePod's own fresh-boot guard; a
-			// registry error keeps the conservative lease wait (loud on timeout).
-			if evidence, _, err := p.hibernateEvidence(p.lifecycleCtx, spec.VMName); err == nil && !evidence {
+			// Evidence ⟺ restore, by CreatePod's own fresh-boot guard.
+			evidence, ok := p.classifyNICRecovery(pod, spec.VMName)
+			switch {
+			case !ok:
+			case evidence:
+				p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v)
+			default:
 				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile")
-				return
 			}
-			p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v)
 		})
+	}
+}
+
+// classifyNICRecovery retries the evidence lookup until the registry answers —
+// guessing on an error could mark a fresh clone Ready without its fixup (the
+// NopPinger deployment would never surface it). Budget exhaustion fails loud.
+func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence, ok bool) {
+	ctx := p.lifecycleCtx
+	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
+	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
+	deadline := time.Now().Add(cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget))
+	for {
+		evidence, _, err := p.hibernateEvidence(ctx, vmName)
+		if err == nil {
+			return evidence, true
+		}
+		if time.Now().After(deadline) {
+			p.failOp(ctx, pod, "ResumeClassifyFailed", "reconcile", err)
+			return false, false
+		}
+		if !commonk8s.SleepCtx(ctx, delay) {
+			return false, false
+		}
+		delay = min(delay*2, maxDelay)
 	}
 }
 

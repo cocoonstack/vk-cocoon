@@ -1,7 +1,10 @@
 package cocoon
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -261,6 +264,40 @@ func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
 	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateFailed)
 }
 
+func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
+	// Guessing restore on a registry error could mark a fresh clone Ready
+	// without its fixup; the classifier must retry until the registry answers.
+	const vmName = "vk-ns-demo-0"
+	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Mode:    "clone",
+		OS:      string(cocoonv1.OSWindows),
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+	})
+	pod.Spec.NodeName = "cocoon-pool"
+	meta.VMRuntime{VMID: winVM.ID, IP: winVM.IP}.Apply(pod)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+
+	rt := &fakeRuntime{listVMs: []vm.VM{winVM}}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.Registry = &flakyEvidenceRegistry{fails: 2}
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	p.Close()
+	if len(rt.execCalls) == 0 {
+		t.Error("no evidence after retries means fresh clone: the fixup must re-run")
+	}
+}
+
 func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
 	meta.HibernateState(true).Apply(pod)
@@ -304,4 +341,22 @@ func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta
 	}
 	pod, err := p.GetPod(t.Context(), namespace, name)
 	t.Fatalf("lifecycle never reached %q (pod: %v, err: %v)", want, pod, err)
+}
+
+// flakyEvidenceRegistry errors HasManifest a set number of times, then
+// reports no hibernate tag.
+type flakyEvidenceRegistry struct {
+	fakeRegistry
+	mu    sync.Mutex
+	fails int
+}
+
+func (r *flakyEvidenceRegistry) HasManifest(context.Context, string, string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fails > 0 {
+		r.fails--
+		return false, errors.New("registry down")
+	}
+	return false, nil
 }
