@@ -193,6 +193,39 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 	t.Fatal("record was never indexed after reaching running")
 }
 
+func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
+	// A transient inspect failure right after not-creating must not strand
+	// the committed VM: it emits no further events, so only the watcher can
+	// bring it into the index.
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
+		inspectSeq:          []fakeInspectStep{{err: errors.New("cli hiccup")}},
+		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+			if got.State != vm.StateRunning {
+				t.Fatalf("indexed VM state = %q, want running", got.State)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("committed VM was never indexed after the transient inspect failure")
+}
+
 func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},

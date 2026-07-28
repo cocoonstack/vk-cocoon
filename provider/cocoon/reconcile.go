@@ -136,8 +136,12 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
 				switch {
 				case inspectErr != nil:
+					// Transient inspect failures get the watcher too: a committed
+					// running VM emits no further events, so dropping it here
+					// would strand it until the next restart.
 					if !errors.Is(inspectErr, vm.ErrVMNotFound) {
-						logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
+						logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; watching for commit", v.ID)
+						p.watchBusyCreate(v.ID)
 					}
 				case fresh.State == vm.StateRunning:
 					keep[i] = fresh
