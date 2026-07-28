@@ -28,6 +28,7 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 		annotate  func(pod *corev1.Pod) // extra annotations beyond spec+VMID
 		deleting  bool
 		vms       []vm.VM
+		snapshots map[string]*vm.Snapshot
 		wantSaves int
 		wantExec  bool
 		wantLC    meta.LifecycleState
@@ -93,8 +94,8 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateReady,
 		},
 		{
-			// A drop-NIC (CH+Windows) restore runs no post-clone; absent
-			// marker must resume the lease wait, never the PnP fixup.
+			// Drop-NIC spec + no marker + hibernate evidence = interrupted
+			// restore: resume the lease wait, never the PnP fixup.
 			name: "drop-nic restore without marker resumes ready wait",
 			spec: meta.VMSpec{
 				VMName:  vmName,
@@ -105,8 +106,26 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			annotate: func(pod *corev1.Pod) {
 				pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
 			},
-			vms:    []vm.VM{running},
-			wantLC: meta.LifecycleStateReady,
+			snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}},
+			vms:       []vm.VM{running},
+			wantLC:    meta.LifecycleStateReady,
+		},
+		{
+			// Same facts without evidence = a fresh clone caught before its
+			// running marker: the full fixup (PnP exec) must re-run.
+			name: "drop-nic fresh clone without marker re-runs the fixup",
+			spec: meta.VMSpec{
+				VMName:  vmName,
+				Mode:    "clone",
+				OS:      string(cocoonv1.OSWindows),
+				Backend: string(cocoonv1.BackendCloudHypervisor),
+			},
+			annotate: func(pod *corev1.Pod) {
+				pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+			},
+			vms:      []vm.VM{running},
+			wantExec: true,
+			wantLC:   meta.LifecycleStateReady,
 		},
 		{
 			// The Creating patch can be lost to apiserver flakiness while the
@@ -166,7 +185,7 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 				pod.DeletionTimestamp = &now
 			}
 
-			rt := &fakeRuntime{listVMs: tc.vms}
+			rt := &fakeRuntime{listVMs: tc.vms, snapshots: tc.snapshots}
 			p := newTestProvider(t)
 			p.NodeName = "cocoon-pool"
 			p.Runtime = rt

@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	resumeOpHibernate = "hibernate"
-	resumeOpPostClone = "post_clone"
-	resumeOpReadyWait = "ready_wait"
+	resumeOpHibernate   = "hibernate"
+	resumeOpPostClone   = "post_clone"
+	resumeOpReadyWait   = "ready_wait"
+	resumeOpClassifyNIC = "classify_drop_nic"
 )
 
 // dispatchOwedWork resumes the step a vk restart interrupted, derived from
@@ -82,6 +83,17 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 	case resumeOpReadyWait:
 		spec := meta.ParseVMSpec(pod)
 		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v) })
+	case resumeOpClassifyNIC:
+		spec := meta.ParseVMSpec(pod)
+		run(func() {
+			// Evidence ⟺ restore, by CreatePod's own fresh-boot guard; a
+			// registry error keeps the conservative lease wait (loud on timeout).
+			if evidence, _, err := p.hibernateEvidence(p.lifecycleCtx, spec.VMName); err == nil && !evidence {
+				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile")
+				return
+			}
+			p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v)
+		})
 	}
 }
 
@@ -146,12 +158,13 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		return resumeOpReadyWait
 	default:
 		spec := meta.ParseVMSpec(pod)
-		// A drop-NIC restore runs no post-clone (its finalize only waits for
-		// the lease), and a fresh clone writes the running marker within ms of
-		// dispatch — so no marker on a drop-NIC spec means restore, and the
-		// PnP fixup must not run over the hot-added NIC.
+		// No marker on a drop-NIC spec is either an interrupted restore (no
+		// post-clone, finalize only waits for the lease — PnP must not run
+		// over the hot-added NIC) or a fresh clone caught in the ms before
+		// its running marker. Only hibernate evidence can tell; resolved
+		// asynchronously at dispatch.
 		if shouldDropNICBeforeHibernate(spec) {
-			return resumeOpReadyWait
+			return resumeOpClassifyNIC
 		}
 		if postCloneNeeded(spec, v) {
 			return resumeOpPostClone
