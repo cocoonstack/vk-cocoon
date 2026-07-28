@@ -101,8 +101,7 @@ type wakeVerifyRegistry struct {
 
 func newWakeVerifyRegistry(t *testing.T, snapshotID string) wakeVerifyRegistry {
 	t.Helper()
-	raw, blobs := hibernateArtifact(t, snapshotID, "")
-	return wakeVerifyRegistry{tagExists: true, manifestRaw: raw, blobs: blobs}
+	return newWakeVerifyRegistryWithImage(t, snapshotID, "")
 }
 
 func newWakeVerifyRegistryWithImage(t *testing.T, snapshotID, baseImage string) wakeVerifyRegistry {

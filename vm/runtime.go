@@ -11,8 +11,7 @@ import (
 const (
 	// StateRunning is the state string cocoon reports for a live VM.
 	StateRunning = "running"
-	// StateCreating marks a placeholder record whose create/clone has not
-	// committed yet — either in flight or an ownerless skeleton.
+	// StateCreating is cocoon's placeholder state before a create/clone commits.
 	StateCreating = "creating"
 
 	RestoreCopy     RestoreMode = "copy"
@@ -145,8 +144,8 @@ type Runtime interface {
 	Start(ctx context.Context, vmID string) error
 	Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error
 	Logs(ctx context.Context, vmID string, tail int) (io.ReadCloser, error)
-	// ReconcileStaleCreate reclaims an ownerless creating placeholder via
-	// cocoon's lock-checked verb; busy means an operation still owns the VM.
+	// ReconcileStaleCreate reclaims an ownerless creating placeholder;
+	// busy means an in-flight operation still owns the VM.
 	ReconcileStaleCreate(ctx context.Context, vmID string) (StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
 	SnapshotRemoveIfExists(ctx context.Context, name string) error

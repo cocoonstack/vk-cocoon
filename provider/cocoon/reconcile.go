@@ -16,6 +16,8 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+const staleCreateConcurrency = 8
+
 // StartupReconcile rebuilds the in-memory tables from K8s pods and
 // cocoon VMs so restarts don't leak VMs or lose pod associations.
 // Unmatched VMs are handled per OrphanPolicy.
@@ -99,37 +101,49 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	return nil
 }
 
-// reconcileStaleCreates strips creating placeholders from the startup VM list
-// so no adoption path ever sees one — adopting a skeleton deadlocks its pod.
-// cocoon's lock-checked verb decides skeleton vs in-flight clone; on busy or
-// any error the record is left alone and only excluded from the indexes.
+// reconcileStaleCreates strips creating placeholders from the startup VM list —
+// adopting one deadlocks its pod. cocoon's lock-checked verb decides skeleton
+// vs in-flight clone; busy and errors leave the record alone, only unindexed.
+// Bounded fan-out: this gates node registration and the records are independent.
 func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.VM {
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
-	kept := make([]vm.VM, 0, len(vms))
+	keep := make([]*vm.VM, len(vms))
+	var g errgroup.Group
+	g.SetLimit(staleCreateConcurrency)
 	for i := range vms {
 		v := &vms[i]
 		if v.State != vm.StateCreating {
-			kept = append(kept, *v)
+			keep[i] = v
 			continue
 		}
-		outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
-		if err != nil {
-			metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
-			logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); skipping adoption", v.ID, v.Name)
-			continue
-		}
-		metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
-		if outcome == vm.StaleCreateNotCreating {
-			// The create committed between List and the verb; adopt the live record.
-			fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
-			if inspectErr != nil {
-				logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
-				continue
+		g.Go(func() error {
+			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
+			if err != nil {
+				metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
+				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); skipping adoption", v.ID, v.Name)
+				return nil
 			}
-			kept = append(kept, *fresh)
-			continue
+			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
+			if outcome == vm.StaleCreateNotCreating {
+				// The create committed between List and the verb; adopt the live record.
+				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
+				if inspectErr != nil {
+					logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
+					return nil
+				}
+				keep[i] = fresh
+				return nil
+			}
+			logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
+			return nil
+		})
+	}
+	_ = g.Wait() // workers report per-record outcomes via keep, never errors
+	kept := make([]vm.VM, 0, len(vms))
+	for _, v := range keep {
+		if v != nil {
+			kept = append(kept, *v)
 		}
-		logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
 	}
 	return kept
 }

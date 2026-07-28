@@ -176,6 +176,7 @@ func TestCreatePodDerivesRestoreFromLocalEvidence(t *testing.T) {
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	p.Close()
 	if rt.cloned == nil || rt.cloned.From != vmName {
 		t.Fatalf("evidence must route to the hibernate restore path, cloned = %#v", rt.cloned)
 	}
