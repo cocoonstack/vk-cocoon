@@ -13,6 +13,9 @@ const (
 	StateRunning = "running"
 	// StateCreating is cocoon's placeholder state before a create/clone commits.
 	StateCreating = "creating"
+	// StateCreated is cocoon's registered-but-not-started state between
+	// creating and running on the run path.
+	StateCreated = "created"
 
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"

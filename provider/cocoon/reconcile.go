@@ -175,9 +175,15 @@ func (p *Provider) watchBusyCreate(vmID string) {
 			switch {
 			case errors.Is(err, vm.ErrVMNotFound):
 				return
-			case err == nil && v.State != vm.StateCreating:
-				logger.Infof(ctx, "in-flight create %s (%s) committed as %s; indexing for adoption", vmID, v.Name, v.State)
+			case err == nil && v.State == vm.StateRunning:
+				logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, v.Name)
 				p.indexOrphanByName(v)
+				return
+			case err == nil && v.State != vm.StateCreating && v.State != vm.StateCreated:
+				// Terminal without ever running (stopped/error); adoption would
+				// mark Ready on a dead record, so apply the orphan policy instead.
+				logger.Warnf(ctx, "in-flight create %s (%s) ended %s without running; applying orphan policy", vmID, v.Name, v.State)
+				p.handleOrphan(ctx, v)
 				return
 			}
 			if time.Now().After(deadline) {

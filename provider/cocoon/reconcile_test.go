@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -67,8 +68,14 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
-		inspectSeq:          []fakeInspectStep{{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}}},
-		inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectSeq: []fakeInspectStep{
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+			// created is transitional (registered, VMM not started): must keep
+			// polling, not index a record adoption would mark Ready.
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+		},
+		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -91,6 +98,41 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("committed in-flight create was never indexed for adoption")
+}
+
+func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
+	// The surviving clone ends stopped/error without ever running; indexing it
+	// would let CreatePod adopt a dead record as Ready. OrphanDestroy frees the name.
+	removed := make(chan struct{})
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
+		inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: "error"},
+		onRemove:            func() { close(removed) },
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.OrphanPolicy = provider.OrphanDestroy
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	select {
+	case <-removed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dead-on-arrival create was never removed under OrphanDestroy")
+	}
+	p.Close()
+	if rt.removedID != "inflight-vmid" {
+		t.Errorf("removed %q, want inflight-vmid", rt.removedID)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		t.Errorf("dead record must not be indexed, got %#v", got)
+	}
 }
 
 func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
