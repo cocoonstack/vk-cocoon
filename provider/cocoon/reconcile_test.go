@@ -249,27 +249,61 @@ func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
 	}
 }
 
-func TestStartupReconcileSkeletonVerbErrorSkipsAdoption(t *testing.T) {
-	// Also the mixed-version shape: an old cocoon binary without the verb
-	// errors out, and vk must fail safe by leaving the record alone.
+func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
+	// A transient verb failure cannot classify the record; the watcher takes
+	// over, and one that never leaves creating exhausts the budget untouched.
 	rt := &fakeRuntime{
 		listVMs:        []vm.VM{{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
-		staleCreateErr: errors.New(`unknown command "reconcile-stale-create"`),
+		staleCreateErr: errors.New("cli hiccup"),
+		inspectVM:      &vm.VM{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+	p.deferredRecheckBudget = 20 * time.Millisecond
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
+	p.Close()
 	if got := p.vmByName("vk-ns-demo-0"); got != nil {
-		t.Errorf("unreconciled placeholder must not be indexed, got %#v", got)
+		t.Errorf("still-creating record must not be indexed, got %#v", got)
 	}
 	if rt.removedID != "" {
-		t.Errorf("unreconciled placeholder must not be removed, removed %q", rt.removedID)
+		t.Errorf("still-creating record must not be removed, removed %q", rt.removedID)
 	}
+}
+
+func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
+	rt := &fakeRuntime{
+		listVMs:        []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateErr: errors.New("cli hiccup"),
+		inspectVM:      &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+			if got.State != vm.StateRunning {
+				t.Fatalf("indexed VM state = %q, want running", got.State)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("record committed after the verb error was never indexed")
 }
 
 func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {

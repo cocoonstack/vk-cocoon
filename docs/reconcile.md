@@ -16,13 +16,12 @@ On every restart vk-cocoon:
    before any adoption index is built — adopting a creating placeholder
    deadlocks its pod. `collected`/`not-found` free the name for a clean
    recreate; `busy` (an in-flight clone still owns the record) and
-   transient inspect errors hand the record to a bounded
+   transient verb or inspect errors hand the record to a bounded
    background watcher that indexes it for adoption once it reaches
    `running`, or applies the orphan policy if it dies without ever
    running; a record that already left `creating` is adopted only when
-   `running`. On an older cocoon binary the verb errors and vk fails
-   safe: the record is left alone and only excluded from adoption.
-   Outcomes are counted on `cocoon_vk_stale_create_reconcile_total`.
+   `running`. Outcomes are counted on
+   `cocoon_vk_stale_create_reconcile_total`.
 4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
    the VMID against the runtime list.
 5. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:

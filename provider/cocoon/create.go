@@ -161,8 +161,7 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 		return false, fmt.Errorf("hibernate snapshot of vm %s came from image %q but the pod requests %q; delete the %s tag to discard the hibernated state", spec.VMName, recordedImage, spec.Image, meta.HibernateSnapshotTag)
 	}
 	metrics.HibernateEvidenceTotal.WithLabelValues("restored").Inc()
-	// Under p.mu: CreatePod already tracked this pod, so GetPod's DeepCopy may
-	// be reading the annotations map concurrently (same guard as setPodAnnotation).
+	// The pod is tracked: GetPod's DeepCopy may be reading this map.
 	p.mu.Lock()
 	meta.MarkRestoreFromHibernate(pod)
 	p.mu.Unlock()
@@ -171,9 +170,8 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 }
 
 // hibernateEvidence reports whether a hibernate snapshot owns vmName's guest
-// state, plus the pod image recorded at push time ("" on legacy pushes). The
-// registry tag is authoritative and errors fail closed (never fresh-boot on
-// uncertainty); registry-less deployments never push, so local presence decides.
+// state, plus the pod image recorded at push time ("" on legacy pushes).
+// Registry errors fail closed: never fresh-boot on uncertainty.
 func (p *Provider) hibernateEvidence(ctx context.Context, vmName string) (bool, string, error) {
 	if p.Registry == nil {
 		if _, err := p.Runtime.Snapshot(ctx, vmName); err != nil {
@@ -478,10 +476,8 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-// applyRuntime writes VMID/IP annotations onto the in-memory pod and
-// patches them back to the API server so they survive provider restarts.
-// The in-memory write takes p.mu: the pod is usually tracked already, so
-// GetPod's DeepCopy may be reading the annotations map concurrently.
+// applyRuntime writes VMID/IP annotations onto the in-memory pod (under
+// p.mu against GetPod's DeepCopy) and patches them back to the API server.
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	meta.VMRuntime{VMID: v.ID, IP: v.IP}.Apply(pod)

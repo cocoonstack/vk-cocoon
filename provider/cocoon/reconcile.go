@@ -1,7 +1,6 @@
 package cocoon
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -106,9 +105,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 }
 
 // reconcileStaleCreates strips creating placeholders from the startup VM list —
-// adopting one deadlocks its pod. cocoon's lock-checked verb decides skeleton
-// vs in-flight clone; busy and errors leave the record alone, only unindexed.
-// Bounded fan-out: this gates node registration and the records are independent.
+// adopting one deadlocks its pod (#54). Bounded fan-out: this gates node registration.
 func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.VM {
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
@@ -124,7 +121,8 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
 			if err != nil {
 				metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
-				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); skipping adoption", v.ID, v.Name)
+				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
+				p.watchBusyCreate(v.ID)
 				return nil
 			}
 			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
@@ -135,17 +133,14 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 				// created before start reacquires it, so created can appear here.
 				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
 				switch {
+				case errors.Is(inspectErr, vm.ErrVMNotFound):
+					// Gone between the verb and the inspect.
 				case inspectErr != nil:
-					// Transient inspect failures get the watcher too: a committed
-					// running VM emits no further events, so dropping it here
-					// would strand it until the next restart.
-					if !errors.Is(inspectErr, vm.ErrVMNotFound) {
-						logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; watching for commit", v.ID)
-						p.watchBusyCreate(v.ID)
-					}
+					logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; watching for commit", v.ID)
+					p.watchBusyCreate(v.ID)
 				case fresh.State == vm.StateRunning:
 					keep[i] = fresh
-				case fresh.State == vm.StateCreating || fresh.State == vm.StateCreated:
+				case inFlightCreate(fresh.State):
 					p.watchBusyCreate(v.ID)
 				default:
 					logger.Warnf(ctx, "placeholder %s (%s) left creating as %s without running; applying orphan policy", v.ID, v.Name, fresh.State)
@@ -170,17 +165,14 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	return kept
 }
 
-// watchBusyCreate polls a creating record an in-flight operation still owned
-// at startup: once its clone commits, the VM must reach the name index or the
-// pod's create retries collide forever — the event watcher only reacts to
-// deletions and stops.
+// watchBusyCreate polls an unclassified creating record: the event watcher
+// only reacts to deletions and stops, so a clone that commits is invisible.
 func (p *Provider) watchBusyCreate(vmID string) {
 	p.goBackground(func() {
 		ctx := p.lifecycleCtx
 		logger := log.WithFunc("Provider.watchBusyCreate")
-		delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
-		maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
-		deadline := time.Now().Add(cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget))
+		delay, maxDelay, budget := p.recheckBackoff()
+		deadline := time.Now().Add(budget)
 		for {
 			if !commonk8s.SleepCtx(ctx, delay) {
 				return
@@ -193,9 +185,7 @@ func (p *Provider) watchBusyCreate(vmID string) {
 				logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, v.Name)
 				p.indexOrphanByName(v)
 				return
-			case err == nil && v.State != vm.StateCreating && v.State != vm.StateCreated:
-				// Terminal without ever running (stopped/error); adoption would
-				// mark Ready on a dead record, so apply the orphan policy instead.
+			case err == nil && !inFlightCreate(v.State):
 				logger.Warnf(ctx, "in-flight create %s (%s) ended %s without running; applying orphan policy", vmID, v.Name, v.State)
 				p.handleOrphan(ctx, v)
 				return
@@ -293,4 +283,9 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 		return nil
 	}
 	return list.Items
+}
+
+// inFlightCreate: vm run passes through created between the create-lock windows.
+func inFlightCreate(state string) bool {
+	return state == vm.StateCreating || state == vm.StateCreated
 }
