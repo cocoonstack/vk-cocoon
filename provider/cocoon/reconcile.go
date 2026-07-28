@@ -1,8 +1,11 @@
 package cocoon
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
@@ -10,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -124,7 +128,8 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 				return nil
 			}
 			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
-			if outcome == vm.StaleCreateNotCreating {
+			switch outcome {
+			case vm.StaleCreateNotCreating:
 				// The create committed between List and the verb; adopt the live record.
 				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
 				if inspectErr != nil {
@@ -132,9 +137,12 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 					return nil
 				}
 				keep[i] = fresh
-				return nil
+			case vm.StaleCreateBusy:
+				logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
+				p.watchBusyCreate(v.ID)
+			default:
+				logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
 			}
-			logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
 			return nil
 		})
 	}
@@ -146,6 +154,39 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 		}
 	}
 	return kept
+}
+
+// watchBusyCreate polls a creating record an in-flight operation still owned
+// at startup: once its clone commits, the VM must reach the name index or the
+// pod's create retries collide forever — the event watcher only reacts to
+// deletions and stops.
+func (p *Provider) watchBusyCreate(vmID string) {
+	p.goBackground(func() {
+		ctx := p.lifecycleCtx
+		logger := log.WithFunc("Provider.watchBusyCreate")
+		delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
+		maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
+		deadline := time.Now().Add(cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget))
+		for {
+			if !commonk8s.SleepCtx(ctx, delay) {
+				return
+			}
+			v, err := p.Runtime.Inspect(ctx, vmID)
+			switch {
+			case errors.Is(err, vm.ErrVMNotFound):
+				return
+			case err == nil && v.State != vm.StateCreating:
+				logger.Infof(ctx, "in-flight create %s (%s) committed as %s; indexing for adoption", vmID, v.Name, v.State)
+				p.indexOrphanByName(v)
+				return
+			}
+			if time.Now().After(deadline) {
+				logger.Warnf(ctx, "in-flight create %s did not leave creating within budget; giving up", vmID)
+				return
+			}
+			delay = min(delay*2, maxDelay)
+		}
+	})
 }
 
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose

@@ -3,6 +3,7 @@ package cocoon
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -173,7 +174,24 @@ func TestCreatePodDerivesRestoreFromLocalEvidence(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "snapshot-repo:latest", Mode: "clone"})
-	if err := p.CreatePod(t.Context(), pod); err != nil {
+	// Hammer the tracked pod's DeepCopy path: the derived marker is written
+	// after trackPod, so it must take p.mu or -race flags this.
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	readers.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = p.GetPod(t.Context(), "ns", "demo-0")
+			}
+		}
+	})
+	err := p.CreatePod(t.Context(), pod)
+	close(stop)
+	readers.Wait()
+	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	p.Close()

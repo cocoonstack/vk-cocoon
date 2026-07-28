@@ -729,10 +729,13 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 
 // clearRuntimeAnnotations removes VMID/IP from the pod's in-memory
 // annotations and patches the API server. Used by hibernate and startup
-// reconcile to clear stale runtime state.
+// reconcile to clear stale runtime state. The in-memory delete takes p.mu
+// against GetPod's concurrent DeepCopy of the tracked pod.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
+	p.mu.Lock()
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
+	p.mu.Unlock()
 	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
 		meta.AnnotationVMID: nil,
 		meta.AnnotationIP:   nil,

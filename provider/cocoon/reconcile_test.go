@@ -3,6 +3,7 @@ package cocoon
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -58,6 +59,38 @@ func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 	if rt.removedID != "" {
 		t.Errorf("in-flight clone must not be removed, removed %q", rt.removedID)
 	}
+}
+
+func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
+	// An in-flight clone that survives the restart commits later; the watcher
+	// must index it or the pod's create retries collide on the name forever.
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
+		inspectSeq:          []fakeInspectStep{{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}}},
+		inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+			if got.ID != "inflight-vmid" || got.State != vm.StateRunning {
+				t.Fatalf("indexed VM = %#v, want the committed running record", got)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("committed in-flight create was never indexed for adoption")
 }
 
 func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {

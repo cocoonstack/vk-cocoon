@@ -161,7 +161,11 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 		return false, fmt.Errorf("hibernate snapshot of vm %s came from image %q but the pod requests %q; delete the %s tag to discard the hibernated state", spec.VMName, recordedImage, spec.Image, meta.HibernateSnapshotTag)
 	}
 	metrics.HibernateEvidenceTotal.WithLabelValues("restored").Inc()
+	// Under p.mu: CreatePod already tracked this pod, so GetPod's DeepCopy may
+	// be reading the annotations map concurrently (same guard as setPodAnnotation).
+	p.mu.Lock()
 	meta.MarkRestoreFromHibernate(pod)
+	p.mu.Unlock()
 	p.emitWarningf(pod, "HibernateSnapshotExists", "restoring vm %s from its hibernate snapshot instead of fresh-booting", spec.VMName)
 	return true, nil
 }
@@ -476,9 +480,12 @@ func (p *Provider) vmByName(name string) *vm.VM {
 
 // applyRuntime writes VMID/IP annotations onto the in-memory pod and
 // patches them back to the API server so they survive provider restarts.
+// The in-memory write takes p.mu: the pod is usually tracked already, so
+// GetPod's DeepCopy may be reading the annotations map concurrently.
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	rt := meta.VMRuntime{VMID: v.ID, IP: v.IP}
-	rt.Apply(pod)
+	p.mu.Lock()
+	meta.VMRuntime{VMID: v.ID, IP: v.IP}.Apply(pod)
+	p.mu.Unlock()
 	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
 }
 
