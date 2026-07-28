@@ -215,6 +215,9 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
+	// Belt on hibernate's clear: a marker that survived an API outage there
+	// must not describe the incarnation this wake is about to create.
+	p.clearPostCloneMarker(ctx, pod)
 	sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()

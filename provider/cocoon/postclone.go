@@ -191,6 +191,18 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	}
 }
 
+// clearPostCloneMarker drops the previous incarnation's post-clone state;
+// best-effort — the fresh dispatch overwrites it with running momentarily.
+func (p *Provider) clearPostCloneMarker(ctx context.Context, pod *corev1.Pod) {
+	p.mu.Lock()
+	delete(pod.Annotations, annotationPostCloneState)
+	p.mu.Unlock()
+	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: nil}); err != nil {
+		log.WithFunc("Provider.clearPostCloneMarker").Errorf(ctx, err,
+			"clear post-clone marker %s/%s", pod.Namespace, pod.Name)
+	}
+}
+
 // emitPostCloneHint writes the manual-recovery script + per-attempt error chain.
 func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string, joinedErr error) {
 	plan, ok := planPostClone(spec, v, sourceImage)
