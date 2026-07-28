@@ -157,6 +157,24 @@ func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 	return parseVMListJSON(out)
 }
 
+// ReconcileStaleCreate runs `cocoon vm reconcile-stale-create`.
+func (c *CocoonCLI) ReconcileStaleCreate(ctx context.Context, vmID string) (StaleCreateOutcome, error) {
+	out, err := c.runJSON(ctx, "vm", "reconcile-stale-create", vmID, "-o", "json")
+	if err != nil {
+		return "", fmt.Errorf("cocoon vm reconcile-stale-create %s: %w", vmID, err)
+	}
+	var res struct {
+		Outcome StaleCreateOutcome `json:"outcome"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", fmt.Errorf("cocoon vm reconcile-stale-create %s: %w", vmID, err)
+	}
+	if res.Outcome == "" {
+		return "", fmt.Errorf("cocoon vm reconcile-stale-create %s: empty outcome in JSON payload", vmID)
+	}
+	return res.Outcome, nil
+}
+
 // Exec runs `cocoon vm exec`. Non-zero child exit → utilexec.CodeExitError
 // (vk's RemoteCommand handler probes that interface for the kubectl status);
 // transport / setup failures bubble up as plain errors.

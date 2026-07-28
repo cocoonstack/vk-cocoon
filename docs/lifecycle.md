@@ -14,9 +14,24 @@ and the hibernate transition.
    the pod as new and may collide on VM name.
 3. Otherwise `bringUpVM` selects a path — restore-from-hibernate and
    fork-from take precedence, then `spec.Managed`, then `spec.Mode`:
-   - **Restore-from-hibernate** (`vm.cocoonstack.io/restore-from-hibernate`,
-     set by the operator for a cross-node wake arriving via CreatePod
-     rather than UpdatePod): pull the `:hibernate` snapshot and clone from
+   - **Restore-from-hibernate**: taken when the operator set
+     `vm.cocoonstack.io/restore-from-hibernate` (a cross-node wake
+     arriving via CreatePod rather than UpdatePod), **or derived from
+     evidence**: a managed pod with no marker whose VM name still owns a
+     `:hibernate` registry tag (local snapshot presence in registry-less
+     deployments) is a wake lost to a vk restart, and fresh-booting it
+     would let the next hibernate overwrite the guest's state. The
+     derived path fails closed on registry errors
+     (`HibernateEvidenceUnavailable`), conflicts loudly with explicit
+     clone sources, and rejects a pod whose image ref differs from the
+     ref recorded on the hibernate artifact at push time
+     (`cocoonstack.snapshot.baseimage`). Identity is compared by ref:
+     a ref change signals operator intent for a different image, while
+     content drift under an unchanged ref is governed by the
+     hibernate-state-is-authoritative contract (discarding hibernated
+     state requires deleting the tag). Registry-less deployments have no
+     identity guard. The derived marker stays in-memory — a later restart
+     re-derives it. Then pull the `:hibernate` snapshot and clone from
      it, same as the UpdatePod wake path.
    - **Fork-from** (`spec.ForkFrom`): snapshot the named source VM once
      (deduped via `ensureForkSnapshot`) and clone every fork off that

@@ -1,6 +1,9 @@
 package cocoon
 
 import (
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -160,5 +163,128 @@ func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
 	}
 	if len(rt.ensuredImages) != 0 {
 		t.Errorf("EnsureImage should not run for an http(s) base (core --pull handles it), got %#v", rt.ensuredImages)
+	}
+}
+
+func TestCreatePodDerivesRestoreFromLocalEvidence(t *testing.T) {
+	// Registry-less: a same-name local hibernate snapshot is the evidence.
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "snapshot-repo:latest", Mode: "clone"})
+	// Hammer the tracked pod's DeepCopy path: the derived marker is written
+	// after trackPod, so it must take p.mu or -race flags this.
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	readers.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = p.GetPod(t.Context(), "ns", "demo-0")
+			}
+		}
+	})
+	err := p.CreatePod(t.Context(), pod)
+	close(stop)
+	readers.Wait()
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p.Close()
+	if rt.cloned == nil || rt.cloned.From != vmName {
+		t.Fatalf("evidence must route to the hibernate restore path, cloned = %#v", rt.cloned)
+	}
+	if !meta.ReadRestoreFromHibernate(pod) {
+		t.Error("derived restore must mark the in-memory pod")
+	}
+}
+
+func TestCreatePodEvidenceFailClosedOnRegistryError(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = wakeVerifyRegistry{hasManifestErr: errors.New("registry down")}
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "snapshot-repo:latest", Mode: "clone"})
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil || !strings.Contains(err.Error(), "registry down") {
+		t.Fatalf("err = %v, want fail-closed evidence error", err)
+	}
+	if rt.cloned != nil || rt.ran != nil {
+		t.Error("no VM may boot while hibernate evidence is unverifiable")
+	}
+}
+
+func TestCreatePodEvidenceImageConflictRefusesBoot(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = newWakeVerifyRegistryWithImage(t, "SNAP-1", "reg.example/agent:v1")
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v2", Mode: "run"})
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil || !strings.Contains(err.Error(), "came from image") {
+		t.Fatalf("err = %v, want image-identity conflict", err)
+	}
+	if rt.cloned != nil || rt.ran != nil {
+		t.Error("an image conflict must refuse both restore and fresh boot")
+	}
+}
+
+func TestCreatePodEvidenceMatchingImageRestores(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = newWakeVerifyRegistryWithImage(t, "SNAP-1", "reg.example/agent:v1")
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v1", Mode: "run"})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil || rt.cloned.From != vmName {
+		t.Fatalf("matching identity must restore from the hibernate snapshot, cloned = %#v", rt.cloned)
+	}
+	if rt.ran != nil {
+		t.Error("mode=run must not fresh-boot over hibernate evidence")
+	}
+}
+
+func TestCreatePodEvidenceLegacyManifestRestores(t *testing.T) {
+	// Hibernate artifacts pushed before the image annotation existed must
+	// still veto the fresh boot.
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = newWakeVerifyRegistry(t, "SNAP-1")
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "snapshot-repo:latest", Mode: "clone"})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil || rt.cloned.From != vmName {
+		t.Fatalf("legacy evidence must still restore, cloned = %#v", rt.cloned)
+	}
+}
+
+func TestCreatePodEvidenceForkFromConflict(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, ForkFrom: "vk-ns-main-0", Mode: "run"})
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil || !strings.Contains(err.Error(), "explicit clone source") {
+		t.Fatalf("err = %v, want explicit-source conflict", err)
+	}
+	if rt.cloned != nil || rt.ran != nil {
+		t.Error("a source conflict must refuse both restore and fresh boot")
 	}
 }

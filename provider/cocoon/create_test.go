@@ -1701,6 +1701,10 @@ type fakeRuntime struct {
 
 	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
+
+	staleCreateOutcomes map[string]vm.StaleCreateOutcome // by vmID; absent → collected
+	staleCreateCalls    []string
+	staleCreateErr      error
 	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
 	onExec          func()
 	removeErr       error
@@ -1772,6 +1776,17 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 	}
 	f.removedID = vmID
 	return nil
+}
+
+func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.StaleCreateOutcome, error) {
+	f.staleCreateCalls = append(f.staleCreateCalls, vmID)
+	if f.staleCreateErr != nil {
+		return "", f.staleCreateErr
+	}
+	if o, ok := f.staleCreateOutcomes[vmID]; ok {
+		return o, nil
+	}
+	return vm.StaleCreateCollected, nil
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {

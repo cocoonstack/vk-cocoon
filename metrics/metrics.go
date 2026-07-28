@@ -120,6 +120,26 @@ var (
 		},
 	)
 
+	StaleCreateReconcileTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "stale_create_reconcile_total",
+			Help:      "Creating placeholders found at startup reconcile, by cocoon verb outcome.",
+		},
+		[]string{"outcome"}, // collected|busy|not-creating|not-found|error
+	)
+
+	HibernateEvidenceTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "hibernate_evidence_total",
+			Help:      "Fresh-boot requests intercepted by hibernate-snapshot evidence, by verdict.",
+		},
+		[]string{"verdict"}, // restored|image_conflict|source_conflict|unavailable
+	)
+
 	VMBootDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
@@ -247,6 +267,8 @@ func Register(reg prometheus.Registerer) {
 		VMInspectTransientFailTotal,
 		PodEvictFailureTotal,
 		ReconcileAdoptByNameTotal,
+		StaleCreateReconcileTotal,
+		HibernateEvidenceTotal,
 		VMBootDuration,
 		SnapshotSaveDuration,
 		SnapshotPushDuration,

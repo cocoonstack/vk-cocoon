@@ -51,6 +51,8 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_vm_inspect_transient_fail_total` | Counter | Transient VM inspect failures tolerated by the status refresher |
 | `cocoon_vk_pod_evict_failure_total` | Counter | Failed pod evictions |
 | `cocoon_vk_reconcile_adopt_by_name_total` | Counter | Startup reconcile adoptions matched by VM name |
+| `cocoon_vk_stale_create_reconcile_total{outcome}` | Counter | Creating placeholders routed through the stale-create verb at startup (`outcome=collected\|busy\|not-creating\|not-found\|error`) |
+| `cocoon_vk_hibernate_evidence_total{verdict}` | Counter | Fresh boots intercepted by hibernate evidence (`verdict=restored\|image_conflict\|source_conflict\|unavailable`) |
 
 All per-VM stats are read from `/proc` using the hypervisor PID tracked
 in memory — no shell-out to `cocoon` on each scrape. The tracking table

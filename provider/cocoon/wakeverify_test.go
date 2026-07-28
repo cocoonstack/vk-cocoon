@@ -101,7 +101,12 @@ type wakeVerifyRegistry struct {
 
 func newWakeVerifyRegistry(t *testing.T, snapshotID string) wakeVerifyRegistry {
 	t.Helper()
-	raw, blobs := hibernateArtifact(t, snapshotID)
+	return newWakeVerifyRegistryWithImage(t, snapshotID, "")
+}
+
+func newWakeVerifyRegistryWithImage(t *testing.T, snapshotID, baseImage string) wakeVerifyRegistry {
+	t.Helper()
+	raw, blobs := hibernateArtifact(t, snapshotID, baseImage)
 	return wakeVerifyRegistry{tagExists: true, manifestRaw: raw, blobs: blobs}
 }
 
@@ -123,7 +128,7 @@ func (r wakeVerifyRegistry) GetBlob(_ context.Context, _, digest string) (io.Rea
 
 // hibernateArtifact builds the registry view of a pushed snapshot whose
 // export came from the local snapshot with the given ID.
-func hibernateArtifact(t *testing.T, snapshotID string) ([]byte, map[string][]byte) {
+func hibernateArtifact(t *testing.T, snapshotID, baseImage string) ([]byte, map[string][]byte) {
 	t.Helper()
 	cfg := manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: snapshotID}
 	cfgBytes, err := json.Marshal(cfg)
@@ -140,6 +145,9 @@ func hibernateArtifact(t *testing.T, snapshotID string) ([]byte, map[string][]by
 			Digest:    digest,
 			Size:      int64(len(cfgBytes)),
 		},
+	}
+	if baseImage != "" {
+		m.Annotations = map[string]string{manifest.AnnotationSnapshotBaseImage: baseImage}
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {

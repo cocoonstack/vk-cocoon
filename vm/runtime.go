@@ -11,10 +11,20 @@ import (
 const (
 	// StateRunning is the state string cocoon reports for a live VM.
 	StateRunning = "running"
+	// StateCreating is cocoon's placeholder state before a create/clone commits.
+	StateCreating = "creating"
+	// StateCreated is cocoon's registered-but-not-started state between
+	// creating and running on the run path.
+	StateCreated = "created"
 
 	RestoreCopy     RestoreMode = "copy"
 	RestoreOnDemand RestoreMode = "ondemand"
 	RestoreMmap     RestoreMode = "mmap"
+
+	StaleCreateCollected   StaleCreateOutcome = "collected"
+	StaleCreateBusy        StaleCreateOutcome = "busy"
+	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
+	StaleCreateNotFound    StaleCreateOutcome = "not-found"
 )
 
 var (
@@ -76,6 +86,9 @@ type Snapshot struct {
 // memory. RestoreMmap needs a CH build with mmap restore support.
 type RestoreMode string
 
+// StaleCreateOutcome mirrors `cocoon vm reconcile-stale-create` outcomes.
+type StaleCreateOutcome string
+
 // ParseRestoreMode validates a configured restore mode, normalizing case.
 func ParseRestoreMode(s string) (RestoreMode, error) {
 	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
@@ -134,6 +147,9 @@ type Runtime interface {
 	Start(ctx context.Context, vmID string) error
 	Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error
 	Logs(ctx context.Context, vmID string, tail int) (io.ReadCloser, error)
+	// ReconcileStaleCreate reclaims an ownerless creating placeholder;
+	// busy means an in-flight operation still owns the VM.
+	ReconcileStaleCreate(ctx context.Context, vmID string) (StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
 	SnapshotRemoveIfExists(ctx context.Context, name string) error
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)

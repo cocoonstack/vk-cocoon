@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -54,21 +55,17 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// A restore reuses wake()'s post-restore path (CH+Windows waits on the fresh
 	// NIC's lease; others run runPostCloneSetup) and skips the base-image post-clone.
 	restoring := meta.ReadRestoreFromHibernate(pod)
+	if !restoring && spec.Managed {
+		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec)
+		if err != nil {
+			return p.failCreate(ctx, pod, false, "HibernateEvidenceFailed", err)
+		}
+		restoring = derived
+	}
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
 	if err != nil {
-		// A restore is a wake: count its failure like wake() does, not just create.
-		if restoring {
-			metrics.WakeTotal.WithLabelValues("failed").Inc()
-		}
-		p.failOp(ctx, pod, "CreateBringUpFailed", "create", err)
-		// Drop the provisional claim (keep intent): a tracked VM-less pod turns the kubelet's create retry into an UpdatePod wake.
-		p.mu.Lock()
-		if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID == pod.UID {
-			delete(p.pods, meta.PodKey(pod.Namespace, pod.Name))
-		}
-		p.mu.Unlock()
-		return err
+		return p.failCreate(ctx, pod, restoring, "CreateBringUpFailed", err)
 	}
 	// A restore is a clone-from-hibernate; label its boot "clone" like wake does.
 	bootMode := spec.Mode
@@ -125,6 +122,74 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
+}
+
+// failCreate drops the provisional claim (keep intent) so the kubelet's create
+// retry starts clean; a failed restore also counts as a wake failure.
+func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bool, reason string, err error) error {
+	if restoring {
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+	}
+	p.failOp(ctx, pod, reason, "create", err)
+	p.mu.Lock()
+	if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID == pod.UID {
+		delete(p.pods, meta.PodKey(pod.Namespace, pod.Name))
+	}
+	p.mu.Unlock()
+	return err
+}
+
+// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: the pod
+// looks freshly creatable, but fresh-booting a name whose guest state sits in
+// a hibernate snapshot lets the next hibernate overwrite it (#54).
+func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
+	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
+	if err != nil {
+		metrics.HibernateEvidenceTotal.WithLabelValues("unavailable").Inc()
+		p.emitWarningf(pod, "HibernateEvidenceUnavailable", "%v", err)
+		return false, err
+	}
+	if !evidence {
+		return false, nil
+	}
+	if hasExplicitCloneSource(pod, spec) {
+		metrics.HibernateEvidenceTotal.WithLabelValues("source_conflict").Inc()
+		return false, fmt.Errorf("vm %s has a hibernate snapshot but the pod requests an explicit clone source; delete the %s tag to discard the hibernated state", spec.VMName, meta.HibernateSnapshotTag)
+	}
+	if recordedImage != "" && recordedImage != spec.Image {
+		metrics.HibernateEvidenceTotal.WithLabelValues("image_conflict").Inc()
+		return false, fmt.Errorf("hibernate snapshot of vm %s came from image %q but the pod requests %q; delete the %s tag to discard the hibernated state", spec.VMName, recordedImage, spec.Image, meta.HibernateSnapshotTag)
+	}
+	metrics.HibernateEvidenceTotal.WithLabelValues("restored").Inc()
+	// The pod is tracked: GetPod's DeepCopy may be reading this map.
+	p.mu.Lock()
+	meta.MarkRestoreFromHibernate(pod)
+	p.mu.Unlock()
+	p.emitWarningf(pod, "HibernateSnapshotExists", "restoring vm %s from its hibernate snapshot instead of fresh-booting", spec.VMName)
+	return true, nil
+}
+
+// hibernateEvidence reports whether a hibernate snapshot owns vmName's guest
+// state, plus the pod image recorded at push time ("" on legacy pushes).
+// Registry errors fail closed: never fresh-boot on uncertainty.
+func (p *Provider) hibernateEvidence(ctx context.Context, vmName string) (bool, string, error) {
+	if p.Registry == nil {
+		if _, err := p.Runtime.Snapshot(ctx, vmName); err != nil {
+			if errors.Is(err, vm.ErrSnapshotNotFound) {
+				return false, "", nil
+			}
+			return false, "", fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
+		}
+		return true, "", nil
+	}
+	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
+	if err != nil {
+		return false, "", fmt.Errorf("hibernate evidence for %s: %w (refusing fresh boot)", vmName, err)
+	}
+	if !ok {
+		return false, "", nil
+	}
+	return true, m.Annotations[manifest.AnnotationSnapshotBaseImage], nil
 }
 
 // bringUpVM dispatches on mode: unmanaged, clone, run, or fork. The
@@ -411,11 +476,12 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-// applyRuntime writes VMID/IP annotations onto the in-memory pod and
-// patches them back to the API server so they survive provider restarts.
+// applyRuntime writes VMID/IP annotations onto the in-memory pod (under
+// p.mu against GetPod's DeepCopy) and patches them back to the API server.
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	rt := meta.VMRuntime{VMID: v.ID, IP: v.IP}
-	rt.Apply(pod)
+	p.mu.Lock()
+	meta.VMRuntime{VMID: v.ID, IP: v.IP}.Apply(pod)
+	p.mu.Unlock()
 	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
 }
 
@@ -502,13 +568,13 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 // isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
 // is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
-	if strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" {
-		return true
-	}
-	if spec.ForkFrom != "" {
-		return true
-	}
-	return strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
+	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
+}
+
+// hasExplicitCloneSource reports whether the pod names its own clone source
+// (clone-from-dir or fork-from).
+func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {
+	return strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" || spec.ForkFrom != ""
 }
 
 // assertSnapshotBackend rejects a clone when the target backend differs from

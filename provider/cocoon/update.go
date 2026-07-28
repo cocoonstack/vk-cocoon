@@ -104,7 +104,8 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	metrics.HibernateTotal.WithLabelValues("snapshot", "ok").Inc()
 	if p.Pusher != nil {
 		pushStart := time.Now()
-		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, ""); err != nil {
+		// spec.Image rides as the baseimage annotation for hibernateEvidence's identity guard.
+		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
 			p.rollbackHibernateNIC(ctx, v, dropNIC)
@@ -430,20 +431,12 @@ func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local
 		// Registry-less deployments never push: a local snapshot is current by construction.
 		return nil
 	}
-	exists, err := p.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
 	if err != nil {
-		return fmt.Errorf("check hibernate tag: %w", err)
+		return err
 	}
-	if !exists {
+	if !ok {
 		return fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
-	}
-	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	if err != nil {
-		return fmt.Errorf("get hibernate manifest: %w", err)
-	}
-	m, err := manifest.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("parse hibernate manifest: %w", err)
 	}
 	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
 	if err != nil {
@@ -453,6 +446,27 @@ func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local
 		return fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
 	}
 	return nil
+}
+
+// fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;
+// ok=false means the registry has no such tag.
+func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*manifest.OCIManifest, bool, error) {
+	exists, err := p.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	if err != nil {
+		return nil, false, fmt.Errorf("check hibernate tag: %w", err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	if err != nil {
+		return nil, false, fmt.Errorf("get hibernate manifest: %w", err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse hibernate manifest: %w", err)
+	}
+	return m, true, nil
 }
 
 // cleanupWakeImport drops the cross-node import; same-node keeps the

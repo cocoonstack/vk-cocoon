@@ -589,9 +589,7 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		p.mu.Unlock()
 	}()
 
-	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
-	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
-	budget := cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
+	delay, maxDelay, budget := p.recheckBackoff()
 	deadline := time.Now().Add(budget)
 	for {
 		if !commonk8s.SleepCtx(ctx, delay) {
@@ -630,6 +628,12 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			return
 		}
 	}
+}
+
+func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
+	return cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay),
+		cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay),
+		cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
 }
 
 // podForVMMatch returns the pod and tracked-VM ID for a pod that matches
@@ -728,11 +732,13 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 }
 
 // clearRuntimeAnnotations removes VMID/IP from the pod's in-memory
-// annotations and patches the API server. Used by hibernate and startup
-// reconcile to clear stale runtime state.
+// annotations (under p.mu against GetPod's DeepCopy) and patches the API
+// server. Used by hibernate and startup reconcile.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
+	p.mu.Lock()
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
+	p.mu.Unlock()
 	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
 		meta.AnnotationVMID: nil,
 		meta.AnnotationIP:   nil,

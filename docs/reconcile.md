@@ -11,9 +11,20 @@ On every restart vk-cocoon:
 1. Lists every pod scheduled to its node via
    `fieldSelector=spec.nodeName=<VK_NODE_NAME>`.
 2. Lists every VM the cocoon runtime knows about via `Runtime.List`.
-3. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
+3. Routes every record still in `creating` through cocoon's lock-checked
+   `vm reconcile-stale-create` verb (needs cocoon > v0.5.7 on the node)
+   before any adoption index is built — adopting a creating placeholder
+   deadlocks its pod. `collected`/`not-found` free the name for a clean
+   recreate; `busy` (an in-flight clone still owns the record) and
+   transient verb or inspect errors hand the record to a bounded
+   background watcher that indexes it for adoption once it reaches
+   `running`, or applies the orphan policy if it dies without ever
+   running; a record that already left `creating` is adopted only when
+   `running`. Outcomes are counted on
+   `cocoon_vk_stale_create_reconcile_total`.
+4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
    the VMID against the runtime list.
-4. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
+5. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
    - `destroy` (default): remove the VM so pod-less VMs don't accumulate
      after restart or pod chaos.
    - `alert`: log + bump `cocoon_vk_orphan_vm_total`, leave the VM alone.
