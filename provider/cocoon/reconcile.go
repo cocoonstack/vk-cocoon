@@ -90,7 +90,9 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
-		p.startProbeIfEnabled(pod)
+		if pod.DeletionTimestamp == nil {
+			p.startProbeIfEnabled(pod)
+		}
 	}
 
 	for i := range vms {
@@ -100,6 +102,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.handleOrphan(ctx, &vms[i])
 	}
 
+	p.dispatchOwedWork()
 	logger.Infof(ctx, "startup reconcile: %d pods adopted, %d orphan VMs", len(matched), len(vms)-len(matched))
 	return nil
 }
@@ -229,7 +232,9 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	p.seedLifecycleIntentFromPod(pod)
-	p.startProbeIfEnabled(pod)
+	if pod.DeletionTimestamp == nil {
+		p.startProbeIfEnabled(pod)
+	}
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v
 }

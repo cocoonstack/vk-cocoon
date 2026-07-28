@@ -52,6 +52,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 
+	// A resumed full op (dispatchOwedWork) runs outside the framework's
+	// per-pod serialization; back off and let the framework retry after it.
+	if key := meta.PodKey(pod.Namespace, pod.Name); p.resumeBusy(key) &&
+		(wantHibernate && v != nil || !wantHibernate && v == nil) {
+		return fmt.Errorf("resumed operation still in flight for %s", key)
+	}
+
 	switch {
 	case wantHibernate && v != nil:
 		if err := p.hibernate(ctx, pod, v); err != nil {
