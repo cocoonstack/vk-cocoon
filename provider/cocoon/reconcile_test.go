@@ -158,6 +158,64 @@ func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
+	// vm run drops the create lock at created before start reacquires it, so
+	// not-creating can surface a created record; adoption must wait for running.
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
+		inspectSeq: []fakeInspectStep{
+			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+		},
+		inspectVM: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+			if got.State != vm.StateRunning {
+				t.Fatalf("indexed VM state = %q, want running only", got.State)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("record was never indexed after reaching running")
+}
+
+func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
+		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: "stopped"},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.OrphanPolicy = provider.OrphanDestroy
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	if rt.removedID != "won-vmid" {
+		t.Errorf("stopped-without-running record must be removed under OrphanDestroy, removed %q", rt.removedID)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		t.Errorf("dead record must not be indexed, got %#v", got)
+	}
+}
+
 func TestStartupReconcileSkeletonVerbErrorSkipsAdoption(t *testing.T) {
 	// Also the mixed-version shape: an old cocoon binary without the verb
 	// errors out, and vk must fail safe by leaving the record alone.

@@ -130,13 +130,23 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
 			switch outcome {
 			case vm.StaleCreateNotCreating:
-				// The create committed between List and the verb; adopt the live record.
+				// The record left creating between List and the verb — but only a
+				// running one is adoptable: vm run drops the create lock at
+				// created before start reacquires it, so created can appear here.
 				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
-				if inspectErr != nil {
-					logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
-					return nil
+				switch {
+				case inspectErr != nil:
+					if !errors.Is(inspectErr, vm.ErrVMNotFound) {
+						logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; skipping adoption", v.ID)
+					}
+				case fresh.State == vm.StateRunning:
+					keep[i] = fresh
+				case fresh.State == vm.StateCreating || fresh.State == vm.StateCreated:
+					p.watchBusyCreate(v.ID)
+				default:
+					logger.Warnf(ctx, "placeholder %s (%s) left creating as %s without running; applying orphan policy", v.ID, v.Name, fresh.State)
+					p.handleOrphan(ctx, fresh)
 				}
-				keep[i] = fresh
 			case vm.StaleCreateBusy:
 				logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
 				p.watchBusyCreate(v.ID)
