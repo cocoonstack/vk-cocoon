@@ -1,7 +1,6 @@
 package cocoon
 
 import (
-	"cmp"
 	"context"
 
 	"github.com/projecteru2/core/log"
@@ -62,6 +61,7 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 			f()
 		})
 	}
+	spec := meta.ParseVMSpec(pod)
 	switch op {
 	case resumeOpHibernate:
 		run(func() {
@@ -80,15 +80,15 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 			p.notify(pod)
 		})
 	case resumeOpPostClone:
-		spec := meta.ParseVMSpec(pod)
 		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile") })
 	case resumeOpReadyWait:
-		spec := meta.ParseVMSpec(pod)
 		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v) })
 	case resumeOpClassifyNIC:
-		spec := meta.ParseVMSpec(pod)
 		run(func() {
-			// Evidence ⟺ restore, by CreatePod's own fresh-boot guard.
+			// Evidence ⟺ restore, by CreatePod's fresh-boot guard — and the
+			// stricter source/image conflict gates have already passed, because
+			// this op only dispatches once a VM exists (owedOpFor's v != nil),
+			// which is always after deriveRestoreFromEvidence ran.
 			evidence, ok := p.classifyNICRecovery(pod, spec.VMName)
 			switch {
 			case !ok:
@@ -106,11 +106,9 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 // NopPinger deployment would never surface it). The deadline context owns the
 // budget so even a hanging registry unblocks; exhaustion fails loud.
 func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence, ok bool) {
-	budget := cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
+	delay, maxDelay, budget := p.recheckBackoff()
 	ctx, cancel := context.WithTimeout(p.lifecycleCtx, budget)
 	defer cancel()
-	delay := cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay)
-	maxDelay := cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay)
 	for {
 		evidence, _, err := p.hibernateEvidence(ctx, vmName)
 		if err == nil {

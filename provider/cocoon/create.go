@@ -141,7 +141,9 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 
 // deriveRestoreFromEvidence re-derives a wake lost to a vk restart: the pod
 // looks freshly creatable, but fresh-booting a name whose guest state sits in
-// a hibernate snapshot lets the next hibernate overwrite it (#54).
+// a hibernate snapshot lets the next hibernate overwrite it (#54). Its
+// conflict gates running before bringUpVM is what classifyNICRecovery
+// (resume.go) relies on when it reads evidence as "this VM was a restore".
 func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
 	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
 	if err != nil {
