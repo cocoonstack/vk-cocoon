@@ -14,6 +14,7 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -129,9 +130,6 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
 			switch outcome {
 			case vm.StaleCreateNotCreating:
-				// The record left creating between List and the verb — but only a
-				// running one is adoptable: vm run drops the create lock at
-				// created before start reacquires it, so created can appear here.
 				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
 				switch {
 				case errors.Is(inspectErr, vm.ErrVMNotFound):

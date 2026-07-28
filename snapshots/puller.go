@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"golang.org/x/sync/semaphore"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/snapshot"
+
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -49,21 +51,13 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 		return fmt.Errorf("open cocoon snapshot import: %w", err)
 	}
 
-	if err := snapshot.Stream(ctx, raw, p.Registry, snapshot.StreamOptions{
+	err = snapshot.Stream(ctx, raw, p.Registry, snapshot.StreamOptions{
 		Name:            name,
 		Writer:          importer,
 		Concurrency:     p.Transfer.Concurrency,
 		MemoryBudgetMiB: cmp.Or(p.Transfer.PullBudgetMiB, defaultPullBudgetMiB),
-	}); err != nil {
-		_ = importer.Close()
-		_ = wait()
-		return fmt.Errorf("stream snapshot: %w", err)
-	}
-	if err := importer.Close(); err != nil {
-		_ = wait()
-		return fmt.Errorf("close importer: %w", err)
-	}
-	return wait()
+	})
+	return finishImport(importer, wait, err, "stream snapshot")
 }
 
 // EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`.
@@ -85,10 +79,16 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 		return fmt.Errorf("open cocoon image import: %w", err)
 	}
 	adapter := blobReader{registry: p.Registry, name: name}
-	if err := cloudimg.Stream(ctx, raw, adapter, importer); err != nil {
+	return finishImport(importer, wait, cloudimg.Stream(ctx, raw, adapter, importer), "stream cloud image")
+}
+
+// finishImport settles an import pipe: close-then-wait always runs, and a
+// stream error takes precedence over the drain results.
+func finishImport(importer io.WriteCloser, wait func() error, streamErr error, streamOp string) error {
+	if streamErr != nil {
 		_ = importer.Close()
 		_ = wait()
-		return fmt.Errorf("stream cloud image: %w", err)
+		return fmt.Errorf("%s: %w", streamOp, streamErr)
 	}
 	if err := importer.Close(); err != nil {
 		_ = wait()

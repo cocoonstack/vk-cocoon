@@ -52,18 +52,7 @@ func NewCocoonCLI(binary string) *CocoonCLI {
 // Clone runs `cocoon vm clone --output json` and parses the emitted VM
 // record directly, avoiding a second inspect round trip.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
-	out, err := c.runJSON(ctx, buildCloneArgs(opts)...)
-	if err != nil {
-		return nil, fmt.Errorf("cocoon vm clone: %w", err)
-	}
-	v, err := parseInspectJSON(out)
-	if err != nil {
-		return nil, fmt.Errorf("cocoon vm clone: %w", err)
-	}
-	if v.ID == "" {
-		return nil, fmt.Errorf("cocoon vm clone %s: empty VM record in JSON payload", opts.To)
-	}
-	return v, nil
+	return c.runAndParseVM(ctx, "cocoon vm clone", opts.To, buildCloneArgs(opts))
 }
 
 // Run runs `cocoon vm run --output json`; cocoon re-inspects after start
@@ -73,16 +62,9 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 // and do a single make-up Inspect so callers always see live state.
 // Caller must have ensured the image locally before invoking Run.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
-	out, err := c.runJSON(ctx, buildRunArgs(opts)...)
+	v, err := c.runAndParseVM(ctx, "cocoon vm run", opts.Name, buildRunArgs(opts))
 	if err != nil {
-		return nil, fmt.Errorf("cocoon vm run: %w", err)
-	}
-	v, err := parseInspectJSON(out)
-	if err != nil {
-		return nil, fmt.Errorf("cocoon vm run: %w", err)
-	}
-	if v.ID == "" {
-		return nil, fmt.Errorf("cocoon vm run %s: empty VM record in JSON payload", opts.Name)
+		return nil, err
 	}
 	if v.State != StateRunning || v.PID == 0 {
 		return c.Inspect(ctx, v.ID)
@@ -372,6 +354,22 @@ func (c *CocoonCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, c.binary, args...) //nolint:gosec // path comes from operator config, not untrusted input
 }
 
+// runAndParseVM runs a VM-emitting verb and rejects an empty record.
+func (c *CocoonCLI) runAndParseVM(ctx context.Context, op, ref string, args []string) (*VM, error) {
+	out, err := c.runJSON(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	v, err := parseInspectJSON(out)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+	if v.ID == "" {
+		return nil, fmt.Errorf("%s %s: empty VM record in JSON payload", op, ref)
+	}
+	return v, nil
+}
+
 func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := c.command(ctx, args...)
 	var stdout, stderr bytes.Buffer
@@ -500,21 +498,19 @@ func startCmdPipe[P io.Closer](ctx context.Context, cmd *exec.Cmd, pipe func() (
 // VM-specific phrases so an unrelated binary/config "not found" stderr
 // cannot be promoted to an authoritative VMGone.
 func isCocoonNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "vm not found") ||
-		strings.Contains(s, "no such vm")
+	return errContainsAny(err, "vm not found", "no such vm")
 }
 
 func isCocoonSnapshotNotFound(err error) bool {
+	return errContainsAny(err, "snapshot not found", "no such snapshot")
+}
+
+func errContainsAny(err error, phrases ...string) bool {
 	if err == nil {
 		return false
 	}
 	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "snapshot not found") ||
-		strings.Contains(s, "no such snapshot")
+	return slices.ContainsFunc(phrases, func(p string) bool { return strings.Contains(s, p) })
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.

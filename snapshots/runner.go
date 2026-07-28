@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/cocoonstack/cocoon-common/snapshot"
+
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

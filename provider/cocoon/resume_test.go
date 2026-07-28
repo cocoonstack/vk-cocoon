@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

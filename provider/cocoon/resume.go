@@ -9,6 +9,7 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -78,9 +79,11 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			p.notify(pod)
 		})
 	case resumeOpPostClone:
-		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile") })
+		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false) })
 	case resumeOpReadyWait:
-		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v) })
+		// Ambiguous create-tail vs wake-finalize: resumed outcomes skip the
+		// wake accounting rather than guess.
+		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, false) })
 	case resumeOpClassifyNIC:
 		run(func() {
 			// Evidence ⟺ restore: CreatePod's fresh-boot guard and its conflict
@@ -89,9 +92,9 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			switch {
 			case !ok:
 			case evidence:
-				p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v)
+				p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, true)
 			default:
-				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile")
+				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false)
 			}
 		})
 	}
@@ -123,13 +126,13 @@ func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence
 
 // resumeReadyAfterIP re-runs the SAC pass when owed (done is written before
 // SAC runs), then holds Ready until the lease lands.
-func (p *Provider) resumeReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM) {
+func (p *Provider) resumeReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wake bool) {
 	if p.willRunSAC(spec, v) {
 		if _, ok := p.runWindowsSAC(ctx, pod, v, "reconcile"); !ok {
 			return
 		}
 	}
-	p.markReadyAfterIP(ctx, pod, v)
+	p.markReadyAfterIP(ctx, pod, v, wake)
 }
 
 func (p *Provider) claimResume(key string) bool {
@@ -174,9 +177,9 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	}
 	lc := meta.ReadLifecycleState(pod)
 	pcs := pod.Annotations[annotationPostCloneState]
-	// Empty lifecycle with a post-clone marker means the Creating patch was
-	// lost to apiserver flakiness; the marker still records owed work.
-	if lc != meta.LifecycleStateCreating && (lc != "" || pcs == "") {
+	// An empty lifecycle (lost Creating patch) with a marker still records owed work.
+	resuming := lc == meta.LifecycleStateCreating || (lc == "" && pcs != "")
+	if !resuming {
 		return ""
 	}
 	switch pcs {

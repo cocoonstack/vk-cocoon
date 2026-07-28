@@ -14,6 +14,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -270,7 +271,7 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.finalizeDropNICWake(t.Context(), pod, v)
+		p.markReadyAfterIP(t.Context(), pod, v, true)
 		close(done)
 	}()
 
@@ -295,7 +296,7 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 func TestFinalizeDropNICWakeMarksFailedOnTimeout(t *testing.T) {
 	p, pod, v := newDropNICWakeFixture(t, 20*time.Millisecond, 1*time.Millisecond)
 
-	p.finalizeDropNICWake(t.Context(), pod, v)
+	p.markReadyAfterIP(t.Context(), pod, v, true)
 
 	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateFailed {
 		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateFailed)
@@ -307,7 +308,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenVMForgotten(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.finalizeDropNICWake(t.Context(), pod, v)
+		p.markReadyAfterIP(t.Context(), pod, v, true)
 		close(done)
 	}()
 
@@ -330,7 +331,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.finalizeDropNICWake(t.Context(), pod, v)
+		p.markReadyAfterIP(t.Context(), pod, v, true)
 		close(done)
 	}()
 

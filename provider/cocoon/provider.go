@@ -23,6 +23,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
+
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -272,12 +273,18 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	}
 	p.pods[key] = pod
 	if v != nil {
-		p.vmsByPod[key] = v
-		if v.Name != "" {
-			p.vmsByName[v.Name] = v
-		}
+		p.setVMLocked(key, v)
 	}
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
+}
+
+// setVMLocked writes v into both VM tables; the write half of dropVMLocked.
+// Caller must hold p.mu for writing.
+func (p *Provider) setVMLocked(key string, v *vm.VM) {
+	p.vmsByPod[key] = v
+	if v.Name != "" {
+		p.vmsByName[v.Name] = v
+	}
 }
 
 // dropVMLocked removes the VM record for key. Caller must hold p.mu for writing.
@@ -331,10 +338,7 @@ func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	}
 	updated := *v
 	updated.IP = ip
-	p.vmsByPod[key] = &updated
-	if updated.Name != "" {
-		p.vmsByName[updated.Name] = &updated
-	}
+	p.setVMLocked(key, &updated)
 	return true
 }
 
@@ -508,10 +512,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 				updated := *old
 				updated.PID = fresh.PID
 				updated.NetworkConfigs = fresh.NetworkConfigs
-				p.vmsByPod[affectedKey] = &updated
-				if updated.Name != "" {
-					p.vmsByName[updated.Name] = &updated
-				}
+				p.setVMLocked(affectedKey, &updated)
 			}
 			p.mu.Unlock()
 		}

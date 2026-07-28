@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

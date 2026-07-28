@@ -19,6 +19,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/ociutil"
+
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -100,7 +101,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	if cloned && !restoring {
 		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create")
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create", false)
 		})
 	}
 	// First probe is synchronous so refreshStatus below sees its result.
@@ -493,13 +494,13 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 		meta.AnnotationIP:   v.IP,
 	}
 	var lastErr error
-	for range 3 {
+	for range lifecyclePatchAttempts {
 		err := p.patchPodAnnotations(ctx, namespace, name, annos)
 		if err == nil {
 			return
 		}
 		lastErr = err
-		if !commonk8s.SleepCtx(ctx, 500*time.Millisecond) {
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
 			return
 		}
 	}
