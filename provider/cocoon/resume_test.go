@@ -141,14 +141,12 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			if err := p.StartupReconcile(t.Context()); err != nil {
 				t.Fatalf("StartupReconcile: %v", err)
 			}
-			// Negative rows drain first and assert nothing ran; positive rows
-			// must await the async dispatch before Close cancels lifecycleCtx.
-			if tc.wantLC == "" || tc.wantLC == meta.LifecycleStateCreating {
-				p.Close()
-			} else {
+			// Positive rows must await the async dispatch before Close cancels
+			// lifecycleCtx; negative rows just drain and assert nothing ran.
+			if tc.wantLC != "" && tc.wantLC != meta.LifecycleStateCreating {
 				awaitLifecycle(t, p, "ns", "demo-0", tc.wantLC)
-				p.Close()
 			}
+			p.Close()
 
 			if rt.snapshotSaveCount != tc.wantSaves {
 				t.Errorf("snapshot saves = %d, want %d", rt.snapshotSaveCount, tc.wantSaves)

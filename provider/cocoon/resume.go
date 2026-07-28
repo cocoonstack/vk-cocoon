@@ -29,9 +29,6 @@ func (p *Provider) dispatchOwedWork() {
 	p.mu.RLock()
 	work := make([]owed, 0, len(p.pods))
 	for key, pod := range p.pods {
-		if pod.DeletionTimestamp != nil {
-			continue
-		}
 		if op := owedOpFor(pod, p.vmsByPod[key]); op != "" {
 			work = append(work, owed{pod: pod, v: p.vmsByPod[key], op: op})
 		}
@@ -48,47 +45,23 @@ func (p *Provider) dispatchOwedWork() {
 	}
 }
 
-// owedOpFor decides what a tracked pod is still owed. Hibernate resumes only
-// on a running VM — stopped VMs are cocoon daemon supervision's jurisdiction.
-func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
-	if v == nil {
-		return ""
-	}
-	if meta.ReadHibernateState(pod) {
-		if v.State == vm.StateRunning {
-			return resumeOpHibernate
-		}
-		return ""
-	}
-	if meta.ReadLifecycleState(pod) != meta.LifecycleStateCreating {
-		return ""
-	}
-	switch pod.Annotations[annotationPostCloneState] {
-	case postCloneStateFailed:
-		return ""
-	case postCloneStateRunning:
-		return resumeOpPostClone
-	case postCloneStateDone:
-		return resumeOpReadyWait
-	default:
-		spec := meta.ParseVMSpec(pod)
-		if _, needed := planPostClone(spec, v, ""); needed {
-			return resumeOpPostClone
-		}
-		return resumeOpReadyWait
-	}
-}
-
+// dispatchResume claims the pod for the whole resumed op — every resume runs
+// outside the framework's per-pod serialization, so UpdatePod's acting arms
+// must back off from all of them, not just hibernate.
 func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
-	spec := meta.ParseVMSpec(pod)
-	switch op {
-	case resumeOpHibernate:
-		key := meta.PodKey(pod.Namespace, pod.Name)
-		if !p.claimResume(key) {
-			return
-		}
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if !p.claimResume(key) {
+		return
+	}
+	run := func(f func()) {
 		p.goBackground(func() {
 			defer p.releaseResume(key)
+			f()
+		})
+	}
+	switch op {
+	case resumeOpHibernate:
+		run(func() {
 			if err := p.hibernate(p.lifecycleCtx, pod, v); err != nil {
 				return
 			}
@@ -96,13 +69,11 @@ func (p *Provider) dispatchResume(pod *corev1.Pod, v *vm.VM, op string) {
 			p.notify(pod)
 		})
 	case resumeOpPostClone:
-		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile")
-		})
+		spec := meta.ParseVMSpec(pod)
+		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile") })
 	case resumeOpReadyWait:
-		p.goBackground(func() {
-			p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v)
-		})
+		spec := meta.ParseVMSpec(pod)
+		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v) })
 	}
 }
 
@@ -139,4 +110,35 @@ func (p *Provider) resumeBusy(key string) bool {
 	defer p.mu.RUnlock()
 	_, held := p.resumedOps[key]
 	return held
+}
+
+// owedOpFor decides what a tracked pod is still owed. Deleting pods belong to
+// DeletePod; hibernate resumes only on a running VM — stopped VMs are cocoon
+// daemon supervision's jurisdiction.
+func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
+	if pod.DeletionTimestamp != nil || v == nil {
+		return ""
+	}
+	if meta.ReadHibernateState(pod) {
+		if v.State == vm.StateRunning {
+			return resumeOpHibernate
+		}
+		return ""
+	}
+	if meta.ReadLifecycleState(pod) != meta.LifecycleStateCreating {
+		return ""
+	}
+	switch pod.Annotations[annotationPostCloneState] {
+	case postCloneStateFailed:
+		return ""
+	case postCloneStateRunning:
+		return resumeOpPostClone
+	case postCloneStateDone:
+		return resumeOpReadyWait
+	default:
+		if postCloneNeeded(meta.ParseVMSpec(pod), v) {
+			return resumeOpPostClone
+		}
+		return resumeOpReadyWait
+	}
 }

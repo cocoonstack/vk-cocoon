@@ -343,15 +343,21 @@ type postClonePlan struct {
 // planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
 // on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
 func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
+	if !postCloneNeeded(spec, v) {
+		return postClonePlan{}, false
+	}
 	if spec.OS == string(cocoonv1.OSWindows) {
 		argv := buildWindowsPostCloneArgv()
 		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
 	}
-	if !needsPostClone(spec.Backend, v.NetworkConfigs) {
-		return postClonePlan{}, false
-	}
 	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
+}
+
+// postCloneNeeded is planPostClone's decision alone — cheap and syscall-free,
+// so lock-holding callers (owedOpFor) can ask without building the plan.
+func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
+	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
 }
 
 func truncate(s string, n int) string {

@@ -506,7 +506,7 @@ func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name 
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
-	if p.Probes == nil {
+	if p.Probes == nil || pod.DeletionTimestamp != nil {
 		return
 	}
 	key := meta.PodKey(pod.Namespace, pod.Name)

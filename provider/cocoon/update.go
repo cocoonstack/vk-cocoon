@@ -51,21 +51,22 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, v)
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
+	haveVM := v != nil
 
-	// A resumed full op (dispatchOwedWork) runs outside the framework's
-	// per-pod serialization; back off and let the framework retry after it.
-	if key := meta.PodKey(pod.Namespace, pod.Name); p.resumeBusy(key) &&
-		(wantHibernate && v != nil || !wantHibernate && v == nil) {
+	// wantHibernate == haveVM ⟺ an arm below would act. A resumed full op
+	// (dispatchOwedWork) runs outside the framework's per-pod serialization;
+	// back off and let the framework retry after it.
+	if key := meta.PodKey(pod.Namespace, pod.Name); wantHibernate == haveVM && p.resumeBusy(key) {
 		return fmt.Errorf("resumed operation still in flight for %s", key)
 	}
 
 	switch {
-	case wantHibernate && v != nil:
+	case wantHibernate && haveVM:
 		if err := p.hibernate(ctx, pod, v); err != nil {
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
-	case !wantHibernate && v == nil:
+	case !wantHibernate && !haveVM:
 		if err := p.wake(ctx, pod); err != nil {
 			return err
 		}

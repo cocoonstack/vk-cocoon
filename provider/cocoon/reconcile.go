@@ -90,9 +90,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
 		matched[v.ID] = true
-		if pod.DeletionTimestamp == nil {
-			p.startProbeIfEnabled(pod)
-		}
+		p.startProbeIfEnabled(pod)
 	}
 
 	for i := range vms {
@@ -232,9 +230,7 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	p.applyRuntime(ctx, pod, v)
 	p.trackPod(pod, v)
 	p.seedLifecycleIntentFromPod(pod)
-	if pod.DeletionTimestamp == nil {
-		p.startProbeIfEnabled(pod)
-	}
+	p.startProbeIfEnabled(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v
 }
