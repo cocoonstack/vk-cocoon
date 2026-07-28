@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-common/snapshot"
 
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -380,29 +382,29 @@ func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta
 	t.Fatalf("lifecycle never reached %q (pod: %v, err: %v)", want, pod, err)
 }
 
-// flakyEvidenceRegistry errors HasManifest a set number of times, then
-// reports no hibernate tag.
+// flakyEvidenceRegistry errors the manifest fetch a set number of times,
+// then reports no hibernate tag.
 type flakyEvidenceRegistry struct {
 	fakeRegistry
 	mu    sync.Mutex
 	fails int
 }
 
-func (r *flakyEvidenceRegistry) HasManifest(context.Context, string, string) (bool, error) {
+func (r *flakyEvidenceRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fails > 0 {
 		r.fails--
-		return false, errors.New("registry down")
+		return nil, "", errors.New("registry down")
 	}
-	return false, nil
+	return nil, "", fmt.Errorf("get manifest: %w", snapshot.ErrManifestNotFound)
 }
 
 // blockingEvidenceRegistry accepts the lookup and never answers until the
 // caller's context dies.
 type blockingEvidenceRegistry struct{ fakeRegistry }
 
-func (blockingEvidenceRegistry) HasManifest(ctx context.Context, _, _ string) (bool, error) {
+func (blockingEvidenceRegistry) GetManifest(ctx context.Context, _, _ string) ([]byte, string, error) {
 	<-ctx.Done()
-	return false, ctx.Err()
+	return nil, "", ctx.Err()
 }
