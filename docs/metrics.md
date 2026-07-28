@@ -73,7 +73,9 @@ they are input-validation noise rather than runtime-lifecycle failures,
 and the rejection is already visible to the caller as the synchronous
 error return.
 
-- **Warning reasons**: `CreateBringUpFailed`, `HibernateNetResizeFailed`,
+- **Warning reasons**: `CreateBringUpFailed`, `HibernateEvidenceFailed`,
+  `HibernateEvidenceUnavailable`, `HibernateSnapshotExists`,
+  `HibernateNetResizeFailed`,
   `HibernateSnapshotFailed`, `HibernatePushFailed`,
   `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`,
   `WakeIPWaitTimeout`, `WindowsStaticIPFailed`,
