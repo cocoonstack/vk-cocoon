@@ -128,9 +128,8 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	return families, nil
 }
 
-// sampleStats returns the shared short-TTL stats snapshot. Three scrape
-// consumers (stats summary, metrics resource, Prometheus collector) land
-// independently; without the TTL each pays its own /proc+statfs sweep.
+// sampleStats returns the shared short-TTL scrape sample: three consumers
+// (stats summary, metrics resource, Prometheus) land independently on it.
 func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
@@ -187,7 +186,7 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 }
 
 func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
-	if s.Tap == "" || (s.rxBytes == 0 && s.txBytes == 0) {
+	if s.rxBytes == 0 && s.txBytes == 0 {
 		return nil
 	}
 	rx, tx := s.rxBytes, s.txBytes
@@ -251,8 +250,7 @@ func readProcStatCPURSS(pid int) (cpuSeconds float64, rssBytes int64) {
 }
 
 // parseProcStat extracts utime+stime and RSS from a /proc/<pid>/stat line
-// (fields 14, 15 and 24; split after the parenthesized comm, which may
-// contain spaces). One read answers both scrape questions.
+// (fields 14, 15, 24; split after the parenthesized comm, which may contain spaces).
 func parseProcStat(s string, pageSize int) (cpuSeconds float64, rssBytes int64) {
 	idx := strings.LastIndex(s, ")")
 	if idx < 0 || idx+2 >= len(s) {

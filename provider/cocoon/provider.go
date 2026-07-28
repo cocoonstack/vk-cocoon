@@ -55,9 +55,11 @@ const (
 	// a single CLI hiccup the deferred recheck takes over.
 	inlineInspectAttempts = 2
 
-	// reconcileFanOut bounds the per-pod fan-outs on the reconcile paths
-	// (stale creates, startup probes, status drift).
-	reconcileFanOut = 8
+	// startupFanOut bounds the boot-gating fan-outs (stale creates, first
+	// probe starts); statusReconcileFanOut bounds the steady-state status
+	// drift loop against the apiserver. Equal today, tuned separately.
+	startupFanOut         = 8
+	statusReconcileFanOut = 8
 
 	// Default tunables for the recheck path. Overridable via Provider
 	// fields so tests can shrink them without racing on package globals.
@@ -242,30 +244,24 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 		return
 	}
 	logger := log.WithFunc("Provider.reconcilePodStatuses")
-	var g errgroup.Group
-	g.SetLimit(reconcileFanOut)
-	for _, pod := range pods {
-		g.Go(func() error {
-			current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
-			if err != nil {
-				logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
-				return nil
-			}
-			status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
-			if err != nil {
-				logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
-				return nil
-			}
-			if podStatusMatches(current.Status, *status) {
-				return nil
-			}
-			current.Status = *status
-			logger.Infof(ctx, "republishing drifted status for pod %s/%s", pod.Namespace, pod.Name)
-			p.notify(current)
-			return nil
-		})
-	}
-	_ = g.Wait() // workers log their own failures, never return errors
+	fanOut(statusReconcileFanOut, pods, func(pod *corev1.Pod) {
+		current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
+			return
+		}
+		status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+		if err != nil {
+			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
+			return
+		}
+		if podStatusMatches(current.Status, *status) {
+			return
+		}
+		current.Status = *status
+		logger.Infof(ctx, "republishing drifted status for pod %s/%s", pod.Namespace, pod.Name)
+		p.notify(current)
+	})
 }
 
 func (p *Provider) notify(pod *corev1.Pod) {
@@ -654,6 +650,16 @@ func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
 	return cmp.Or(p.deferredRecheckInitialDelay, defaultDeferredRecheckInitialDelay),
 		cmp.Or(p.deferredRecheckMaxDelay, defaultDeferredRecheckMaxDelay),
 		cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
+}
+
+// fanOut runs f over items with bounded concurrency; f logs its own failures.
+func fanOut[T any](limit int, items []T, f func(T)) {
+	var g errgroup.Group
+	g.SetLimit(limit)
+	for _, item := range items {
+		g.Go(func() error { f(item); return nil })
+	}
+	_ = g.Wait()
 }
 
 // podForVMMatch returns the pod and tracked-VM ID for a pod that matches

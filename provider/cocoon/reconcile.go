@@ -93,7 +93,9 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
-	p.startProbesFanOut(probePods)
+	// First probes run synchronously (3s worst case each) and this path
+	// gates node registration — start them bounded-parallel.
+	fanOut(startupFanOut, probePods, p.startProbeIfEnabled)
 
 	for i := range vms {
 		if matched[vms[i].ID] {
@@ -113,7 +115,7 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
 	var g errgroup.Group
-	g.SetLimit(reconcileFanOut)
+	g.SetLimit(startupFanOut)
 	for i := range vms {
 		v := &vms[i]
 		if v.State != vm.StateCreating {
@@ -197,21 +199,6 @@ func (p *Provider) watchBusyCreate(vmID string) {
 			delay = min(delay*2, maxDelay)
 		}
 	})
-}
-
-// startProbesFanOut starts adopted pods' probes with bounded concurrency:
-// each first probe is synchronous (up to its timeout), and this path gates
-// node registration.
-func (p *Provider) startProbesFanOut(pods []*corev1.Pod) {
-	var g errgroup.Group
-	g.SetLimit(reconcileFanOut)
-	for _, pod := range pods {
-		g.Go(func() error {
-			p.startProbeIfEnabled(pod)
-			return nil
-		})
-	}
-	_ = g.Wait() // probe starts never return errors
 }
 
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
