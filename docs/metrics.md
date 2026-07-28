@@ -80,5 +80,7 @@ error return.
   `PostCloneIPWaitTimeout`,
   `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`,
   `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`,
-  `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`.
-- **Normal reasons**: `Hibernated`, `Woken`, `PostCloneSucceeded`.
+  `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`,
+  `ResumeStartFailed`, `ResumeClassifyFailed`.
+- **Normal reasons**: `Hibernated`, `Woken`, `PostCloneSucceeded`,
+  `ResumedAfterRestart`.
