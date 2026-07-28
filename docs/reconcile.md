@@ -16,7 +16,7 @@ On every restart vk-cocoon:
    before any adoption index is built — adopting a creating placeholder
    deadlocks its pod. `collected`/`not-found` free the name for a clean
    recreate; `busy` (an in-flight clone still owns the record) and
-   transient verb or inspect errors hand the record to a bounded
+   transient inspect errors hand the record to a bounded
    background watcher that indexes it for adoption once it reaches
    `running`, or applies the orphan policy if it dies without ever
    running; a record that already left `creating` is adopted only when
