@@ -28,8 +28,8 @@ func TestStartupReconcileSkeletonCollectedNotAdopted(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if len(rt.staleCreateCalls) != 1 || rt.staleCreateCalls[0] != "skel-vmid" {
-		t.Errorf("reconcile-stale-create calls = %v, want [skel-vmid]", rt.staleCreateCalls)
+	if calls := rt.staleCalls(); len(calls) != 1 || calls[0] != "skel-vmid" {
+		t.Errorf("reconcile-stale-create calls = %v, want [skel-vmid]", calls)
 	}
 	if got := p.vmByName("vk-ns-demo-0"); got != nil {
 		t.Errorf("skeleton must not be indexed by name, got %#v", got)
@@ -133,6 +133,51 @@ func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
 	}
 	if got := p.vmByName("vk-ns-demo-0"); got != nil {
 		t.Errorf("dead record must not be indexed, got %#v", got)
+	}
+}
+
+func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
+	// The owner is alive at startup (busy) and dies without committing: the
+	// record stays creating forever, so only re-asking the verb can free the
+	// name. Polling VM state cannot — creating reads the same either way.
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
+		staleCreateSeq: map[string][]vm.StaleCreateOutcome{
+			"inflight-vmid": {vm.StaleCreateBusy, vm.StaleCreateBusy, vm.StaleCreateCollected},
+		},
+		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating},
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+	p.deferredRecheckBudget = 2 * time.Second
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	// The startup pass is call 1; the watcher must keep asking past it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(rt.staleCalls()) < 3 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if calls := rt.staleCalls(); len(calls) < 3 {
+		t.Fatalf("verb calls = %v, want the watcher to re-invoke until the record resolves", calls)
+	}
+	// collected ends the watch: the count must not keep climbing.
+	time.Sleep(50 * time.Millisecond)
+	p.Close()
+	if calls := rt.staleCalls(); len(calls) != 3 {
+		t.Errorf("verb calls = %v, want the watch to stop once the record was collected", calls)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		t.Errorf("reclaimed record must not be indexed, got %#v", got)
+	}
+	if rt.removedID != "" {
+		t.Errorf("vk must not rm the record itself (the verb owns reclaim), removed %q", rt.removedID)
 	}
 }
 
