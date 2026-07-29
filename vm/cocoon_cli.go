@@ -25,6 +25,8 @@ import (
 	"github.com/projecteru2/core/log"
 	"k8s.io/apimachinery/pkg/api/resource"
 	utilexec "k8s.io/client-go/util/exec"
+
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
 const (
@@ -38,28 +40,22 @@ const (
 	maxEventLineBytes = 1 << 20
 
 	// staleSnapshotRmBudget / staleSnapshotRmDelay bound the wait for a killed
-	// save's orphaned child to release its per-snapshot flock. A vk killed with
-	// SIGKILL cannot reap that child (KillMode=process, and the ctx-cancel path
-	// never runs), so it lives until its next write to the closed stdout pipe —
-	// seconds. Waiting here keeps the recovery inside one SnapshotSave call.
+	// save's orphaned child to die (seconds) and release the snapshot flock.
 	staleSnapshotRmBudget = 30 * time.Second
 	staleSnapshotRmDelay  = 500 * time.Millisecond
 )
 
 var (
-	_ Runtime = (*CocoonCLI)(nil)
-
-	// snapshotNameTaken are cocoon's two same-name rejections. The save preflight
-	// resolves the name through a lookup that skips pending records, so a save
-	// killed mid-flight leaves the name reserved but invisible there; the store's
-	// name index catches it later with different wording.
+	// snapshotNameTaken are cocoon's two same-name rejections: the save preflight
+	// skips pending records, so a killed save surfaces via the store's wording.
 	snapshotNameTaken = []string{"already exists", "already in use by"}
 
-	// snapshotLeaseHeld is cocoon's refusal to delete a snapshot whose per-snapshot
-	// flock is held. The message names the read holders, but an interrupted save's
-	// build lease reports the same way.
+	// snapshotLeaseHeld is cocoon's rm refusal while the snapshot's flock is held —
+	// an interrupted save's build lease reports the same as active readers.
 	snapshotLeaseHeld = []string{"is in use by an active"}
 )
+
+var _ Runtime = (*CocoonCLI)(nil)
 
 // CocoonCLI is the production Runtime that shells out to `cocoon`.
 type CocoonCLI struct {
@@ -235,11 +231,9 @@ func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadClo
 	return io.NopCloser(&stdout), nil
 }
 
-// SnapshotSave runs `cocoon snapshot save`, dropping a name an earlier attempt
-// still holds. The v-k workqueue retries UpdatePod rapidly, and a crashed
-// hibernate leaves the name reserved either by a finalized snapshot or by a
-// pending record. Removal goes by the holder's ID when the message carries one:
-// only ID resolution is guaranteed to reach a pending record.
+// SnapshotSave runs `cocoon snapshot save`, dropping a name a crashed hibernate
+// still holds. Removal prefers the holder's ID from the rejection: only ID
+// resolution is guaranteed to reach a pending record.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
 	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err == nil {
@@ -248,61 +242,15 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	if !containsAny(string(out), snapshotNameTaken...) {
 		return cocoonCmdError("snapshot save", vmName, err, out)
 	}
-	stale := cmp.Or(snapshotNameHolderID(string(out)), vmName)
-	if rmErr := c.removeStaleSnapshot(ctx, stale); rmErr != nil {
-		return fmt.Errorf("cocoon snapshot save %s: name held by %s: %w", vmName, stale, rmErr)
+	holder := cmp.Or(snapshotNameHolderID(string(out)), vmName)
+	if rmErr := c.removeStaleSnapshot(ctx, holder); rmErr != nil {
+		return fmt.Errorf("cocoon snapshot save %s: name held by %s: %w", vmName, holder, rmErr)
 	}
 	out2, err2 := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err2 != nil {
 		return cocoonCmdError("snapshot save (after rm)", vmName, err2, out2)
 	}
 	return nil
-}
-
-// removeStaleSnapshot drops the snapshot holding the name, waiting out a flock
-// still held by the orphaned child of a killed save. Only the lease-held refusal
-// is retried: every other rm failure is reported on the first attempt.
-func (c *CocoonCLI) removeStaleSnapshot(ctx context.Context, ref string) error {
-	deadline := time.Now().Add(staleSnapshotRmBudget)
-	for attempt := 1; ; attempt++ {
-		out, err := c.command(ctx, "snapshot", "rm", ref).CombinedOutput()
-		if err == nil {
-			return nil
-		}
-		trimmed := strings.TrimSpace(string(out))
-		if !containsAny(trimmed, snapshotLeaseHeld...) {
-			return fmt.Errorf("rm failed: %w (output: %s)", err, trimmed)
-		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf("rm still lease-blocked after %s and %d attempts: %w (output: %s)", staleSnapshotRmBudget, attempt, err, trimmed)
-		}
-		log.WithFunc("vm.CocoonCLI.removeStaleSnapshot").
-			Debugf(ctx, "snapshot %s lease held, retrying rm in %s", ref, staleSnapshotRmDelay)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(staleSnapshotRmDelay):
-		}
-	}
-}
-
-// snapshotNameHolderID pulls the holding snapshot's ID out of cocoon's rejection;
-// "" when the message names no holder (older builds report the name only).
-func snapshotNameHolderID(out string) string {
-	for _, marker := range []string{"already in use by ", "held by "} {
-		_, after, found := strings.Cut(out, marker)
-		if !found {
-			continue
-		}
-		fields := strings.Fields(after)
-		if len(fields) == 0 {
-			continue
-		}
-		if id := strings.TrimRight(fields[0], `).,"`); id != "" {
-			return id
-		}
-	}
-	return ""
 }
 
 // Snapshot runs `cocoon snapshot inspect`; "snapshot not found" maps to ErrSnapshotNotFound.
@@ -416,6 +364,30 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 		}
 	}()
 	return ch, nil
+}
+
+// removeStaleSnapshot rms the name holder, retrying only the lease-held refusal
+// until the killed save's orphaned child dies; other failures report immediately.
+func (c *CocoonCLI) removeStaleSnapshot(ctx context.Context, ref string) error {
+	deadline := time.Now().Add(staleSnapshotRmBudget)
+	for {
+		out, err := c.command(ctx, "snapshot", "rm", ref).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		trimmed := strings.TrimSpace(string(out))
+		if !containsAny(trimmed, snapshotLeaseHeld...) {
+			return fmt.Errorf("rm failed: %w (output: %s)", err, trimmed)
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("rm still lease-blocked after %s: %w (output: %s)", staleSnapshotRmBudget, err, trimmed)
+		}
+		log.WithFunc("vm.CocoonCLI.removeStaleSnapshot").
+			Debugf(ctx, "snapshot %s lease held, retrying rm in %s", ref, staleSnapshotRmDelay)
+		if !commonk8s.SleepCtx(ctx, staleSnapshotRmDelay) {
+			return ctx.Err()
+		}
+	}
 }
 
 // command builds an exec.Cmd; logged at debug for operator visibility into the external binary surface.
@@ -585,6 +557,25 @@ func errContainsAny(err error, phrases ...string) bool {
 func containsAny(s string, phrases ...string) bool {
 	lowered := strings.ToLower(s)
 	return slices.ContainsFunc(phrases, func(p string) bool { return strings.Contains(lowered, p) })
+}
+
+// snapshotNameHolderID pulls the holder's ID out of cocoon's same-name
+// rejection; "" when the message names no holder (older cocoon).
+func snapshotNameHolderID(out string) string {
+	for _, marker := range []string{"already in use by ", "held by "} {
+		_, after, found := strings.Cut(out, marker)
+		if !found {
+			continue
+		}
+		fields := strings.Fields(after)
+		if len(fields) == 0 {
+			continue
+		}
+		if id := strings.TrimSuffix(fields[0], ")"); id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.

@@ -47,14 +47,12 @@ func TestSnapshotNameTakenPhrases(t *testing.T) {
 		want bool
 	}{
 		{
-			// The save preflight, which only sees finalized records.
 			name: "preflight rejection",
 			out:  `Error: snapshot name "vk-ns-demo-0" already exists`,
 			want: true,
 		},
 		{
-			// The store's name index, which also holds a pending record left by
-			// a save whose process was killed before it could roll back.
+			// The store's name index also sees the pending record a killed save leaves.
 			name: "name index rejection",
 			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
 			want: true,
@@ -90,8 +88,7 @@ func TestSnapshotNameHolderID(t *testing.T) {
 			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
 		},
 		{
-			// Older cocoon: no holder in the message, so the caller falls back
-			// to removing by name.
+			// Older cocoon names no holder; the caller falls back to the name.
 			name: "preflight rejection without a holder",
 			out:  `Error: snapshot name "vk-ns-demo-0" already exists`,
 			want: "",
@@ -382,22 +379,15 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 	}
 }
 
-// A save killed with SIGKILL leaves its cocoon child alive holding the snapshot's
-// flock, so the rm that frees the name is refused until that child dies seconds
-// later. The wait belongs inside one SnapshotSave call: bubbling it up marks the
-// pod lifecycle Failed and leans on an outside retry to come back.
 func TestRemoveStaleSnapshotWaitsOutHeldLease(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "cocoon")
 	// Refuses while the lease is held, then succeeds — the orphaned child dying.
 	payload := `#!/bin/sh
-n=$(cat ` + dir + `/n 2>/dev/null || echo 0)
-n=$((n+1)); echo "$n" > ` + dir + `/n
-if [ "$n" -lt 3 ]; then
-  echo 'Error: rm: snapshot XY7T3JIQHJ25KUVDJCJK5V3OSL is in use by an active clone/restore/export'
-  exit 1
-fi
-exit 0
+[ -f ` + dir + `/done ] && exit 0
+touch ` + dir + `/done
+echo 'Error: rm: snapshot XY7T3JIQHJ25KUVDJCJK5V3OSL is in use by an active clone/restore/export'
+exit 1
 `
 	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
 		t.Fatalf("write fake cocoon: %v", err)
@@ -405,23 +395,14 @@ exit 0
 	if err := NewCocoonCLI(script).removeStaleSnapshot(t.Context(), "XY7T3JIQHJ25KUVDJCJK5V3OSL"); err != nil {
 		t.Fatalf("removeStaleSnapshot: %v", err)
 	}
-	n, err := os.ReadFile(filepath.Join(dir, "n"))
-	if err != nil {
-		t.Fatalf("read attempt count: %v", err)
-	}
-	if strings.TrimSpace(string(n)) != "3" {
-		t.Errorf("rm attempts = %s, want 3 (two refusals then success)", strings.TrimSpace(string(n)))
-	}
 }
 
-// Every other rm failure is terminal: retrying a real error would just burn the
-// budget before reporting it.
 func TestRemoveStaleSnapshotDoesNotRetryOtherErrors(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "cocoon")
 	payload := `#!/bin/sh
-n=$(cat ` + dir + `/n 2>/dev/null || echo 0)
-echo $((n+1)) > ` + dir + `/n
+[ -f ` + dir + `/called ] && { echo 'Error: retried a terminal failure'; exit 1; }
+touch ` + dir + `/called
 echo 'Error: rm: remove data dir: input/output error'
 exit 1
 `
@@ -433,11 +414,7 @@ exit 1
 		t.Fatal("a non-lease rm failure must be reported, not retried")
 	}
 	if !strings.Contains(err.Error(), "input/output error") {
-		t.Errorf("error = %v, want the underlying rm output", err)
-	}
-	n, _ := os.ReadFile(filepath.Join(dir, "n"))
-	if strings.TrimSpace(string(n)) != "1" {
-		t.Errorf("rm attempts = %s, want 1", strings.TrimSpace(string(n)))
+		t.Errorf("error = %v, want the first attempt's output, not a retry", err)
 	}
 }
 
