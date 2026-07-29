@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"k8s.io/utils/ptr"
@@ -32,6 +33,72 @@ func TestIsCocoonNotFound(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isCocoonNotFound(tc.err); got != tc.want {
 				t.Fatalf("isCocoonNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotNameTakenPhrases(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{
+			name: "preflight rejection",
+			out:  `Error: snapshot name "vk-ns-demo-0" already exists`,
+			want: true,
+		},
+		{
+			// The store's name index also sees the pending record a killed save leaves.
+			name: "name index rejection",
+			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
+			want: true,
+		},
+		{name: "unrelated failure", out: "Error: vm is paused (snapshot or hibernate in flight)", want: false},
+		{name: "disk full", out: "Error: save snapshot: write data: no space left on device", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsAny(tc.out, snapshotNameTaken...); got != tc.want {
+				t.Fatalf("containsAny(%q) = %v, want %v", tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotNameHolderID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{
+			name: "name index rejection",
+			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
+			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
+		},
+		{
+			name: "preflight rejection names the holder",
+			out:  `Error: snapshot name "vk-ns-demo-0" already exists (held by MPT5A6ZS2FNZWQGFN24AZLREWQ)`,
+			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
+		},
+		{
+			// Older cocoon names no holder; the caller falls back to the name.
+			name: "preflight rejection without a holder",
+			out:  `Error: snapshot name "vk-ns-demo-0" already exists`,
+			want: "",
+		},
+		{name: "unrelated output", out: "Error: no space left on device", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := snapshotNameHolderID(tc.out); got != tc.want {
+				t.Fatalf("snapshotNameHolderID(%q) = %q, want %q", tc.out, got, tc.want)
 			}
 		})
 	}
@@ -309,6 +376,45 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 				t.Fatalf("buildExecArgs() = %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRemoveStaleSnapshotWaitsOutHeldLease(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cocoon")
+	// Refuses while the lease is held, then succeeds — the orphaned child dying.
+	payload := `#!/bin/sh
+[ -f ` + dir + `/done ] && exit 0
+touch ` + dir + `/done
+echo 'Error: rm: snapshot XY7T3JIQHJ25KUVDJCJK5V3OSL is in use by an active clone/restore/export'
+exit 1
+`
+	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
+		t.Fatalf("write fake cocoon: %v", err)
+	}
+	if err := NewCocoonCLI(script).removeStaleSnapshot(t.Context(), "XY7T3JIQHJ25KUVDJCJK5V3OSL"); err != nil {
+		t.Fatalf("removeStaleSnapshot: %v", err)
+	}
+}
+
+func TestRemoveStaleSnapshotDoesNotRetryOtherErrors(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cocoon")
+	payload := `#!/bin/sh
+[ -f ` + dir + `/called ] && { echo 'Error: retried a terminal failure'; exit 1; }
+touch ` + dir + `/called
+echo 'Error: rm: remove data dir: input/output error'
+exit 1
+`
+	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
+		t.Fatalf("write fake cocoon: %v", err)
+	}
+	err := NewCocoonCLI(script).removeStaleSnapshot(t.Context(), "XY7T3JIQHJ25KUVDJCJK5V3OSL")
+	if err == nil {
+		t.Fatal("a non-lease rm failure must be reported, not retried")
+	}
+	if !strings.Contains(err.Error(), "input/output error") {
+		t.Errorf("error = %v, want the first attempt's output, not a retry", err)
 	}
 }
 
