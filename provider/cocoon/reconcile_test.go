@@ -138,11 +138,9 @@ func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
 
 func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	// The owner is alive at startup (busy) and dies without committing: the
-	// record stays creating forever, so only re-asking the verb can free the
-	// name. Polling VM state cannot — creating reads the same either way.
+	// record stays creating forever, and only re-asking the verb can free the name.
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
-		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
+		listVMs: []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateSeq: map[string][]vm.StaleCreateOutcome{
 			"inflight-vmid": {vm.StaleCreateBusy, vm.StaleCreateBusy, vm.StaleCreateCollected},
 		},

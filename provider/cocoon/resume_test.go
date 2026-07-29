@@ -237,9 +237,8 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 }
 
 func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T) {
-	// A SIGKILLed VMM leaves cocoon's record reading running, so gating Start on
-	// the listed state skips it and every hibernate step then fails not-running.
-	// Start is a no-op on a live VM, so it is safe to issue unconditionally.
+	// A SIGKILLed VMM leaves the record reading running: gating Start on the
+	// listed state skips the boot and every hibernate step fails not-running.
 	const (
 		vmName = "vk-ns-demo-0"
 		vmID   = "resume-vmid"

@@ -124,19 +124,17 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 		}
 		g.Go(func() error {
 			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
+			recordStaleCreateOutcome(outcome, err)
 			if err != nil {
-				metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
 				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
 				p.watchBusyCreate(v.ID)
 				return nil
 			}
-			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
 			switch outcome {
 			case vm.StaleCreateNotCreating:
-				switch fresh, settled := p.classifySettledCreate(ctx, v.ID); {
-				case !settled:
+				if fresh, settled := p.classifySettledCreate(ctx, v.ID); !settled {
 					p.watchBusyCreate(v.ID)
-				case fresh != nil:
+				} else if fresh != nil {
 					keep[i] = fresh
 				}
 			case vm.StaleCreateBusy:
@@ -159,10 +157,8 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 }
 
 // watchBusyCreate re-invokes the reclaim verb on an unclassified creating
-// record. VM state alone cannot resolve it — the record reads creating both
-// while its owner is still cloning and after that owner died holding the name,
-// and only the verb tells those apart. The event watcher reacts to deletions
-// and stops, so nothing else re-delivers either outcome.
+// record: only the verb tells a live owner from one that died holding the
+// name, and nothing else re-delivers either outcome.
 func (p *Provider) watchBusyCreate(vmID string) {
 	p.goBackground(func() {
 		ctx := p.lifecycleCtx
@@ -174,18 +170,14 @@ func (p *Provider) watchBusyCreate(vmID string) {
 				return
 			}
 			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, vmID)
+			recordStaleCreateOutcome(outcome, err)
 			if err != nil {
-				metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
 				logger.Errorf(ctx, err, "re-reconcile creating placeholder %s", vmID)
-			} else {
-				metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
-				if outcome == vm.StaleCreateCollected || outcome == vm.StaleCreateNotFound {
-					logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
-					return
-				}
+			} else if outcome == vm.StaleCreateCollected || outcome == vm.StaleCreateNotFound {
+				logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
+				return
 			}
-			// Running is adoptable whatever the verb answered: a verb that keeps
-			// failing must not strand a clone that did commit.
+			// A failing verb must not strand a clone that did commit.
 			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
 				if fresh != nil {
 					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)
@@ -202,10 +194,9 @@ func (p *Provider) watchBusyCreate(vmID string) {
 	})
 }
 
-// classifySettledCreate resolves a record the verb reports as no longer
-// creating. (vm, true): committed, adoptable. (nil, true): resolved with
-// nothing to adopt — gone, or handed to the orphan policy. (nil, false):
-// still transitional, ask again.
+// classifySettledCreate resolves a record past the verb: (vm, true) committed
+// and adoptable, (nil, true) settled with nothing to adopt, (nil, false) still
+// transitional — ask again.
 func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.VM, bool) {
 	logger := log.WithFunc("Provider.classifySettledCreate")
 	fresh, err := p.Runtime.Inspect(ctx, vmID)
@@ -213,7 +204,7 @@ func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.
 	case errors.Is(err, vm.ErrVMNotFound):
 		return nil, true
 	case err != nil:
-		logger.Errorf(ctx, err, "re-inspect %s after not-creating; watching for commit", vmID)
+		logger.Errorf(ctx, err, "re-inspect creating placeholder %s; watching for commit", vmID)
 		return nil, false
 	case fresh.State == vm.StateRunning:
 		return fresh, true
@@ -314,4 +305,12 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 // inFlightCreate: vm run passes through created between the create-lock windows.
 func inFlightCreate(state string) bool {
 	return state == vm.StateCreating || state == vm.StateCreated
+}
+
+func recordStaleCreateOutcome(outcome vm.StaleCreateOutcome, err error) {
+	label := string(outcome)
+	if err != nil {
+		label = "error"
+	}
+	metrics.StaleCreateReconcileTotal.WithLabelValues(label).Inc()
 }

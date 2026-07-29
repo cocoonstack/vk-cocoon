@@ -1689,12 +1689,10 @@ type fakeRuntime struct {
 
 	netResizeCalls []netResizeCall
 	netResizeErr   error
-	// netResizeNeedsStart makes NetResize fail like cocoon does on a record that
-	// still reads running with a dead VMM, until Start converges it.
+	// netResizeNeedsStart fails NetResize until Start ran — a dead VMM whose record still reads running.
 	netResizeNeedsStart bool
 
 	startCalls []string
-	startErr   error
 
 	// mu guards snapshots, imagesPresent, and the call ledgers so
 	// singleflight tests can drive concurrent ensure* callers under -race.
@@ -1710,8 +1708,7 @@ type fakeRuntime struct {
 	onRemove func()
 
 	staleCreateOutcomes map[string]vm.StaleCreateOutcome // by vmID; absent → collected
-	// staleCreateSeq, when non-empty for a vmID, is consumed in order before
-	// staleCreateOutcomes — scripts an owner that exits mid-watch.
+	// staleCreateSeq is consumed per vmID before staleCreateOutcomes — scripts an owner that exits mid-watch.
 	staleCreateSeq   map[string][]vm.StaleCreateOutcome
 	staleCreateCalls []string
 	staleCreateErr   error
@@ -1788,8 +1785,6 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 	return nil
 }
 
-// ReconcileStaleCreate is called from watchBusyCreate's goroutine as well as the
-// startup pass, so the ledger and the script are guarded.
 func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.StaleCreateOutcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1805,12 +1800,6 @@ func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.S
 		return o, nil
 	}
 	return vm.StaleCreateCollected, nil
-}
-
-func (f *fakeRuntime) staleCalls() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.staleCreateCalls)
 }
 
 func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
@@ -1926,13 +1915,7 @@ func (f *fakeRuntime) Start(_ context.Context, vmID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalls = append(f.startCalls, vmID)
-	return f.startErr
-}
-
-func (f *fakeRuntime) started() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.startCalls)
+	return nil
 }
 
 type netResizeCall struct {
@@ -2012,6 +1995,18 @@ func (f *fakeRuntime) registerSnapshot(name string) {
 		f.snapshots = map[string]*vm.Snapshot{}
 	}
 	f.snapshots[name] = &vm.Snapshot{Name: name}
+}
+
+func (f *fakeRuntime) staleCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.staleCreateCalls)
+}
+
+func (f *fakeRuntime) started() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.startCalls)
 }
 
 type nopWriteCloser struct{}

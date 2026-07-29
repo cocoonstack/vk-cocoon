@@ -65,10 +65,9 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 	switch op {
 	case resumeOpHibernate:
 		run(func() {
-			// Boot unconditionally; nothing re-delivers the hibernate later. Not
-			// gated on v.State: that is the startup List's record field, which
-			// still reads running after a SIGKILLed VMM, and Start no-ops on a
-			// live VM while converging a crashed one.
+			// Boot unconditionally: the record still reads running after a
+			// SIGKILLed VMM, and Start no-ops on a live VM. Nothing re-delivers
+			// the hibernate later.
 			if err := p.Runtime.Start(p.lifecycleCtx, v.ID); err != nil {
 				p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
 				return
