@@ -17,10 +17,13 @@ On every restart vk-cocoon:
    deadlocks its pod. `collected`/`not-found` free the name for a clean
    recreate; `busy` (an in-flight clone still owns the record) and
    transient verb or inspect errors hand the record to a bounded
-   background watcher that indexes it for adoption once it reaches
-   `running`, or applies the orphan policy if it dies without ever
-   running; a record that already left `creating` is adopted only when
-   `running`. Outcomes are counted on
+   background watcher. Each watcher tick re-invokes the verb:
+   `collected`/`not-found` free the name for a clean recreate; otherwise
+   an inspect indexes a committed `running` VM or applies the orphan
+   policy to a terminal record. An unresolved `creating`/`created` state
+   or transient error remains under bounded retry. A record that already
+   left `creating` is adopted only when `running`. Every verb attempt is
+   counted on
    `cocoon_vk_stale_create_reconcile_total`.
 4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
    the VMID against the runtime list.

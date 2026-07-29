@@ -124,29 +124,18 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 		}
 		g.Go(func() error {
 			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
+			recordStaleCreateOutcome(outcome, err)
 			if err != nil {
-				metrics.StaleCreateReconcileTotal.WithLabelValues("error").Inc()
 				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
 				p.watchBusyCreate(v.ID)
 				return nil
 			}
-			metrics.StaleCreateReconcileTotal.WithLabelValues(string(outcome)).Inc()
 			switch outcome {
 			case vm.StaleCreateNotCreating:
-				fresh, inspectErr := p.Runtime.Inspect(ctx, v.ID)
-				switch {
-				case errors.Is(inspectErr, vm.ErrVMNotFound):
-					// Gone between the verb and the inspect.
-				case inspectErr != nil:
-					logger.Errorf(ctx, inspectErr, "re-inspect %s after not-creating; watching for commit", v.ID)
+				if fresh, settled := p.classifySettledCreate(ctx, v.ID); !settled {
 					p.watchBusyCreate(v.ID)
-				case fresh.State == vm.StateRunning:
+				} else if fresh != nil {
 					keep[i] = fresh
-				case inFlightCreate(fresh.State):
-					p.watchBusyCreate(v.ID)
-				default:
-					logger.Warnf(ctx, "placeholder %s (%s) left creating as %s without running; applying orphan policy", v.ID, v.Name, fresh.State)
-					p.handleOrphan(ctx, fresh)
 				}
 			case vm.StaleCreateBusy:
 				logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
@@ -167,8 +156,9 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	return kept
 }
 
-// watchBusyCreate polls an unclassified creating record: the event watcher
-// only reacts to deletions and stops, so a clone that commits is invisible.
+// watchBusyCreate re-invokes the reclaim verb on an unclassified creating
+// record: only the verb tells a live owner from one that died holding the
+// name, and nothing else re-delivers either outcome.
 func (p *Provider) watchBusyCreate(vmID string) {
 	p.goBackground(func() {
 		ctx := p.lifecycleCtx
@@ -179,26 +169,52 @@ func (p *Provider) watchBusyCreate(vmID string) {
 			if !commonk8s.SleepCtx(ctx, delay) {
 				return
 			}
-			v, err := p.Runtime.Inspect(ctx, vmID)
-			switch {
-			case errors.Is(err, vm.ErrVMNotFound):
+			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, vmID)
+			recordStaleCreateOutcome(outcome, err)
+			if err != nil {
+				logger.Errorf(ctx, err, "re-reconcile creating placeholder %s", vmID)
+			} else if outcome == vm.StaleCreateCollected || outcome == vm.StaleCreateNotFound {
+				logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
 				return
-			case err == nil && v.State == vm.StateRunning:
-				logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, v.Name)
-				p.indexOrphanByName(v)
-				return
-			case err == nil && !inFlightCreate(v.State):
-				logger.Warnf(ctx, "in-flight create %s (%s) ended %s without running; applying orphan policy", vmID, v.Name, v.State)
-				p.handleOrphan(ctx, v)
+			}
+			// A failing verb must not strand a clone that did commit.
+			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
+				if fresh != nil {
+					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)
+					p.indexOrphanByName(fresh)
+				}
 				return
 			}
 			if time.Now().After(deadline) {
-				logger.Warnf(ctx, "in-flight create %s did not leave creating within budget; giving up", vmID)
+				logger.Warnf(ctx, "in-flight create %s did not resolve within budget; giving up", vmID)
 				return
 			}
 			delay = min(delay*2, maxDelay)
 		}
 	})
+}
+
+// classifySettledCreate resolves a record past the verb: (vm, true) committed
+// and adoptable, (nil, true) settled with nothing to adopt, (nil, false) still
+// transitional — ask again.
+func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.VM, bool) {
+	logger := log.WithFunc("Provider.classifySettledCreate")
+	fresh, err := p.Runtime.Inspect(ctx, vmID)
+	switch {
+	case errors.Is(err, vm.ErrVMNotFound):
+		return nil, true
+	case err != nil:
+		logger.Errorf(ctx, err, "re-inspect creating placeholder %s; watching for commit", vmID)
+		return nil, false
+	case fresh.State == vm.StateRunning:
+		return fresh, true
+	case inFlightCreate(fresh.State):
+		return nil, false
+	default:
+		logger.Warnf(ctx, "placeholder %s (%s) left creating as %s without running; applying orphan policy", vmID, fresh.Name, fresh.State)
+		p.handleOrphan(ctx, fresh)
+		return nil, true
+	}
 }
 
 // reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
@@ -289,4 +305,12 @@ func podItems(list *corev1.PodList) []corev1.Pod {
 // inFlightCreate: vm run passes through created between the create-lock windows.
 func inFlightCreate(state string) bool {
 	return state == vm.StateCreating || state == vm.StateCreated
+}
+
+func recordStaleCreateOutcome(outcome vm.StaleCreateOutcome, err error) {
+	label := string(outcome)
+	if err != nil {
+		label = "error"
+	}
+	metrics.StaleCreateReconcileTotal.WithLabelValues(label).Inc()
 }

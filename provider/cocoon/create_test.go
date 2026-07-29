@@ -1689,6 +1689,10 @@ type fakeRuntime struct {
 
 	netResizeCalls []netResizeCall
 	netResizeErr   error
+	// netResizeNeedsStart fails NetResize until Start ran — a dead VMM whose record still reads running.
+	netResizeNeedsStart bool
+
+	startCalls []string
 
 	// mu guards snapshots, imagesPresent, and the call ledgers so
 	// singleflight tests can drive concurrent ensure* callers under -race.
@@ -1704,8 +1708,10 @@ type fakeRuntime struct {
 	onRemove func()
 
 	staleCreateOutcomes map[string]vm.StaleCreateOutcome // by vmID; absent → collected
-	staleCreateCalls    []string
-	staleCreateErr      error
+	// staleCreateSeq is consumed per vmID before staleCreateOutcomes — scripts an owner that exits mid-watch.
+	staleCreateSeq   map[string][]vm.StaleCreateOutcome
+	staleCreateCalls []string
+	staleCreateErr   error
 	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
 	onExec          func()
 	removeErr       error
@@ -1780,9 +1786,15 @@ func (f *fakeRuntime) Remove(_ context.Context, vmID string) error {
 }
 
 func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.StaleCreateOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.staleCreateCalls = append(f.staleCreateCalls, vmID)
 	if f.staleCreateErr != nil {
 		return "", f.staleCreateErr
+	}
+	if seq := f.staleCreateSeq[vmID]; len(seq) > 0 {
+		f.staleCreateSeq[vmID] = seq[1:]
+		return seq[0], nil
 	}
 	if o, ok := f.staleCreateOutcomes[vmID]; ok {
 		return o, nil
@@ -1899,7 +1911,12 @@ func (f *fakeRuntime) ImageImport(ctx context.Context, name string) (io.WriteClo
 	return nopWriteCloser{}, wait, nil
 }
 
-func (f *fakeRuntime) Start(_ context.Context, _ string) error { return nil }
+func (f *fakeRuntime) Start(_ context.Context, vmID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startCalls = append(f.startCalls, vmID)
+	return nil
+}
 
 type netResizeCall struct {
 	vmID   string
@@ -1911,6 +1928,9 @@ func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) er
 		return err
 	}
 	f.netResizeCalls = append(f.netResizeCalls, netResizeCall{vmID: vmID, target: target})
+	if f.netResizeNeedsStart && len(f.started()) == 0 {
+		return fmt.Errorf("cocoon vm net %s: vm is not running: vm not running", vmID)
+	}
 	return f.netResizeErr
 }
 
@@ -1975,6 +1995,18 @@ func (f *fakeRuntime) registerSnapshot(name string) {
 		f.snapshots = map[string]*vm.Snapshot{}
 	}
 	f.snapshots[name] = &vm.Snapshot{Name: name}
+}
+
+func (f *fakeRuntime) staleCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.staleCreateCalls)
+}
+
+func (f *fakeRuntime) started() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.startCalls)
 }
 
 type nopWriteCloser struct{}

@@ -236,6 +236,46 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 	}
 }
 
+func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T) {
+	// A SIGKILLed VMM leaves the record reading running: gating Start on the
+	// listed state skips the boot and every hibernate step fails not-running.
+	const (
+		vmName = "vk-ns-demo-0"
+		vmID   = "resume-vmid"
+	)
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  vmName,
+		Mode:    "clone",
+		OS:      string(cocoonv1.OSWindows),
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+	})
+	pod.Spec.NodeName = "cocoon-pool"
+	meta.VMRuntime{VMID: vmID, IP: "10.0.0.9"}.Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	rt := &fakeRuntime{
+		listVMs:             []vm.VM{{ID: vmID, Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}},
+		netResizeNeedsStart: true,
+	}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateHibernated)
+	p.Close()
+
+	if got := rt.started(); len(got) != 1 || got[0] != vmID {
+		t.Errorf("start calls = %v, want [%s]", got, vmID)
+	}
+	if rt.snapshotSaveCount != 1 {
+		t.Errorf("snapshot saves = %d, want 1", rt.snapshotSaveCount)
+	}
+}
+
 func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
 	// post-clone-state=done is written before SAC runs, so done alone must
 	// not skip the SAC pass: a failing dialer proves it was re-attempted.

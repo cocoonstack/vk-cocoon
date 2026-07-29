@@ -336,7 +336,9 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 	}()
 
 	time.AfterFunc(10*time.Millisecond, func() {
-		meta.HibernateState(true).Apply(pod)
+		hib := pod.DeepCopy()
+		meta.HibernateState(true).Apply(hib)
+		p.trackPod(hib, nil)
 		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 	})
 
