@@ -64,3 +64,49 @@ func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
 		t.Errorf("delete should proceed after release, removed %q", rt.removedID)
 	}
 }
+
+// TestDeletePodSeatReleaseKeepsLocalSnapshots locks P1: a release-policy suspend deletes the pod to
+// free the seat, but the local snapshot must survive as the same-node warm-wake cache.
+func TestDeletePodSeatReleaseKeepsLocalSnapshots(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	// Hibernate already removed the VM and forgot the pod → vmForPod returns nil.
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0"})
+	meta.MarkKeepSnapshotOnDelete(pod)
+
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+
+	if len(rt.snapshotRemoveCalls) != 0 {
+		t.Errorf("seat release must keep the local snapshot, removed %v", rt.snapshotRemoveCalls)
+	}
+	if rt.removedID != "" {
+		t.Errorf("forgotten-VM delete must not call Runtime.Remove, got %q", rt.removedID)
+	}
+}
+
+// TestDeletePodSeatReleaseKeepsSnapshotsWithLiveVM covers the interrupted-hibernate race: the flag
+// is set but vk still tracks a VM. The VM goes, the snapshot stays.
+func TestDeletePodSeatReleaseKeepsSnapshotsWithLiveVM(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	meta.MarkKeepSnapshotOnDelete(pod)
+	p.trackPod(pod, &vm.VM{ID: "live-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning})
+
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+
+	if rt.removedID != "live-vmid" {
+		t.Errorf("the VM must still be removed, got %q", rt.removedID)
+	}
+	if len(rt.snapshotRemoveCalls) != 0 {
+		t.Errorf("seat release must keep the local snapshot, removed %v", rt.snapshotRemoveCalls)
+	}
+}

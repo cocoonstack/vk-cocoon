@@ -21,12 +21,21 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	spec := meta.ParseVMSpec(pod)
+	// A seat release leaves the state claimable from the :hibernate tag, so the
+	// local snapshot outlives the pod as the same-node warm-wake cache.
+	// resolveWakeSource still gates it on the tag, so it can never restore stale state.
+	keepSnapshots := meta.ReadKeepSnapshotOnDelete(pod)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	if v == nil {
-		p.removeLocalSnapshots(ctx, spec.VMName)
+		reason := "no_vm"
+		if keepSnapshots {
+			reason = "seat_release"
+		} else {
+			p.removeLocalSnapshots(ctx, spec.VMName)
+		}
 		p.forgetPod(pod.Namespace, pod.Name)
-		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "no_vm").Inc()
+		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", reason).Inc()
 		return nil
 	}
 
@@ -39,7 +48,9 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
 
-	p.removeLocalSnapshots(ctx, v.Name)
+	if !keepSnapshots {
+		p.removeLocalSnapshots(ctx, v.Name)
+	}
 
 	p.forgetPod(pod.Namespace, pod.Name)
 	pod.Status.Phase = corev1.PodSucceeded

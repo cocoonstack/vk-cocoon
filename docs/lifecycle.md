@@ -107,7 +107,15 @@ and the hibernate transition.
      i.e. slot 0 of its CocoonSet).
    - `never`: skip snapshots entirely.
 3. `Runtime.Remove(vmID)` to destroy the VM.
-4. Forget the pod from the in-memory tables.
+4. Drop the local snapshot and its fork snapshot, **unless** the pod carries
+   `vm.cocoonstack.io/keep-snapshot-on-delete`. The operator sets that flag
+   when the delete is a `hibernatePolicy: release` seat release: the VM state
+   stays claimable from the `:hibernate` tag, so the node-local snapshot is
+   kept as the warm-wake cache that lets a wake landing back on this node
+   skip the registry pull. `resolveWakeSource` still verifies any local copy
+   against the tag's `SnapshotID`, so keeping it cannot restore stale state.
+   A missing flag only costs a pull, never correctness.
+5. Forget the pod from the in-memory tables.
 
 ## UpdatePod
 
