@@ -194,8 +194,7 @@ func (p *Provider) hibernateEvidence(ctx context.Context, vmName string) (bool, 
 	return true, m.Annotations[manifest.AnnotationSnapshotBaseImage], nil
 }
 
-// bringUpVM dispatches on mode: unmanaged, clone, run, or fork. The
-// returned sourceImage feeds post-clone classification.
+// bringUpVM boots the VM for its mode; the returned sourceImage feeds post-clone classification.
 func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (*vm.VM, string, error) {
 	if !spec.Managed {
 		runtime := meta.ParseVMRuntime(pod)
@@ -212,8 +211,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	if err != nil {
 		return nil, "", err
 	}
-	switch {
-	case meta.ReadRestoreFromHibernate(pod):
+	if meta.ReadRestoreFromHibernate(pod) {
 		sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
 		if err != nil {
 			return nil, "", err
@@ -223,7 +221,15 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", err
 		}
 		return v, "", nil
+	}
 
+	// Invalidate the fork snapshot from a previous incarnation so sub-agents clone from current state.
+	forkName := forkSnapshotName(spec.VMName)
+	if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
+		log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
+	}
+
+	switch {
 	case fromDir != "":
 		if mode == string(cocoonv1.AgentModeRun) {
 			return nil, "", fmt.Errorf("annotation %s is incompatible with mode=run", meta.AnnotationCloneFromDir)
@@ -284,12 +290,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
 		}
-		// Invalidate fork snapshot from a previous incarnation so later
-		// sub-agents clone from current state.
-		forkName := forkSnapshotName(spec.VMName)
-		if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
-			log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
-		}
 		return v, "", nil
 
 	default: // clone is the default
@@ -334,10 +334,9 @@ func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	return digest != "" && p.Runtime.Image(ctx, digest) == nil
 }
 
-// ensureSnapshotBaseImage materializes a snapshot's OCI-ref base image before a
-// clone or restore. cocoon's `vm clone --pull` only fetches http(s) bases, so an
-// OCI-ref base must be imported here. Dedup by digest — the same bytes may be
-// local under another name (epoch→AR ref migration).
+// cocoon's `vm clone --pull` only fetches http(s) bases, so an OCI-ref base
+// must be imported here. Dedup by digest — the same bytes may be local under
+// another name (epoch→AR ref migration).
 func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
 	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
 		return nil
@@ -543,8 +542,6 @@ func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero
 	}
 }
 
-// parseCloneFromDirAnnotation returns the validated absolute, canonical
-// path from the clone-from-dir annotation, or "" when absent.
 func parseCloneFromDirAnnotation(pod *corev1.Pod) (string, error) {
 	raw := strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir])
 	if raw == "" {
@@ -573,8 +570,6 @@ func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
 }
 
-// hasExplicitCloneSource reports whether the pod names its own clone source
-// (clone-from-dir or fork-from).
 func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" || spec.ForkFrom != ""
 }
@@ -593,7 +588,6 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 		snapshot.Name, snapshot.Hypervisor, targetBackend)
 }
 
-// isHTTPURL reports whether ref looks like an HTTP(S) cloud-image URL.
 func isHTTPURL(ref string) bool {
 	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
 }

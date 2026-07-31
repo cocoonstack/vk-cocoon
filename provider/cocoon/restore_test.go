@@ -56,6 +56,9 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 			if tc.wantNICs && (rt.cloned.NICs == nil || *rt.cloned.NICs != 1) {
 				t.Errorf("CH+Windows restore must clone with --nics 1; got %v", rt.cloned.NICs)
 			}
+			if len(rt.snapshotRemoveCalls) != 0 {
+				t.Errorf("restore must keep the fork snapshot, removed %v", rt.snapshotRemoveCalls)
+			}
 		})
 	}
 }
