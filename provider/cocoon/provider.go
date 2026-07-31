@@ -322,7 +322,10 @@ func (p *Provider) gcStaleRestarts() {
 }
 
 func (p *Provider) forgetPod(namespace, name string) {
-	key := meta.PodKey(namespace, name)
+	p.untrackPod(meta.PodKey(namespace, name))
+}
+
+func (p *Provider) untrackPod(key string) {
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
@@ -694,16 +697,7 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 		return
 	}
 
-	p.mu.Lock()
-	p.dropVMLocked(key)
-	delete(p.pods, key)
-	delete(p.lifecycleIntent, key)
-	delete(p.lifecycleFlushed, key)
-	p.mu.Unlock()
-
-	if p.Probes != nil {
-		p.Probes.Forget(key)
-	}
+	p.untrackPod(key)
 
 	pod.Status.Phase = corev1.PodFailed
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{

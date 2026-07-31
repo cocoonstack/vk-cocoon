@@ -516,7 +516,7 @@ func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
 
 func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
-	if err != nil || status == nil {
+	if err != nil {
 		return
 	}
 	// The readiness probe reads the tracked pod via GetPod (DeepCopy under
