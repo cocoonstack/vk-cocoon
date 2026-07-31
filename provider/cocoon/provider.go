@@ -655,16 +655,6 @@ func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
 		cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
 }
 
-// fanOut runs f over items with bounded concurrency; f logs its own failures.
-func fanOut[T any](limit int, items []T, f func(T)) {
-	var g errgroup.Group
-	g.SetLimit(limit)
-	for _, item := range items {
-		g.Go(func() error { f(item); return nil })
-	}
-	_ = g.Wait()
-}
-
 // podForVMMatch returns the pod and tracked-VM ID for a pod that matches
 // the given id or (optionally) name. name may be empty to restrict the
 // match to id only. Used by handleVMGone (match on id OR name from a
@@ -780,4 +770,14 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 		p.refreshStatus(ctx, pod)
 		p.notify(pod)
 	}
+}
+
+// fanOut runs f over items with bounded concurrency; f logs its own failures.
+func fanOut[T any](limit int, items []T, f func(T)) {
+	var g errgroup.Group
+	g.SetLimit(limit)
+	for _, item := range items {
+		g.Go(func() error { f(item); return nil })
+	}
+	_ = g.Wait()
 }
