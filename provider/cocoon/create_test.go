@@ -1278,7 +1278,7 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset() // no pods
+	p.Clientset = fake.NewSimpleClientset()
 	p.OrphanPolicy = provider.OrphanDestroy
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
@@ -2039,7 +2039,6 @@ func newTestProvider(t *testing.T) *Provider {
 	return p
 }
 
-// newLeaseParser writes a one-entry leases.json and returns a parser for it.
 func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "leases.json")
