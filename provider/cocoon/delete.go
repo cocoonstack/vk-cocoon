@@ -21,9 +21,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	spec := meta.ParseVMSpec(pod)
-	// A seat release leaves the state claimable from the :hibernate tag, so the
-	// local snapshot outlives the pod as the same-node warm-wake cache.
-	// resolveWakeSource still gates it on the tag, so it can never restore stale state.
+	// A seat release keeps the local snapshot as the same-node warm-wake cache; resolveWakeSource still gates it on the :hibernate tag.
 	keepSnapshots := meta.ReadKeepSnapshotOnDelete(pod)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
@@ -59,7 +57,6 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// removeLocalSnapshots drops the clone source and its fork snapshot so a later restore cannot prefer stale local state over the registry tag.
 func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	if vmName == "" {
 		return
