@@ -215,24 +215,37 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	}
 }
 
-func TestCreatePodRunModeInvalidatesForkSnapshot(t *testing.T) {
-	// A fresh main VM must drop the old fork snapshot so sub-agents cloned
-	// after a main recreate pick up current state, not the stale checkpoint.
-	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}}
-	p := newTestProvider(t)
-	p.Runtime = rt
-
-	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
-		Image:  "registry.example/cocoon/ubuntu:24.04",
-		Mode:   "run",
-		OS:     "linux",
-	})
-	if err := p.CreatePod(t.Context(), pod); err != nil {
-		t.Fatalf("create: %v", err)
+// TestCreatePodInvalidatesForkSnapshot locks the fresh-boot invalidation: a recreated main must drop the old fork so sub-agents pick up current state, not the stale checkpoint.
+func TestCreatePodInvalidatesForkSnapshot(t *testing.T) {
+	tests := []struct {
+		name string
+		rt   *fakeRuntime
+		spec meta.VMSpec
+	}{
+		{
+			name: "run mode",
+			rt:   &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}},
+			spec: meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run", OS: "linux"},
+		},
+		{
+			name: "clone mode",
+			rt:   &fakeRuntime{snapshots: map[string]*vm.Snapshot{"snapshot-repo": {Name: "snapshot-repo"}}},
+			spec: meta.VMSpec{VMName: "vk-ns-demo-0", Image: "snapshot-repo:latest", Mode: "clone"},
+		},
 	}
-	if len(rt.snapshotRemoveCalls) != 1 || rt.snapshotRemoveCalls[0] != "fork-vk-ns-demo-0" {
-		t.Fatalf("SnapshotRemoveIfExists calls = %v, want [fork-vk-ns-demo-0]", rt.snapshotRemoveCalls)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			p.Runtime = tt.rt
+
+			pod := newPodWithSpec(tt.spec)
+			if err := p.CreatePod(t.Context(), pod); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if len(tt.rt.snapshotRemoveCalls) != 1 || tt.rt.snapshotRemoveCalls[0] != "fork-vk-ns-demo-0" {
+				t.Fatalf("SnapshotRemoveIfExists calls = %v, want [fork-vk-ns-demo-0]", tt.rt.snapshotRemoveCalls)
+			}
+		})
 	}
 }
 

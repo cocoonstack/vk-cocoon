@@ -35,7 +35,11 @@ and the hibernate transition.
      it, same as the UpdatePod wake path.
    - **Fork-from** (`spec.ForkFrom`): snapshot the named source VM once
      (deduped via `ensureForkSnapshot`) and clone every fork off that
-     shared snapshot.
+     shared snapshot. The fork snapshot is a per-lineage baseline: every
+     fresh (non-restore) bring-up drops `fork-<vm>` before booting, so a
+     recreated same-name VM can never hand a dead incarnation's baseline
+     to new sub-agents; a hibernate restore keeps it, since a wake
+     continues the same lineage.
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows
      toolboxes on an external QEMU host): skip the runtime entirely and
      adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator

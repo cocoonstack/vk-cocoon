@@ -212,8 +212,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	if err != nil {
 		return nil, "", err
 	}
-	switch {
-	case meta.ReadRestoreFromHibernate(pod):
+	if meta.ReadRestoreFromHibernate(pod) {
 		sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
 		if err != nil {
 			return nil, "", err
@@ -223,7 +222,16 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", err
 		}
 		return v, "", nil
+	}
 
+	// Invalidate fork snapshot from a previous incarnation so later
+	// sub-agents clone from current state.
+	forkName := forkSnapshotName(spec.VMName)
+	if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
+		log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
+	}
+
+	switch {
 	case fromDir != "":
 		if mode == string(cocoonv1.AgentModeRun) {
 			return nil, "", fmt.Errorf("annotation %s is incompatible with mode=run", meta.AnnotationCloneFromDir)
@@ -283,12 +291,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
-		}
-		// Invalidate fork snapshot from a previous incarnation so later
-		// sub-agents clone from current state.
-		forkName := forkSnapshotName(spec.VMName)
-		if err := p.Runtime.SnapshotRemoveIfExists(ctx, forkName); err != nil {
-			log.WithFunc("Provider.bringUpVM").Errorf(ctx, err, "invalidate fork snapshot %s", forkName)
 		}
 		return v, "", nil
 
