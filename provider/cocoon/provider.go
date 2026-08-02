@@ -224,16 +224,7 @@ func (p *Provider) runStatusReconciler(ctx context.Context) {
 	}
 	p.reconcilePodStatuses(ctx)
 
-	ticker := time.NewTicker(statusReconcileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.reconcilePodStatuses(ctx)
-		}
-	}
+	commonk8s.RunTicker(ctx, statusReconcileInterval, p.reconcilePodStatuses)
 }
 
 func (p *Provider) reconcilePodStatuses(ctx context.Context) {

@@ -112,16 +112,7 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 }
 
 func (p *Provider) runLifecycleReconciler(ctx context.Context) {
-	ticker := time.NewTicker(lifecycleReconcileInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.reconcileAllLifecycle(ctx)
-		}
-	}
+	commonk8s.RunTicker(ctx, lifecycleReconcileInterval, p.reconcileAllLifecycle)
 }
 
 func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
