@@ -388,8 +388,9 @@ func (s wakeSource) label() string { return cmp.Or(s.localName, s.origin) }
 // pushed the hibernate snapshot, and finally the registry pull.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
 	var (
-		m   *manifest.OCIManifest
-		cfg *manifest.SnapshotConfig
+		m         *manifest.OCIManifest
+		cfg       *manifest.SnapshotConfig
+		tagAbsent bool
 	)
 	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
@@ -403,6 +404,9 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
 				"local snapshot %s is stale (%s), discarding and pulling", vmName, verifyErr)
 			p.removeLocalSnapshots(ctx, vmName)
+			// Stale with no manifest means verify proved the tag absent; the
+			// peer tier reads the same manifest and cannot succeed.
+			tagAbsent = m == nil
 		default:
 			// Registry unreachable: never trust an unverified local copy.
 			metrics.SnapshotVerifyTotal.WithLabelValues("error").Inc()
@@ -411,8 +415,10 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	} else if !errors.Is(err, vm.ErrSnapshotNotFound) {
 		return wakeSource{}, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
-	if src, ok := p.tryPeerRestore(ctx, vmName, m, cfg); ok {
-		return src, nil
+	if !tagAbsent {
+		if src, ok := p.tryPeerRestore(ctx, vmName, m, cfg); ok {
+			return src, nil
+		}
 	}
 	if p.Puller == nil {
 		return wakeSource{}, fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
