@@ -217,7 +217,7 @@ func (r wakeVerifyRegistry) GetBlob(_ context.Context, _, digest string) (io.Rea
 }
 
 // withManifestAnnotation returns raw with one manifest annotation added, the
-// way Pusher.amendFromNode stamps from-node post-push.
+// way a push with PushOptions.Annotations stamps from-node.
 func withManifestAnnotation(t *testing.T, raw []byte, key, value string) []byte {
 	t.Helper()
 	var m map[string]any
