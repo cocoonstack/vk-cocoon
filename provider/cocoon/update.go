@@ -449,8 +449,14 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSourc
 	}
 	logger := log.WithFunc("Provider.tryPeerRestore")
 	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
-	if err != nil || !ok {
-		// No verifiable anchor; let the registry pull surface the real error.
+	if err != nil {
+		// A transient registry error here silently downgrades the wake to the
+		// pull path — without this line that's undiagnosable after the fact.
+		logger.Warnf(ctx, "peer restore %s: fetch hibernate manifest: %v (falling back)", vmName, err)
+		return wakeSource{}, false
+	}
+	if !ok {
+		// No hibernate tag: nothing to anchor a peer plan against.
 		return wakeSource{}, false
 	}
 	peerNode := m.Annotations[snapshots.AnnotationFromNode]
