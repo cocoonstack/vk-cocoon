@@ -309,4 +309,3 @@ func testConfig(snapshotID string) *manifest.SnapshotConfig {
 		Memory:     1 << 30,
 	}
 }
-
