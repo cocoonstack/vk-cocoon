@@ -2,7 +2,6 @@ package snapshots
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +16,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -73,6 +71,14 @@ var (
 
 	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
 	peerRestoreGate = semaphore.NewWeighted(2)
+
+	// One shared transport for connection reuse. Dead peers fail fast into
+	// the registry fallback; body reads are governed by the caller's ctx.
+	peerClient = &http.Client{Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 10 * time.Second,
+		MaxIdleConnsPerHost:   defaultPeerConcurrency,
+	}}
 
 	zeroChunk = make([]byte, zeroSkipBytes)
 )
@@ -283,11 +289,6 @@ type RestoredSnapshot struct {
 // re-pullable from the registry.
 type PeerRestorer struct {
 	StagingRoot string
-	Concurrency int
-	Client      *http.Client
-
-	clientOnce    sync.Once
-	defaultClient *http.Client
 }
 
 // Restore fetches name's snapshot files from the peer at baseURL. cfg is
@@ -341,22 +342,6 @@ func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name string, cfg *m
 	}, cleanup, nil
 }
 
-func (p *PeerRestorer) client() *http.Client {
-	if p.Client != nil {
-		return p.Client
-	}
-	// One shared transport for connection reuse. Dead peers fail fast into
-	// the registry fallback; body reads are governed by the caller's ctx.
-	p.clientOnce.Do(func() {
-		p.defaultClient = &http.Client{Transport: &http.Transport{
-			DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
-			ResponseHeaderTimeout: 10 * time.Second,
-			MaxIdleConnsPerHost:   defaultPeerConcurrency,
-		}}
-	})
-	return p.defaultClient
-}
-
 func (p *PeerRestorer) fetchPlan(ctx context.Context, baseURL, name string) (*peerPlan, error) {
 	resp, err := p.doGet(ctx, baseURL+planPath+"?name="+url.QueryEscape(name))
 	if err != nil {
@@ -376,7 +361,7 @@ func (p *PeerRestorer) doGet(ctx context.Context, u string) (*http.Response, err
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.client().Do(req)
+	resp, err := peerClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +409,7 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 	}
 
 	eg, ctx := errgroup.WithContext(ctx)
-	eg.SetLimit(cmp.Or(p.Concurrency, defaultPeerConcurrency))
+	eg.SetLimit(defaultPeerConcurrency)
 	for _, t := range tasks {
 		eg.Go(func() error {
 			for _, sl := range t.slices {
