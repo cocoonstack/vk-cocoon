@@ -130,7 +130,7 @@ genuine spec changes).
 | Transition | Behavior |
 |---|---|
 | `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
-| `true → false` (with no live VM) | `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)` → `Runtime.Clone`. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
+| `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.

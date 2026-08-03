@@ -14,6 +14,9 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
 | `VK_RESTORE_MODE` | `ondemand` | Guest-memory restore mode for Cloud Hypervisor clones: `copy`, `ondemand`, or `mmap`. Windows VMs always use `copy` (lazy restore stalls DHCP boot); Firecracker has no restore mode. `mmap` shares page cache across clones of one snapshot — the fastest fan-out — but requires a Cloud Hypervisor build with mmap restore support (cocoonstack/cloud-hypervisor `dev`); on other CH builds clones fail, so it is opt-in. Invalid values abort startup. |
+| `VK_STAGING_DIR` | `/var/lib/cocoon/vk-staging` | Temporary destination for peer-restored raw snapshot files. Keep it on the Cocoon run-directory filesystem to preserve hardlinks; stale entries are swept at startup. |
+| `VK_PEER_ADDR` | `:12501` | Plain-HTTP peer-snapshot listener. Peers dial the node's InternalIP on this port, so expose it only inside the trusted node network. |
+| `VK_COCOON_SNAPSHOT_DIR` | `/var/lib/cocoon/snapshot/localfile` | Cocoon localfile snapshot store served to peers. Override it when Cocoon uses a different root directory. |
 | `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
 | `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |
 | `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |

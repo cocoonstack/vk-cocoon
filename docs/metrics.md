@@ -36,9 +36,11 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
 | `cocoon_vk_snapshot_push_duration_seconds` | Histogram | Registry push time |
 | `cocoon_vk_snapshot_pull_duration_seconds` | Histogram | Registry pull time |
+| `cocoon_vk_snapshot_peer_restore_duration_seconds` | Histogram | Time to stage raw snapshot files from a peer node |
 | `cocoon_vk_probe_duration_seconds` | Histogram | Per-probe health check time (ICMP or TCP) |
 | `cocoon_vk_pod_lifecycle_total{op,result,reason}` | Counter | Pod lifecycle operations (`result=ok\|failed\|skipped`, `reason` sub-classifies) |
 | `cocoon_vk_snapshot_pull_total{result}` / `save_total` / `push_total` | Counter | Snapshot pull/save/push counts |
+| `cocoon_vk_snapshot_peer_restore_total{result}` | Counter | Peer restore outcomes (`result=ok\|failed`); failures fall through to the registry pull |
 | `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
 | `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
