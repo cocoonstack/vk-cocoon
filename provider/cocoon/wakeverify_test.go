@@ -103,6 +103,85 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// TestWakeStagesFromPeerAndClonesFromDir drives the no-local-snapshot wake:
+// the peer's raw files land in a staging dir, clone receives --from-dir, and
+// the staging dir is gone once the clone returns.
+func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
+	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
+
+	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	if err != nil {
+		t.Fatalf("resolveWakeSource: %v", err)
+	}
+	if src.dir == "" || src.localName != "" {
+		t.Fatalf("source = %+v, want a staged dir", src)
+	}
+	if src.snapshot == nil || src.snapshot.ID != "SNAP-REMOTE" || src.snapshot.Name != "vk-ns-demo-0" {
+		t.Fatalf("snapshot meta = %+v", src.snapshot)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(src.dir, "memory-ranges")); readErr != nil || string(got) != "peer-mem-bytes" {
+		t.Fatalf("staged memory-ranges = %q, err %v", got, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(src.dir, "snapshot.json")); statErr != nil {
+		t.Fatalf("staged envelope missing: %v", statErr)
+	}
+
+	spec := meta.VMSpec{VMName: "vk-ns-demo-0", Network: "cocoon-dhcp"}
+	if _, cloneErr := p.cloneFromHibernate(t.Context(), spec, src); cloneErr != nil {
+		t.Fatalf("cloneFromHibernate: %v", cloneErr)
+	}
+	if rt.cloned == nil || rt.cloned.FromDir != src.dir || rt.cloned.From != "" {
+		t.Fatalf("clone opts = %+v, want FromDir=%s", rt.cloned, src.dir)
+	}
+	if _, statErr := os.Stat(src.dir); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("staging dir must be removed after clone, stat err = %v", statErr)
+	}
+}
+
+// TestWakePeerMismatchFallsBackToPull proves the peer path is best-effort:
+// a peer holding a different snapshot than the registry tag is rejected, and
+// resolution falls through to the registry pull (surfaced here by nil Puller).
+func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
+	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
+	// The registry moved on: same from-node stamp, newer snapshot ID; the
+	// peer's copy no longer matches and must be rejected.
+	reg := newWakeVerifyRegistry(t, "SNAP-NEWER")
+	reg.manifestRaw = withManifestAnnotation(t, reg.manifestRaw, snapshots.AnnotationFromNode, "node-src")
+	p.Registry = reg
+
+	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
+		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
+	}
+}
+
+// TestWakePeerUnreachableFallsBackToPull proves a dead peer never fails the
+// wake outright.
+func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
+	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
+	p.PeerPort = "1" // nothing listens there
+
+	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
+		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
+	}
+}
+
+// TestWakePeerSelfNodeSkipsPeerPath: a from-node stamp naming this very node
+// means tier-1 already missed (the local copy is gone or stale); fetching
+// from ourselves would "succeed" and mask that, so it must be skipped. The
+// fixture's peer server is live and holds the snapshot — without the skip,
+// resolution would return it instead of falling through.
+func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
+	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
+	p.NodeName = "node-src" // the annotation now names this node itself
+
+	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
+		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
+	}
+}
+
 // wakeVerifyRegistry serves one hibernate-tag artifact (manifest + config
 // blob) so resolveWakeSource's local-cache verification can run against it.
 type wakeVerifyRegistry struct {
@@ -238,83 +317,4 @@ func newPeerWakeFixture(t *testing.T, snapshotID string) (*Provider, *fakeRuntim
 		}},
 	})
 	return p, rt
-}
-
-// TestWakeStagesFromPeerAndClonesFromDir drives the no-local-snapshot wake:
-// the peer's raw files land in a staging dir, clone receives --from-dir, and
-// the staging dir is gone once the clone returns.
-func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
-	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
-
-	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
-	if err != nil {
-		t.Fatalf("resolveWakeSource: %v", err)
-	}
-	if src.dir == "" || src.localName != "" {
-		t.Fatalf("source = %+v, want a staged dir", src)
-	}
-	if src.snapshot == nil || src.snapshot.ID != "SNAP-REMOTE" || src.snapshot.Name != "vk-ns-demo-0" {
-		t.Fatalf("snapshot meta = %+v", src.snapshot)
-	}
-	if got, readErr := os.ReadFile(filepath.Join(src.dir, "memory-ranges")); readErr != nil || string(got) != "peer-mem-bytes" {
-		t.Fatalf("staged memory-ranges = %q, err %v", got, readErr)
-	}
-	if _, statErr := os.Stat(filepath.Join(src.dir, "snapshot.json")); statErr != nil {
-		t.Fatalf("staged envelope missing: %v", statErr)
-	}
-
-	spec := meta.VMSpec{VMName: "vk-ns-demo-0", Network: "cocoon-dhcp"}
-	if _, cloneErr := p.cloneFromHibernate(t.Context(), spec, src); cloneErr != nil {
-		t.Fatalf("cloneFromHibernate: %v", cloneErr)
-	}
-	if rt.cloned == nil || rt.cloned.FromDir != src.dir || rt.cloned.From != "" {
-		t.Fatalf("clone opts = %+v, want FromDir=%s", rt.cloned, src.dir)
-	}
-	if _, statErr := os.Stat(src.dir); !errors.Is(statErr, fs.ErrNotExist) {
-		t.Fatalf("staging dir must be removed after clone, stat err = %v", statErr)
-	}
-}
-
-// TestWakePeerMismatchFallsBackToPull proves the peer path is best-effort:
-// a peer holding a different snapshot than the registry tag is rejected, and
-// resolution falls through to the registry pull (surfaced here by nil Puller).
-func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
-	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	// The registry moved on: same from-node stamp, newer snapshot ID; the
-	// peer's copy no longer matches and must be rejected.
-	reg := newWakeVerifyRegistry(t, "SNAP-NEWER")
-	reg.manifestRaw = withManifestAnnotation(t, reg.manifestRaw, snapshots.AnnotationFromNode, "node-src")
-	p.Registry = reg
-
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
-	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
-		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
-	}
-}
-
-// TestWakePeerUnreachableFallsBackToPull proves a dead peer never fails the
-// wake outright.
-func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
-	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	p.PeerPort = "1" // nothing listens there
-
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
-	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
-		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
-	}
-}
-
-// TestWakePeerSelfNodeSkipsPeerPath: a from-node stamp naming this very node
-// means tier-1 already missed (the local copy is gone or stale); fetching
-// from ourselves would "succeed" and mask that, so it must be skipped. The
-// fixture's peer server is live and holds the snapshot — without the skip,
-// resolution would return it instead of falling through.
-func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
-	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	p.NodeName = "node-src" // the annotation now names this node itself
-
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
-	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
-		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
-	}
 }

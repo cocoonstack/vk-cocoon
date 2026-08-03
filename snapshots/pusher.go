@@ -17,16 +17,16 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// pushGate serializes v2 (pipelined) pushes node-wide — each buffers up to its
-// memory budget; v1 spool pushes cost disk, not RAM, and stay concurrent.
-var pushGate = semaphore.NewWeighted(1)
-
 // AnnotationFromNode records which node pushed a hibernate snapshot; the wake
 // path reads it to fetch the raw files from that node instead of the
 // registry. Written by amending the manifest post-push so cocoon-common's
 // PushOptions stays untouched for now; fold into a PushOptions field when
 // that contract is next revved (readers won't notice).
 const AnnotationFromNode = "cocoonstack.snapshot.from-node"
+
+// pushGate serializes v2 (pipelined) pushes node-wide — each buffers up to its
+// memory budget; v1 spool pushes cost disk, not RAM, and stay concurrent.
+var pushGate = semaphore.NewWeighted(1)
 
 // Pusher streams a local snapshot up into an OCI registry. Non-empty NodeName
 // is stamped onto the manifest for peer discovery.

@@ -19,55 +19,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-type stubResolver map[string]*vm.Snapshot
-
-func (s stubResolver) Snapshot(_ context.Context, name string) (*vm.Snapshot, error) {
-	if snap, ok := s[name]; ok {
-		return snap, nil
-	}
-	return nil, fmt.Errorf("inspect: %w", vm.ErrSnapshotNotFound)
-}
-
-func randomContent(t *testing.T, n int) []byte {
-	t.Helper()
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// newPeerFixture builds a source store with one snapshot dir and serves it.
-func newPeerFixture(t *testing.T, snapshotID string, files map[string][]byte) (*httptest.Server, *PeerRestorer) {
-	t.Helper()
-	storeRoot := t.TempDir()
-	dir := filepath.Join(storeRoot, snapshotID)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o640); err != nil {
-			t.Fatal(err)
-		}
-	}
-	srv := httptest.NewServer((&PeerServer{
-		Snapshots: stubResolver{"vm-a": {Name: "vm-a", ID: snapshotID}},
-		StoreDir:  storeRoot,
-	}).Handler())
-	t.Cleanup(srv.Close)
-	return srv, &PeerRestorer{StagingRoot: t.TempDir()}
-}
-
-func testConfig(snapshotID string) *manifest.SnapshotConfig {
-	return &manifest.SnapshotConfig{
-		SnapshotID: snapshotID,
-		Image:      "ghcr.io/example/base:1",
-		Hypervisor: "cloud-hypervisor",
-		CPU:        2,
-		Memory:     1 << 30,
-	}
-}
-
 func TestPeerRestoreRoundtrip(t *testing.T) {
 	files := map[string][]byte{
 		"memory-ranges": randomContent(t, 3<<20+123),
@@ -168,15 +119,6 @@ func TestPeerRestoreChecksumMismatchFails(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("failed restore must remove its staging dir, found %d", len(entries))
 	}
-}
-
-func buf2buf(w http.ResponseWriter, resp *http.Response) (int64, error) {
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return 0, err
-	}
-	n, err := w.Write(buf.Bytes())
-	return int64(n), err
 }
 
 func TestPeerServerRejectsTraversal(t *testing.T) {
@@ -320,4 +262,62 @@ func TestWriteSkippingZerosPreservesContentAndHoles(t *testing.T) {
 	if got[3*zeroSkipBytes] != 0xBB || got[5*zeroSkipBytes+100] != 0xCC {
 		t.Error("later data chunks mismatch")
 	}
+}
+
+type stubResolver map[string]*vm.Snapshot
+
+func (s stubResolver) Snapshot(_ context.Context, name string) (*vm.Snapshot, error) {
+	if snap, ok := s[name]; ok {
+		return snap, nil
+	}
+	return nil, fmt.Errorf("inspect: %w", vm.ErrSnapshotNotFound)
+}
+
+func randomContent(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// newPeerFixture builds a source store with one snapshot dir and serves it.
+func newPeerFixture(t *testing.T, snapshotID string, files map[string][]byte) (*httptest.Server, *PeerRestorer) {
+	t.Helper()
+	storeRoot := t.TempDir()
+	dir := filepath.Join(storeRoot, snapshotID)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer((&PeerServer{
+		Snapshots: stubResolver{"vm-a": {Name: "vm-a", ID: snapshotID}},
+		StoreDir:  storeRoot,
+	}).Handler())
+	t.Cleanup(srv.Close)
+	return srv, &PeerRestorer{StagingRoot: t.TempDir()}
+}
+
+func testConfig(snapshotID string) *manifest.SnapshotConfig {
+	return &manifest.SnapshotConfig{
+		SnapshotID: snapshotID,
+		Image:      "ghcr.io/example/base:1",
+		Hypervisor: "cloud-hypervisor",
+		CPU:        2,
+		Memory:     1 << 30,
+	}
+}
+
+func buf2buf(w http.ResponseWriter, resp *http.Response) (int64, error) {
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		return 0, err
+	}
+	n, err := w.Write(buf.Bytes())
+	return int64(n), err
 }

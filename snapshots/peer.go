@@ -75,15 +75,17 @@ const (
 	zeroSkipBytes = 1 << 20
 )
 
-// castagnoli is hardware-accelerated (SSE4.2/ARMv8 CRC); sha256 here burned
-// 78-81% of both nodes' transfer CPU (no SHA-NI on the fleet). The checksum
-// only guards transport corruption inside one trust domain — the registry
-// manifest's snapshot ID remains the identity anchor.
-var castagnoli = crc32.MakeTable(crc32.Castagnoli)
+var (
+	// Hardware CRC (SSE4.2/ARMv8); sha256 burned 78-81% of transfer CPU here
+	// (no SHA-NI on the fleet). Guards transport only — the registry
+	// manifest's snapshot ID remains the identity anchor.
+	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
-// Two concurrent peer restores saturate disk and NIC; more just contend.
-// Mirrors pullGate on the registry path.
-var peerRestoreGate = semaphore.NewWeighted(2)
+	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
+	peerRestoreGate = semaphore.NewWeighted(2)
+
+	zeroChunk = make([]byte, zeroSkipBytes)
+)
 
 type peerPlan struct {
 	SnapshotID string     `json:"snapshotId"`
@@ -266,6 +268,17 @@ func splitExtents(extents []extent, max int64) []peerSlice {
 	return slices
 }
 
+// groupSlices splits an ordered slice list into up to n contiguous runs so
+// each fetcher writes one disjoint region of the file sequentially.
+func groupSlices(slices []peerSlice, n int) [][]peerSlice {
+	per := max(1, (len(slices)+n-1)/n)
+	var groups [][]peerSlice
+	for start := 0; start < len(slices); start += per {
+		groups = append(groups, slices[start:min(start+per, len(slices))])
+	}
+	return groups
+}
+
 // RestoredSnapshot is a staged, clone-ready snapshot directory.
 type RestoredSnapshot struct {
 	Dir      string
@@ -285,23 +298,6 @@ type PeerRestorer struct {
 
 	clientOnce    sync.Once
 	defaultClient *http.Client
-}
-
-func (p *PeerRestorer) client() *http.Client {
-	if p.Client != nil {
-		return p.Client
-	}
-	// One shared transport: per-request transports never reuse connections.
-	// Dead peers must fail fast into the registry fallback; body reads are
-	// governed by the caller's context, not a whole-request timeout.
-	p.clientOnce.Do(func() {
-		p.defaultClient = &http.Client{Transport: &http.Transport{
-			DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
-			ResponseHeaderTimeout: 10 * time.Second,
-			MaxIdleConnsPerHost:   defaultPeerConcurrency,
-		}}
-	})
-	return p.defaultClient
 }
 
 // Restore fetches localName's snapshot files from the peer at baseURL. cfg is
@@ -354,6 +350,23 @@ func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name, localName str
 			Hypervisor:  cfg.Hypervisor,
 		},
 	}, cleanup, nil
+}
+
+func (p *PeerRestorer) client() *http.Client {
+	if p.Client != nil {
+		return p.Client
+	}
+	// One shared transport: per-request transports never reuse connections.
+	// Dead peers must fail fast into the registry fallback; body reads are
+	// governed by the caller's context, not a whole-request timeout.
+	p.clientOnce.Do(func() {
+		p.defaultClient = &http.Client{Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+			ResponseHeaderTimeout: 10 * time.Second,
+			MaxIdleConnsPerHost:   defaultPeerConcurrency,
+		}}
+	})
+	return p.defaultClient
 }
 
 func (p *PeerRestorer) fetchPlan(ctx context.Context, baseURL, name string) (*peerPlan, error) {
@@ -427,17 +440,6 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 		})
 	}
 	return eg.Wait()
-}
-
-// groupSlices splits an ordered slice list into up to n contiguous runs so
-// each fetcher writes one disjoint region of the file sequentially.
-func groupSlices(slices []peerSlice, n int) [][]peerSlice {
-	per := max(1, (len(slices)+n-1)/n)
-	var groups [][]peerSlice
-	for start := 0; start < len(slices); start += per {
-		groups = append(groups, slices[start:min(start+per, len(slices))])
-	}
-	return groups
 }
 
 func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID string, f *os.File, sl peerSlice) error {
@@ -521,8 +523,6 @@ func (s *sectionWriter) Flush() error {
 	s.n = 0
 	return nil
 }
-
-var zeroChunk = make([]byte, zeroSkipBytes)
 
 // writeSkippingZeros writes data at off, skipping zeroSkipBytes-granular
 // all-zero chunks: the files are truncate-created, so unwritten regions

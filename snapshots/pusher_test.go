@@ -8,35 +8,6 @@ import (
 	"testing"
 )
 
-// amendRegistry captures the PutManifest an amend performs.
-type amendRegistry struct {
-	manifestRaw []byte
-	putRaw      []byte
-	putTag      string
-}
-
-func (r *amendRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
-	return r.manifestRaw, "", nil
-}
-
-func (r *amendRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(nil)), nil
-}
-func (r *amendRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
-func (r *amendRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error {
-	return nil
-}
-
-func (r *amendRegistry) PutManifest(_ context.Context, _, tag string, data []byte, _ string) error {
-	r.putTag, r.putRaw = tag, data
-	return nil
-}
-
-func (r *amendRegistry) HasManifest(context.Context, string, string) (bool, error) {
-	return true, nil
-}
-func (r *amendRegistry) DeleteManifest(context.Context, string, string) error { return nil }
-
 func TestAmendFromNodePreservesUnknownFields(t *testing.T) {
 	// A manifest with an existing annotation and a field this code does not
 	// model; both must survive the amend byte-for-byte in content.
@@ -69,3 +40,32 @@ func TestAmendFromNodePreservesUnknownFields(t *testing.T) {
 		t.Error("unknown field dropped by the amend round-trip")
 	}
 }
+
+// amendRegistry captures the PutManifest an amend performs.
+type amendRegistry struct {
+	manifestRaw []byte
+	putRaw      []byte
+	putTag      string
+}
+
+func (r *amendRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
+	return r.manifestRaw, "", nil
+}
+
+func (r *amendRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+func (r *amendRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
+func (r *amendRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error {
+	return nil
+}
+
+func (r *amendRegistry) PutManifest(_ context.Context, _, tag string, data []byte, _ string) error {
+	r.putTag, r.putRaw = tag, data
+	return nil
+}
+
+func (r *amendRegistry) HasManifest(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+func (r *amendRegistry) DeleteManifest(context.Context, string, string) error { return nil }
