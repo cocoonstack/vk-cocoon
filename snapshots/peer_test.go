@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ func TestPeerRestoreRoundtrip(t *testing.T) {
 	}
 	srv, r := newPeerFixture(t, "SNAP-1", files)
 
-	res, cleanup, err := r.Restore(t.Context(), srv.URL, "vm-a", "vm-a", testConfig("SNAP-1"))
+	res, cleanup, err := r.Restore(t.Context(), srv.URL, "vm-a", testConfig("SNAP-1"))
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestPeerRestoreLargeFileMultiSlice(t *testing.T) {
 func TestPeerRestoreRejectsIDMismatch(t *testing.T) {
 	srv, r := newPeerFixture(t, "SNAP-OLD", map[string][]byte{"f": []byte("x")})
 
-	_, _, err := r.Restore(t.Context(), srv.URL, "vm-a", "vm-a", testConfig("SNAP-CURRENT"))
+	_, _, err := r.Restore(t.Context(), srv.URL, "vm-a", testConfig("SNAP-CURRENT"))
 	if err == nil || !strings.Contains(err.Error(), "registry says") {
 		t.Fatalf("err = %v, want snapshot ID mismatch", err)
 	}
@@ -103,13 +104,11 @@ func TestPeerRestoreChecksumMismatchFails(t *testing.T) {
 			return
 		}
 		w.WriteHeader(resp.StatusCode)
-		if _, err := buf2buf(w, resp); err != nil {
-			return
-		}
+		io.Copy(w, resp.Body) //nolint:errcheck,gosec
 	}))
 	t.Cleanup(proxy.Close)
 
-	_, _, err := r.Restore(t.Context(), proxy.URL, "vm-a", "vm-a", testConfig("SNAP-1"))
+	_, _, err := r.Restore(t.Context(), proxy.URL, "vm-a", testConfig("SNAP-1"))
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("err = %v, want checksum mismatch", err)
 	}
@@ -187,7 +186,7 @@ func TestPeerRestoreSparseSourceFile(t *testing.T) {
 	t.Cleanup(srv.Close)
 	r := &PeerRestorer{StagingRoot: t.TempDir()}
 
-	res, cleanup, err := r.Restore(t.Context(), srv.URL, "vm-sp", "vm-sp", testConfig("SNAP-SP"))
+	res, cleanup, err := r.Restore(t.Context(), srv.URL, "vm-sp", testConfig("SNAP-SP"))
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -311,11 +310,3 @@ func testConfig(snapshotID string) *manifest.SnapshotConfig {
 	}
 }
 
-func buf2buf(w http.ResponseWriter, resp *http.Response) (int64, error) {
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return 0, err
-	}
-	n, err := w.Write(buf.Bytes())
-	return int64(n), err
-}

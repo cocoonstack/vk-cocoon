@@ -10,11 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type extent struct {
-	offset int64
-	length int64
-}
-
 // scanExtents enumerates data runs via SEEK_DATA/SEEK_HOLE so holes in sparse
 // snapshot files (memory ranges, overlays) never cross the wire. Filesystems
 // without hole support degrade to one dense extent.

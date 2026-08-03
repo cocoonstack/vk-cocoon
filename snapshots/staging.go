@@ -34,14 +34,14 @@ func newStagingDir(root, localName string) (string, error) {
 // SweepStaging removes every entry under root at startup — leftovers are
 // crashed restores, re-pullable by construction.
 func SweepStaging(ctx context.Context, root string) {
+	logger := log.WithFunc("snapshots.SweepStaging")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			log.WithFunc("snapshots.SweepStaging").Errorf(ctx, err, "read staging root %s", root)
+			logger.Errorf(ctx, err, "read staging root %s", root)
 		}
 		return
 	}
-	logger := log.WithFunc("snapshots.SweepStaging")
 	for _, e := range entries {
 		p := filepath.Join(root, e.Name())
 		if err := os.RemoveAll(p); err != nil {

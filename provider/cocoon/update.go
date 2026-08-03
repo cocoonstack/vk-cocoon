@@ -238,7 +238,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	p.dispatchHibernateRestore(pod, spec, v, "update")
-	p.emitNormalf(pod, "Woken", "cloned from %s", src.origin)
+	p.emitNormalf(pod, "Woken", "cloned from %s", src.label())
 	return nil
 }
 
@@ -265,7 +265,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 	}
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, src.origin, err)
+		return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, src.label(), err)
 	}
 	return v, nil
 }
@@ -376,21 +376,28 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 type wakeSource struct {
 	localName string
 	dir       string
-	origin    string // for logs and events
+	origin    string // display label when localName is empty (peer source)
 	snapshot  *vm.Snapshot
 	release   func()
 }
+
+func (s wakeSource) label() string { return cmp.Or(s.localName, s.origin) }
 
 // resolveWakeSource picks the clone source in preference order: the
 // registry-verified local snapshot, a raw-file transfer from the node that
 // pushed the hibernate snapshot, and finally the registry pull.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
+	var (
+		m   *manifest.OCIManifest
+		cfg *manifest.SnapshotConfig
+	)
 	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
-		switch verifyErr := p.verifyLocalSnapshot(ctx, vmName, snapshot); {
+		var verifyErr error
+		switch m, cfg, verifyErr = p.verifyLocalSnapshot(ctx, vmName, snapshot); {
 		case verifyErr == nil:
 			metrics.SnapshotVerifyTotal.WithLabelValues("ok").Inc()
-			return wakeSource{localName: vmName, origin: vmName, snapshot: snapshot, release: func() {}}, nil
+			return wakeSource{localName: vmName, snapshot: snapshot, release: func() {}}, nil
 		case errors.Is(verifyErr, errStaleLocalSnapshot):
 			metrics.SnapshotVerifyTotal.WithLabelValues("stale").Inc()
 			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
@@ -404,7 +411,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	} else if !errors.Is(err, vm.ErrSnapshotNotFound) {
 		return wakeSource{}, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
-	if src, ok := p.tryPeerRestore(ctx, vmName); ok {
+	if src, ok := p.tryPeerRestore(ctx, vmName, m, cfg); ok {
 		return src, nil
 	}
 	if p.Puller == nil {
@@ -424,7 +431,6 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	}
 	return wakeSource{
 		localName: importName,
-		origin:    importName,
 		snapshot:  snapshot,
 		// The import is a one-shot clone source; same-node wakes never get here.
 		release: func() {
@@ -435,29 +441,34 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	}, nil
 }
 
-// tryPeerRestore stages raw files from the manifest's from-node peer.
+// tryPeerRestore stages raw files from the manifest's from-node peer; m and
+// cfg are reused when local-snapshot verification already fetched them.
 // Best-effort: every failure logs, counts, and falls through to the registry pull.
-func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSource, bool) {
+func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
 	if p.PeerRestorer == nil {
 		return wakeSource{}, false
 	}
 	logger := log.WithFunc("Provider.tryPeerRestore")
-	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
-	if err != nil {
-		logger.Warnf(ctx, "peer restore %s: fetch hibernate manifest: %v (falling back)", vmName, err)
-		return wakeSource{}, false
-	}
-	if !ok {
-		return wakeSource{}, false
+	if m == nil {
+		var ok bool
+		var err error
+		if m, ok, err = p.fetchHibernateManifest(ctx, vmName); err != nil {
+			logger.Warnf(ctx, "peer restore %s: fetch hibernate manifest: %v (falling back)", vmName, err)
+			return wakeSource{}, false
+		} else if !ok {
+			return wakeSource{}, false
+		}
 	}
 	peerNode := m.Annotations[snapshots.AnnotationFromNode]
 	if peerNode == "" || peerNode == p.NodeName {
 		return wakeSource{}, false
 	}
-	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
-	if err != nil {
-		logger.Warnf(ctx, "peer restore %s: fetch registry config: %v (falling back)", vmName, err)
-		return wakeSource{}, false
+	if cfg == nil {
+		var err error
+		if cfg, err = commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config); err != nil {
+			logger.Warnf(ctx, "peer restore %s: fetch registry config: %v (falling back)", vmName, err)
+			return wakeSource{}, false
+		}
 	}
 	baseURL, err := p.peerBaseURL(ctx, peerNode)
 	if err != nil {
@@ -465,7 +476,7 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSourc
 		return wakeSource{}, false
 	}
 	start := time.Now()
-	restored, cleanup, err := p.PeerRestorer.Restore(ctx, baseURL, vmName, vmName, cfg)
+	restored, cleanup, err := p.PeerRestorer.Restore(ctx, baseURL, vmName, cfg)
 	if err != nil {
 		metrics.PeerRestoreTotal.WithLabelValues("failed").Inc()
 		logger.Warnf(ctx, "peer restore %s from %s: %v (falling back to registry)", vmName, peerNode, err)
@@ -496,27 +507,28 @@ func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, er
 
 // verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
 // in the hibernate tag's config blob — equality proves the local copy is
-// byte-identical to the registry artifact; a stale one would roll the user back.
-func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) error {
+// byte-identical to the registry artifact; a stale one would roll the user
+// back. The fetched manifest and config are returned for reuse downstream.
+func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) (*manifest.OCIManifest, *manifest.SnapshotConfig, error) {
 	if p.Registry == nil {
 		// Registry-less deployments never push: a local snapshot is current by construction.
-		return nil
+		return nil, nil, nil
 	}
 	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if !ok {
-		return fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
+		return nil, nil, fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
 	}
 	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
 	if err != nil {
-		return fmt.Errorf("fetch snapshot config: %w", err)
+		return m, nil, fmt.Errorf("fetch snapshot config: %w", err)
 	}
 	if cfg.SnapshotID != local.ID {
-		return fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
+		return m, cfg, fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
 	}
-	return nil
+	return m, cfg, nil
 }
 
 // fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;

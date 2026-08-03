@@ -134,7 +134,7 @@ func main() {
 	defer broadcaster.Shutdown()
 	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vk-cocoon", Host: nodeName})
 
-	snapshots.SweepStaging(signalCtx, stagingDir)
+	go snapshots.SweepStaging(signalCtx, stagingDir)
 
 	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,

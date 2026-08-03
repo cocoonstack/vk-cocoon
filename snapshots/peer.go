@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"iter"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -89,6 +91,11 @@ type peerFile struct {
 type peerSlice struct {
 	Offset int64 `json:"offset"`
 	Length int64 `json:"length"`
+}
+
+type extent struct {
+	offset int64
+	length int64
 }
 
 // snapshotResolver is the one Runtime call the serve side needs.
@@ -169,8 +176,8 @@ func (s *PeerServer) buildPlan(snapshotID string) (*peerPlan, error) {
 			return nil, fmt.Errorf("scan %s: %w", e.Name(), err)
 		}
 
-		slices := splitExtents(coalesceExtents(extents, coalesceGapBytes), peerSliceBytes)
-		plan.Files = append(plan.Files, peerFile{Name: e.Name(), Size: size, Slices: slices})
+		fileSlices := splitExtents(coalesceExtents(extents, coalesceGapBytes), peerSliceBytes)
+		plan.Files = append(plan.Files, peerFile{Name: e.Name(), Size: size, Slices: fileSlices})
 	}
 
 	if len(plan.Files) == 0 {
@@ -195,7 +202,7 @@ func (s *PeerServer) handleSlice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if name != filepath.Base(name) || name == "." || name == ".." {
+	if !isPlainName(name) {
 		http.Error(w, "file must be a plain name", http.StatusBadRequest)
 		return
 	}
@@ -223,7 +230,7 @@ func (s *PeerServer) handleSlice(w http.ResponseWriter, r *http.Request) {
 
 // snapshotDir rejects IDs that could escape StoreDir.
 func (s *PeerServer) snapshotDir(id string) (string, error) {
-	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
+	if !isPlainName(id) {
 		return "", fmt.Errorf("invalid snapshot id %q", id)
 	}
 	return filepath.Join(s.StoreDir, id), nil
@@ -244,24 +251,24 @@ func coalesceExtents(extents []extent, maxGap int64) []extent {
 
 // splitExtents caps each transfer slice at max bytes.
 func splitExtents(extents []extent, max int64) []peerSlice {
-	var slices []peerSlice
+	var out []peerSlice
 	for _, e := range extents {
 		for off := e.offset; off < e.offset+e.length; off += max {
-			slices = append(slices, peerSlice{Offset: off, Length: min(max, e.offset+e.length-off)})
+			out = append(out, peerSlice{Offset: off, Length: min(max, e.offset+e.length-off)})
 		}
 	}
-	return slices
+	return out
 }
 
 // groupSlices splits an ordered slice list into up to n contiguous runs so
 // each fetcher writes one disjoint region of the file sequentially.
-func groupSlices(slices []peerSlice, n int) [][]peerSlice {
-	per := max(1, (len(slices)+n-1)/n)
-	var groups [][]peerSlice
-	for start := 0; start < len(slices); start += per {
-		groups = append(groups, slices[start:min(start+per, len(slices))])
-	}
-	return groups
+func groupSlices(sl []peerSlice, n int) iter.Seq[[]peerSlice] {
+	return slices.Chunk(sl, max(1, (len(sl)+n-1)/n))
+}
+
+// isPlainName rejects path components that could escape their directory.
+func isPlainName(s string) bool {
+	return s != "" && s != "." && s != ".." && s == filepath.Base(s)
 }
 
 // RestoredSnapshot is a staged, clone-ready snapshot directory.
@@ -283,10 +290,10 @@ type PeerRestorer struct {
 	defaultClient *http.Client
 }
 
-// Restore fetches localName's snapshot files from the peer at baseURL. cfg is
+// Restore fetches name's snapshot files from the peer at baseURL. cfg is
 // the trust anchor: the peer's plan must present cfg's snapshot ID, and the
 // envelope is synthesized from cfg, never from peer-supplied metadata.
-func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name, localName string, cfg *manifest.SnapshotConfig) (_ *RestoredSnapshot, cleanup func(), err error) {
+func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name string, cfg *manifest.SnapshotConfig) (_ *RestoredSnapshot, cleanup func(), err error) {
 	if acqErr := peerRestoreGate.Acquire(ctx, 1); acqErr != nil {
 		return nil, nil, acqErr
 	}
@@ -300,7 +307,7 @@ func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name, localName str
 		return nil, nil, fmt.Errorf("peer has snapshot %s, registry says %s", plan.SnapshotID, cfg.SnapshotID)
 	}
 
-	dir, err := newStagingDir(p.StagingRoot, localName)
+	dir, err := newStagingDir(p.StagingRoot, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -313,7 +320,7 @@ func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name, localName str
 	if err = p.fetchFiles(ctx, baseURL, plan, dir); err != nil {
 		return nil, nil, err
 	}
-	if err = writeEnvelope(dir, cfg, localName); err != nil {
+	if err = writeEnvelope(dir, cfg, name); err != nil {
 		return nil, nil, err
 	}
 
@@ -326,7 +333,7 @@ func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name, localName str
 		Dir: dir,
 		Snapshot: &vm.Snapshot{
 			ID:          cfg.SnapshotID,
-			Name:        localName,
+			Name:        name,
 			Image:       cfg.Image,
 			ImageDigest: cfg.ImageDigest,
 			Hypervisor:  cfg.Hypervisor,
@@ -351,25 +358,34 @@ func (p *PeerRestorer) client() *http.Client {
 }
 
 func (p *PeerRestorer) fetchPlan(ctx context.Context, baseURL, name string) (*peerPlan, error) {
-	u := baseURL + planPath + "?name=" + url.QueryEscape(name)
+	resp, err := p.doGet(ctx, baseURL+planPath+"?name="+url.QueryEscape(name))
+	if err != nil {
+		return nil, fmt.Errorf("peer plan: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	var plan peerPlan
+	if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
+		return nil, fmt.Errorf("peer plan: decode: %w", err)
+	}
+	return &plan, nil
+}
+
+// doGet returns the response only on status 200; any other outcome is an error.
+func (p *PeerRestorer) doGet(ctx context.Context, u string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := p.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("peer plan: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("peer plan: %s: %s", resp.Status, string(msg))
+		resp.Body.Close() //nolint:errcheck,gosec
+		return nil, fmt.Errorf("%s: %s", resp.Status, string(msg))
 	}
-	var plan peerPlan
-	if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
-		return nil, fmt.Errorf("peer plan: decode: %w", err)
-	}
-	return &plan, nil
+	return resp, nil
 }
 
 func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *peerPlan, dir string) error {
@@ -385,7 +401,7 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 		}
 	}()
 	for _, pf := range plan.Files {
-		if pf.Name != filepath.Base(pf.Name) || pf.Name == "." || pf.Name == ".." {
+		if !isPlainName(pf.Name) {
 			return fmt.Errorf("peer plan names non-plain file %q", pf.Name)
 		}
 		for _, sl := range pf.Slices {
@@ -402,7 +418,7 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 		if err := f.Truncate(pf.Size); err != nil {
 			return fmt.Errorf("truncate %s: %w", pf.Name, err)
 		}
-		for _, group := range groupSlices(pf.Slices, streamsPerFile) {
+		for group := range groupSlices(pf.Slices, streamsPerFile) {
 			tasks = append(tasks, task{file: f, slices: group})
 		}
 	}
@@ -426,19 +442,11 @@ func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID strin
 	name := filepath.Base(f.Name())
 	u := fmt.Sprintf("%s%s?id=%s&file=%s&offset=%d&length=%d",
 		baseURL, slicePath, url.QueryEscape(snapshotID), url.QueryEscape(name), sl.Offset, sl.Length)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := p.client().Do(req)
+	resp, err := p.doGet(ctx, u)
 	if err != nil {
 		return fmt.Errorf("peer slice %s@%d: %w", name, sl.Offset, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("peer slice %s@%d: %s: %s", name, sl.Offset, resp.Status, string(msg))
-	}
 
 	h := crc32.New(castagnoli)
 	sw := newSectionWriter(f, sl.Offset)
