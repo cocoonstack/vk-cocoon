@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -52,6 +53,15 @@ const (
 	defaultMetricsAddr  = ":9091"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
 	defaultRestoreMode  = string(vm.RestoreOnDemand)
+	// defaultStagingDir must share a filesystem with cocoon's data dir; see
+	// snapshots.newStagingDir.
+	defaultStagingDir = "/var/lib/cocoon/vk-staging"
+	// defaultPeerAddr serves raw snapshot files to waking peers; every node
+	// must use the same port (peers dial it by convention).
+	defaultPeerAddr = ":12501"
+	// defaultCocoonSnapshotDir is cocoon's localfile store root the peer
+	// server reads from; see snapshots.PeerServer.
+	defaultCocoonSnapshotDir = "/var/lib/cocoon/snapshot/localfile"
 
 	defaultTLSCert        = "/etc/cocoon/vk/tls/vk-kubelet.crt"
 	defaultTLSKey         = "/etc/cocoon/vk/tls/vk-kubelet.key"
@@ -79,6 +89,13 @@ func main() {
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
 	restoreMode := commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode)
+	stagingDir := commonk8s.EnvOrDefault("VK_STAGING_DIR", defaultStagingDir)
+	peerAddr := commonk8s.EnvOrDefault("VK_PEER_ADDR", defaultPeerAddr)
+	cocoonSnapshotDir := commonk8s.EnvOrDefault("VK_COCOON_SNAPSHOT_DIR", defaultCocoonSnapshotDir)
+	_, peerPort, portErr := net.SplitHostPort(peerAddr)
+	if portErr != nil {
+		logger.Fatalf(ctx, portErr, "parse VK_PEER_ADDR %q", peerAddr)
+	}
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
 	providerID := os.Getenv("VK_PROVIDER_ID")
@@ -120,6 +137,9 @@ func main() {
 	defer broadcaster.Shutdown()
 	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vk-cocoon", Host: nodeName})
 
+	// Crashed restores leave re-pullable partials; clear them before serving.
+	snapshots.SweepStaging(signalCtx, stagingDir)
+
 	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:     nodeName,
 		ociRegistry:  ociRegistry,
@@ -127,6 +147,8 @@ func main() {
 		cocoonBin:    cocoonBin,
 		orphanPolicy: orphanPolicy,
 		restoreMode:  restoreMode,
+		stagingDir:   stagingDir,
+		peerPort:     peerPort,
 		clientset:    clientset,
 		recorder:     recorder,
 	})
@@ -200,6 +222,11 @@ func main() {
 	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	metricsServer := commonhttpx.NewServer(metricsAddr, metricsMux)
 
+	peerServer := commonhttpx.NewServer(peerAddr, (&snapshots.PeerServer{
+		Snapshots: p.Runtime,
+		StoreDir:  cocoonSnapshotDir,
+	}).Handler())
+
 	go func() {
 		logger.Infof(signalCtx, "vk-cocoon node %s kubelet API on :%d", nodeName, kubeletAPIPort())
 		if err := n.Run(signalCtx); err != nil {
@@ -210,9 +237,12 @@ func main() {
 	// NaiveNodeProvider doesn't propagate DaemonEndpoints; patch directly.
 	go patchKubeletEndpoint(signalCtx, clientset, nodeName)
 
-	logger.Infof(signalCtx, "vk-cocoon metrics listening on %s", metricsAddr)
-	if err := commonhttpx.Run(signalCtx, shutdownTimeout, commonhttpx.HTTPServerSpec(metricsServer)); err != nil {
-		logger.Error(signalCtx, err, "metrics server exited with error")
+	logger.Infof(signalCtx, "vk-cocoon metrics listening on %s, peer snapshots on %s", metricsAddr, peerAddr)
+	if err := commonhttpx.Run(signalCtx, shutdownTimeout,
+		commonhttpx.HTTPServerSpec(metricsServer),
+		commonhttpx.HTTPServerSpec(peerServer),
+	); err != nil {
+		logger.Error(signalCtx, err, "http servers exited with error")
 	}
 	p.Close()
 	logger.Info(signalCtx, "vk-cocoon exiting")
@@ -225,6 +255,8 @@ type buildOpts struct {
 	cocoonBin    string
 	orphanPolicy string
 	restoreMode  string
+	stagingDir   string
+	peerPort     string
 	clientset    kubernetes.Interface
 	recorder     record.EventRecorder
 }
@@ -256,7 +288,9 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.Runtime = runtime
 	transfer := snapshots.TransferConfigFromEnv()
 	p.Puller = &snapshots.Puller{Registry: registry, Runtime: runtime, Transfer: transfer}
-	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime, Transfer: transfer}
+	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime, Transfer: transfer, NodeName: opts.nodeName}
+	p.PeerRestorer = &snapshots.PeerRestorer{StagingRoot: opts.stagingDir}
+	p.PeerPort = opts.peerPort
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {

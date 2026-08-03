@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -19,6 +21,7 @@ import (
 	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -217,14 +220,14 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}
-	sourceName, snapshot, err := p.resolveWakeSource(ctx, spec.VMName)
+	src, err := p.resolveWakeSource(ctx, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
 		return err
 	}
 	cloneStart := time.Now()
-	v, err := p.cloneFromHibernate(ctx, spec, sourceName, snapshot)
+	v, err := p.cloneFromHibernate(ctx, spec, src)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
@@ -235,34 +238,36 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 	p.dispatchHibernateRestore(pod, spec, v, "update")
-	p.emitNormalf(pod, "Woken", "cloned from %s", sourceName)
+	p.emitNormalf(pod, "Woken", "cloned from %s", src.origin)
 	return nil
 }
 
 // cloneFromHibernate clones the VM from an already-resolved hibernate snapshot
 // source. CH+Windows hibernate snapshots are captured NIC-less, so the clone
-// hot-adds a fresh NIC that Windows enumerates as new hardware. The local import
-// copy (cross-node pull) is dropped whether the clone succeeds or fails.
-func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, sourceName string, snapshot *vm.Snapshot) (*vm.VM, error) {
-	defer p.cleanupWakeImport(ctx, spec.VMName, sourceName)
-	if err := p.ensureSnapshotBaseImage(ctx, snapshot); err != nil {
+// hot-adds a fresh NIC that Windows enumerates as new hardware. The staged
+// restore dir (when the source is one) is dropped whether the clone succeeds
+// or fails — a clone's working copy never references it afterwards.
+func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src wakeSource) (*vm.VM, error) {
+	defer src.release()
+	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
 		return nil, err
 	}
 	opts := vm.CloneOptions{
-		From:        sourceName,
+		From:        src.localName,
+		FromDir:     src.dir,
 		To:          spec.VMName,
 		Network:     spec.Network,
 		Backend:     spec.Backend,
 		NoDirectIO:  spec.NoDirectIO,
 		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-		Pull:        snapshot != nil && snapshot.Image != "",
+		Pull:        src.snapshot != nil && src.snapshot.Image != "",
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = new(1)
 	}
 	v, err := p.Runtime.Clone(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, sourceName, err)
+		return nil, fmt.Errorf("clone vm %s from %s: %w", spec.VMName, src.origin, err)
 	}
 	return v, nil
 }
@@ -367,16 +372,29 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 	return nil
 }
 
-// resolveWakeSource returns the clone source name and its snapshot metadata —
-// the registry-verified local snapshot when present, else pulled from the
-// registry.
-func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string, *vm.Snapshot, error) {
+// wakeSource is a resolved clone source for a wake: a snapshot addressed by
+// name (verified local, or a registry import), or a directory staged from a
+// peer for `vm clone --from-dir`. release drops whatever the resolution
+// created.
+type wakeSource struct {
+	localName string
+	dir       string
+	origin    string // for logs and events
+	snapshot  *vm.Snapshot
+	release   func()
+}
+
+// resolveWakeSource returns the clone source in preference order: the
+// registry-verified local snapshot, a best-effort raw-file transfer from the
+// node that pushed the hibernate snapshot (the manifest's from-node
+// annotation), and finally the registry pull.
+func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
 	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
 		switch verifyErr := p.verifyLocalSnapshot(ctx, vmName, snapshot); {
 		case verifyErr == nil:
 			metrics.SnapshotVerifyTotal.WithLabelValues("ok").Inc()
-			return vmName, snapshot, nil
+			return wakeSource{localName: vmName, origin: vmName, snapshot: snapshot, release: func() {}}, nil
 		case errors.Is(verifyErr, errStaleLocalSnapshot):
 			metrics.SnapshotVerifyTotal.WithLabelValues("stale").Inc()
 			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
@@ -385,27 +403,99 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (string
 		default:
 			// Registry unreachable: never trust an unverified local copy.
 			metrics.SnapshotVerifyTotal.WithLabelValues("error").Inc()
-			return "", nil, fmt.Errorf("verify local snapshot %s: %w", vmName, verifyErr)
+			return wakeSource{}, fmt.Errorf("verify local snapshot %s: %w", vmName, verifyErr)
 		}
 	} else if !errors.Is(err, vm.ErrSnapshotNotFound) {
-		return "", nil, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
+		return wakeSource{}, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
+	}
+	if src, ok := p.tryPeerRestore(ctx, vmName); ok {
+		return src, nil
 	}
 	if p.Puller == nil {
-		return "", nil, fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
+		return wakeSource{}, fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
 	}
 	importName := vmName + hibernateImportSuffix
 	pullStart := time.Now()
 	if pullErr := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); pullErr != nil {
 		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
-		return "", nil, fmt.Errorf("pull hibernation snapshot %s: %w", vmName, pullErr)
+		return wakeSource{}, fmt.Errorf("pull hibernation snapshot %s: %w", vmName, pullErr)
 	}
 	metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
 	metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
 	snapshot, err = p.Runtime.Snapshot(ctx, importName)
 	if err != nil {
-		return "", nil, fmt.Errorf("inspect imported snapshot %s: %w", importName, err)
+		return wakeSource{}, fmt.Errorf("inspect imported snapshot %s: %w", importName, err)
 	}
-	return importName, snapshot, nil
+	return wakeSource{
+		localName: importName,
+		origin:    importName,
+		snapshot:  snapshot,
+		// The import is a one-shot clone source; same-node wakes never get here.
+		release: func() {
+			p.goBackground(func() {
+				p.removeSnapshotDetached(ctx, "Provider.wakeImportCleanup", importName)
+			})
+		},
+	}, nil
+}
+
+// tryPeerRestore stages the snapshot's raw files from the node that pushed
+// the hibernate snapshot, named by the manifest's from-node annotation.
+// Best-effort by design: every failure logs, counts, and falls through to the
+// registry pull, so the worst case equals today's behavior.
+func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSource, bool) {
+	if p.PeerRestorer == nil {
+		return wakeSource{}, false
+	}
+	logger := log.WithFunc("Provider.tryPeerRestore")
+	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
+	if err != nil || !ok {
+		// No verifiable anchor; let the registry pull surface the real error.
+		return wakeSource{}, false
+	}
+	peerNode := m.Annotations[snapshots.AnnotationFromNode]
+	if peerNode == "" || peerNode == p.NodeName {
+		return wakeSource{}, false
+	}
+	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
+	if err != nil {
+		logger.Warnf(ctx, "peer restore %s: fetch registry config: %v (falling back)", vmName, err)
+		return wakeSource{}, false
+	}
+	baseURL, err := p.peerBaseURL(ctx, peerNode)
+	if err != nil {
+		logger.Warnf(ctx, "peer restore %s: resolve %s: %v (falling back)", vmName, peerNode, err)
+		return wakeSource{}, false
+	}
+	start := time.Now()
+	restored, cleanup, err := p.PeerRestorer.Restore(ctx, baseURL, vmName, vmName, cfg)
+	if err != nil {
+		metrics.PeerRestoreTotal.WithLabelValues("failed").Inc()
+		logger.Warnf(ctx, "peer restore %s from %s: %v (falling back to registry)", vmName, peerNode, err)
+		return wakeSource{}, false
+	}
+	metrics.PeerRestoreDuration.Observe(time.Since(start).Seconds())
+	metrics.PeerRestoreTotal.WithLabelValues("ok").Inc()
+	logger.Infof(ctx, "peer restore %s from %s in %.1fs", vmName, peerNode, time.Since(start).Seconds())
+	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true
+}
+
+// peerBaseURL points at peerNode's vk peer listener; every vk serves on the
+// same port.
+func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, error) {
+	if p.PeerPort == "" {
+		return "", errors.New("peer port not configured")
+	}
+	node, err := p.Clientset.CoreV1().Nodes().Get(ctx, peerNode, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP {
+			return "http://" + net.JoinHostPort(addr.Address, p.PeerPort), nil
+		}
+	}
+	return "", fmt.Errorf("node %s has no InternalIP address", peerNode)
 }
 
 // verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
@@ -449,17 +539,6 @@ func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*
 		return nil, false, fmt.Errorf("parse hibernate manifest: %w", err)
 	}
 	return m, true, nil
-}
-
-// cleanupWakeImport drops the cross-node import; same-node keeps the
-// local snapshot live for the next wake.
-func (p *Provider) cleanupWakeImport(ctx context.Context, vmName, sourceName string) {
-	if sourceName == vmName {
-		return
-	}
-	p.goBackground(func() {
-		p.removeSnapshotDetached(ctx, "Provider.cleanupWakeImport", sourceName)
-	})
 }
 
 // forgetVMOnly clears the VM record but keeps the pod.

@@ -79,16 +79,18 @@ type Provider struct {
 	OrphanPolicy provider.OrphanPolicy
 	RestoreMode  vm.RestoreMode
 
-	Clientset   kubernetes.Interface
-	Runtime     vm.Runtime
-	Puller      *snapshots.Puller
-	Pusher      *snapshots.Pusher
-	Registry    oci.Registry
-	LeaseParser *network.LeaseParser
-	Pinger      network.Pinger
-	GuestSAC    guest.Dialer
-	Probes      *probes.Manager
-	Recorder    record.EventRecorder
+	Clientset    kubernetes.Interface
+	Runtime      vm.Runtime
+	Puller       *snapshots.Puller
+	Pusher       *snapshots.Pusher
+	PeerRestorer *snapshots.PeerRestorer
+	PeerPort     string
+	Registry     oci.Registry
+	LeaseParser  *network.LeaseParser
+	Pinger       network.Pinger
+	GuestSAC     guest.Dialer
+	Probes       *probes.Manager
+	Recorder     record.EventRecorder
 
 	startTime time.Time
 	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close

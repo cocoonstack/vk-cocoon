@@ -191,6 +191,28 @@ var (
 		},
 	)
 
+	PeerRestoreTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "snapshot_peer_restore_total",
+			Help:      "Peer snapshot restores by result; a failure falls back to the registry pull.",
+		},
+		[]string{labelResult}, // ok|failed
+	)
+
+	PeerRestoreDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "snapshot_peer_restore_duration_seconds",
+			Help:      "Time to stage a snapshot's raw files from a peer node.",
+			// Healthy transfers land around 5s on local-ssd pairs; keep
+			// resolution there, with a long tail for degraded links.
+			Buckets: []float64{1, 2.5, 5, 7.5, 10, 15, 30, 60, 120},
+		},
+	)
+
 	ProbeDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
@@ -284,6 +306,8 @@ func Register(reg prometheus.Registerer) {
 		SnapshotSaveDuration,
 		SnapshotPushDuration,
 		SnapshotPullDuration,
+		PeerRestoreTotal,
+		PeerRestoreDuration,
 		ProbeDuration,
 		HibernateTotal,
 		WakeTotal,
