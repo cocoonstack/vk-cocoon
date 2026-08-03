@@ -404,8 +404,6 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 			log.WithFunc("Provider.resolveWakeSource").Warnf(ctx,
 				"local snapshot %s is stale (%s), discarding and pulling", vmName, verifyErr)
 			p.removeLocalSnapshots(ctx, vmName)
-			// Stale with no manifest means verify proved the tag absent; the
-			// peer tier reads the same manifest and cannot succeed.
 			tagAbsent = m == nil
 		default:
 			// Registry unreachable: never trust an unverified local copy.
