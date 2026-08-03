@@ -207,8 +207,7 @@ var (
 			Subsystem: metricSubsystem,
 			Name:      "snapshot_peer_restore_duration_seconds",
 			Help:      "Time to stage a snapshot's raw files from a peer node.",
-			// Healthy transfers land around 5s on local-ssd pairs; keep
-			// resolution there, with a long tail for degraded links.
+			// Healthy local-ssd transfers land ~5s; long tail for degraded links.
 			Buckets: []float64{1, 2.5, 5, 7.5, 10, 15, 30, 60, 120},
 		},
 	)

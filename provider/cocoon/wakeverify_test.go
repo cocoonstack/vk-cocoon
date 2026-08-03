@@ -103,9 +103,8 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	}
 }
 
-// TestWakeStagesFromPeerAndClonesFromDir drives the no-local-snapshot wake:
-// the peer's raw files land in a staging dir, clone receives --from-dir, and
-// the staging dir is gone once the clone returns.
+// The no-local-snapshot wake: peer raw files land in a staging dir, clone
+// receives --from-dir, and the staging dir is gone once the clone returns.
 func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
 
@@ -138,8 +137,7 @@ func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	}
 }
 
-// TestWakePeerMismatchFallsBackToPull proves the peer path is best-effort:
-// a peer holding a different snapshot than the registry tag is rejected, and
+// A peer holding a different snapshot than the registry tag is rejected and
 // resolution falls through to the registry pull (surfaced here by nil Puller).
 func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
@@ -155,8 +153,7 @@ func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	}
 }
 
-// TestWakePeerUnreachableFallsBackToPull proves a dead peer never fails the
-// wake outright.
+// A dead peer never fails the wake outright.
 func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.PeerPort = "1" // nothing listens there
@@ -167,11 +164,9 @@ func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	}
 }
 
-// TestWakePeerSelfNodeSkipsPeerPath: a from-node stamp naming this very node
-// means tier-1 already missed (the local copy is gone or stale); fetching
-// from ourselves would "succeed" and mask that, so it must be skipped. The
-// fixture's peer server is live and holds the snapshot — without the skip,
-// resolution would return it instead of falling through.
+// A from-node stamp naming this very node means the local tier already
+// missed; fetching from ourselves would mask that, so it must be skipped
+// (the fixture's live peer server would otherwise serve the snapshot).
 func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.NodeName = "node-src" // the annotation now names this node itself

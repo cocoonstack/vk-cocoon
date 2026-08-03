@@ -17,11 +17,9 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// AnnotationFromNode records which node pushed a hibernate snapshot; the wake
-// path reads it to fetch the raw files from that node instead of the
-// registry. Written by amending the manifest post-push so cocoon-common's
-// PushOptions stays untouched for now; fold into a PushOptions field when
-// that contract is next revved (readers won't notice).
+// AnnotationFromNode names the node that pushed a hibernate snapshot, so a
+// wake elsewhere can fetch the raw files from it. Stamped via a post-push
+// manifest amend to leave cocoon-common's PushOptions untouched.
 const AnnotationFromNode = "cocoonstack.snapshot.from-node"
 
 // pushGate serializes v2 (pipelined) pushes node-wide — each buffers up to its
@@ -67,8 +65,7 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 		return nil, fmt.Errorf("push snapshot %s:%s: %w", repo, tag, err)
 	}
 	if p.NodeName != "" {
-		// Best-effort: without the stamp, wakes elsewhere just pull from the
-		// registry instead of this node.
+		// Best-effort: an unstamped push just wakes via the registry pull.
 		if amendErr := p.amendFromNode(ctx, repo, tag); amendErr != nil {
 			log.WithFunc("Pusher.PushSnapshot").Warnf(ctx, "stamp from-node on %s:%s: %v", repo, tag, amendErr)
 		}
@@ -76,9 +73,8 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 	return res, nil
 }
 
-// amendFromNode re-puts the just-pushed manifest with the from-node
-// annotation. The manifest is edited as a raw map so no field this code
-// doesn't know about can be dropped.
+// amendFromNode re-puts the manifest with the from-node annotation, edited as
+// a raw map so unknown fields survive.
 func (p *Pusher) amendFromNode(ctx context.Context, repo, tag string) error {
 	raw, mediaType, err := p.Registry.GetManifest(ctx, repo, tag)
 	if err != nil {

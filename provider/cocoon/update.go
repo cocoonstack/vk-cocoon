@@ -242,11 +242,9 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// cloneFromHibernate clones the VM from an already-resolved hibernate snapshot
-// source. CH+Windows hibernate snapshots are captured NIC-less, so the clone
-// hot-adds a fresh NIC that Windows enumerates as new hardware. The staged
-// restore dir (when the source is one) is dropped whether the clone succeeds
-// or fails — a clone's working copy never references it afterwards.
+// cloneFromHibernate clones the VM from a resolved wake source. CH+Windows
+// hibernate snapshots are captured NIC-less, so the clone hot-adds a fresh
+// NIC that Windows enumerates as new hardware; src is released either way.
 func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src wakeSource) (*vm.VM, error) {
 	defer src.release()
 	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
@@ -372,10 +370,9 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 	return nil
 }
 
-// wakeSource is a resolved clone source for a wake: a snapshot addressed by
-// name (verified local, or a registry import), or a directory staged from a
-// peer for `vm clone --from-dir`. release drops whatever the resolution
-// created.
+// wakeSource is a resolved wake clone source: a snapshot addressed by name,
+// or a peer-staged dir for `vm clone --from-dir`. release drops whatever the
+// resolution created.
 type wakeSource struct {
 	localName string
 	dir       string
@@ -384,10 +381,9 @@ type wakeSource struct {
 	release   func()
 }
 
-// resolveWakeSource returns the clone source in preference order: the
-// registry-verified local snapshot, a best-effort raw-file transfer from the
-// node that pushed the hibernate snapshot (the manifest's from-node
-// annotation), and finally the registry pull.
+// resolveWakeSource picks the clone source in preference order: the
+// registry-verified local snapshot, a raw-file transfer from the node that
+// pushed the hibernate snapshot, and finally the registry pull.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
 	snapshot, err := p.Runtime.Snapshot(ctx, vmName)
 	if err == nil {
@@ -439,10 +435,8 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	}, nil
 }
 
-// tryPeerRestore stages the snapshot's raw files from the node that pushed
-// the hibernate snapshot, named by the manifest's from-node annotation.
-// Best-effort by design: every failure logs, counts, and falls through to the
-// registry pull, so the worst case equals today's behavior.
+// tryPeerRestore stages raw files from the manifest's from-node peer.
+// Best-effort: every failure logs, counts, and falls through to the registry pull.
 func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSource, bool) {
 	if p.PeerRestorer == nil {
 		return wakeSource{}, false
@@ -450,13 +444,10 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSourc
 	logger := log.WithFunc("Provider.tryPeerRestore")
 	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
 	if err != nil {
-		// A transient registry error here silently downgrades the wake to the
-		// pull path — without this line that's undiagnosable after the fact.
 		logger.Warnf(ctx, "peer restore %s: fetch hibernate manifest: %v (falling back)", vmName, err)
 		return wakeSource{}, false
 	}
 	if !ok {
-		// No hibernate tag: nothing to anchor a peer plan against.
 		return wakeSource{}, false
 	}
 	peerNode := m.Annotations[snapshots.AnnotationFromNode]
@@ -486,8 +477,7 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string) (wakeSourc
 	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true
 }
 
-// peerBaseURL points at peerNode's vk peer listener; every vk serves on the
-// same port.
+// peerBaseURL resolves peerNode's InternalIP; every vk serves peers on the same port.
 func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, error) {
 	if p.PeerPort == "" {
 		return "", errors.New("peer port not configured")

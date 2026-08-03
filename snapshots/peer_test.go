@@ -52,9 +52,7 @@ func TestPeerRestoreRoundtrip(t *testing.T) {
 }
 
 func TestPeerRestoreLargeFileMultiSlice(t *testing.T) {
-	// Force multiple slices without moving peerSliceBytes: serve a plan whose
-	// slices are hand-split, via a real server (extents already ≤ cap) — here
-	// we just assert splitExtents produces the pieces fetchFiles consumes.
+	// splitExtents must produce the pieces fetchFiles consumes.
 	got := splitExtents([]extent{{offset: 0, length: 10 << 20}}, 4<<20)
 	want := []peerSlice{{0, 4 << 20}, {4 << 20, 4 << 20}, {8 << 20, 2 << 20}}
 	if len(got) != len(want) {

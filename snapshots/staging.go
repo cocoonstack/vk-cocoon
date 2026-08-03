@@ -14,10 +14,9 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 )
 
-// newStagingDir creates a fresh dir under root for one restore. root MUST
-// live on the same filesystem as cocoon's data dir: clone hardlinks memory
-// files, and the cross-device fallback is a symlink that deleting the staging
-// dir would break.
+// newStagingDir creates a fresh dir under root. root MUST share a filesystem
+// with cocoon's data dir: clone hardlinks memory files, and the cross-device
+// fallback is a symlink the staging delete would break.
 func newStagingDir(root, localName string) (string, error) {
 	if root == "" {
 		return "", errors.New("staging root is not configured")
@@ -32,9 +31,8 @@ func newStagingDir(root, localName string) (string, error) {
 	return dir, nil
 }
 
-// SweepStaging removes every entry under root — leftovers are crashed
-// restores, and staged data is re-pullable by construction. Call once at
-// startup, before the provider serves.
+// SweepStaging removes every entry under root at startup — leftovers are
+// crashed restores, re-pullable by construction.
 func SweepStaging(ctx context.Context, root string) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -89,9 +87,8 @@ type snapshotEnvelopeConfig struct {
 	NICs         int                 `json:"nics,omitempty"`
 }
 
-// writeEnvelope synthesizes snapshot.json from the registry config blob — the
-// registry stays the trust anchor for snapshot identity even when the bytes
-// came from a peer.
+// writeEnvelope synthesizes snapshot.json from the registry config blob, so
+// the registry stays the identity anchor for peer-fetched bytes.
 func writeEnvelope(dir string, cfg *manifest.SnapshotConfig, localName string) error {
 	envelope := snapshotEnvelope{
 		Version: 1,

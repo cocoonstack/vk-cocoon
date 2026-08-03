@@ -53,14 +53,11 @@ const (
 	defaultMetricsAddr  = ":9091"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
 	defaultRestoreMode  = string(vm.RestoreOnDemand)
-	// defaultStagingDir must share a filesystem with cocoon's data dir; see
-	// snapshots.newStagingDir.
+	// defaultStagingDir must share a filesystem with cocoon's data dir (clone hardlinks).
 	defaultStagingDir = "/var/lib/cocoon/vk-staging"
-	// defaultPeerAddr serves raw snapshot files to waking peers; every node
-	// must use the same port (peers dial it by convention).
+	// defaultPeerAddr serves snapshots to waking peers; they dial this port by convention.
 	defaultPeerAddr = ":12501"
-	// defaultCocoonSnapshotDir is cocoon's localfile store root the peer
-	// server reads from; see snapshots.PeerServer.
+	// defaultCocoonSnapshotDir is cocoon's localfile store root the peer server reads.
 	defaultCocoonSnapshotDir = "/var/lib/cocoon/snapshot/localfile"
 
 	defaultTLSCert        = "/etc/cocoon/vk/tls/vk-kubelet.crt"
@@ -137,7 +134,6 @@ func main() {
 	defer broadcaster.Shutdown()
 	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vk-cocoon", Host: nodeName})
 
-	// Crashed restores leave re-pullable partials; clear them before serving.
 	snapshots.SweepStaging(signalCtx, stagingDir)
 
 	p, err := buildProvider(signalCtx, buildOpts{
