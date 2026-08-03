@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -210,48 +209,24 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	}
 }
 
-func TestCleanupWakeImportSkipsLocalHit(t *testing.T) {
-	rt := &fakeRuntime{}
-	p := newTestProvider(t)
-	p.Runtime = rt
-
-	p.cleanupWakeImport(t.Context(), "vk-ns-demo-0", "vk-ns-demo-0")
-	p.Close() // drain bg goroutines (none expected)
-
-	if len(rt.snapshotRemoveCalls) != 0 {
-		t.Errorf("same-node wake must keep the local snapshot; got removes %v", rt.snapshotRemoveCalls)
-	}
-}
-
-func TestCleanupWakeImportDropsCrossNodeImport(t *testing.T) {
-	rt := &fakeRuntime{}
-	p := newTestProvider(t)
-	p.Runtime = rt
-
-	importName := "vk-ns-demo-0" + hibernateImportSuffix
-	p.cleanupWakeImport(t.Context(), "vk-ns-demo-0", importName)
-	p.Close() // drain bg goroutines
-
-	want := []string{importName}
-	if !reflect.DeepEqual(rt.snapshotRemoveCalls, want) {
-		t.Errorf("snapshot removes = %v, want %v", rt.snapshotRemoveCalls, want)
-	}
-}
-
 func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{"vk-ns-demo-0": {Name: "vk-ns-demo-0"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	got, snapshot, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
-	if got != "vk-ns-demo-0" {
-		t.Errorf("source = %q, want vk-ns-demo-0 (local snapshot)", got)
+	if src.localName != "vk-ns-demo-0" || src.dir != "" {
+		t.Errorf("source = %+v, want local snapshot vk-ns-demo-0", src)
 	}
-	if snapshot == nil || snapshot.Name != "vk-ns-demo-0" {
-		t.Errorf("snapshot metadata = %+v, want the local snapshot", snapshot)
+	if src.snapshot == nil || src.snapshot.Name != "vk-ns-demo-0" {
+		t.Errorf("snapshot metadata = %+v, want the local snapshot", src.snapshot)
+	}
+	src.release() // tier-1 release is a no-op; must not panic or remove anything
+	if len(rt.snapshotRemoveCalls) != 0 {
+		t.Errorf("local hit must keep the local snapshot; got removes %v", rt.snapshotRemoveCalls)
 	}
 }
 
@@ -260,7 +235,7 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	if _, _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
+	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
 }
