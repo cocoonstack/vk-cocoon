@@ -1660,6 +1660,50 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	}
 }
 
+// Same invariant markReadyAfterIP holds on the wake path: the status must be
+// readable on the apiserver before lifecycle-state=ready is patched.
+func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	client := fake.NewSimpleClientset(pod)
+	p.Clientset = client
+	p.trackPod(pod, &vm.VM{ID: "vmid-adopt", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
+
+	var mu sync.Mutex
+	var seq []string
+	client.PrependReactor("*", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if a, ok := action.(k8stesting.PatchActionImpl); ok {
+			switch {
+			case a.GetSubresource() == "status" && strings.Contains(string(a.GetPatch()), `"podIP":"192.0.2.10"`):
+				seq = append(seq, "status")
+			case a.GetSubresource() == "" && strings.Contains(string(a.GetPatch()), string(meta.LifecycleStateReady)):
+				seq = append(seq, "ready")
+			}
+		}
+		return false, nil, nil
+	})
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	publishedAt := slices.Index(seq, "status")
+	readyAt := slices.Index(seq, "ready")
+	if publishedAt < 0 {
+		t.Fatalf("status was never published to the apiserver, writes = %v", seq)
+	}
+	if readyAt < 0 {
+		t.Fatalf("ready was never patched, writes = %v", seq)
+	}
+	if publishedAt > readyAt {
+		t.Errorf("ready patched before the status reached the apiserver, writes = %v", seq)
+	}
+}
+
 type fakeInspectStep struct {
 	vm  *vm.VM
 	err error

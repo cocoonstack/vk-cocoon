@@ -46,9 +46,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
 		p.startProbeIfEnabled(pod)
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+		p.markReadyPublished(ctx, pod)
 		metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "adopted").Inc()
 		return nil
 	}
@@ -94,8 +92,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		p.goBackground(func() {
 			ran, ok := p.runWindowsSAC(p.lifecycleCtx, pod, v, "create")
 			// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
-			if ok && ran && !cloned && !p.lifecycleAlreadyFailed(pod) {
-				p.markLifecycleState(p.lifecycleCtx, pod, meta.LifecycleStateReady, "")
+			if ok && ran && !p.lifecycleAlreadyFailed(pod) {
+				p.markReadyPublished(p.lifecycleCtx, pod)
 			}
 		})
 	}
@@ -114,12 +112,13 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	now := metav1.Now()
 	pod.Status.StartTime = &now
 	p.mu.Unlock()
-	p.refreshStatus(ctx, pod)
-	p.notify(pod)
 	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP;
 	// restore defers to dispatchHibernateRestore.
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
-		p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+		p.markReadyPublished(ctx, pod)
+	} else {
+		p.refreshStatus(ctx, pod)
+		p.notify(pod)
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
