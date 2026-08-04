@@ -7,46 +7,24 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-
-	"github.com/cocoonstack/vk-cocoon/probes"
 )
 
-// newRevertFixture is newDropNICWakeFixture plus a fake apiserver holding the
-// pod, with the lease already resolvable so waitForFreshIP returns on its first
-// poll — the production shape when the guest DHCPs right after bring-up.
-func newRevertFixture(t *testing.T) (*Provider, *corev1.Pod, *fake.Clientset) {
-	t.Helper()
-	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
-	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
-	client := fake.NewSimpleClientset(&corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "demo-0"},
-	})
-	p.Clientset = client
-	p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
-	t.Cleanup(func() { _ = v })
-	return p, pod, client
-}
-
-// virtual-kubelet v1.12.0 PodController, the two lines that matter:
-//
-//	node/pod.go:336  kpod.lastPodStatusReceivedFromProvider = pod   // stores OUR pointer, no copy
-//	node/pod.go:222  podFromProvider := kPod.lastPodStatus...DeepCopy()  // copies at DRAIN time
-//	node/pod.go:251  podFromProvider.ResourceVersion = "0"; UpdateStatus(...)  // blind overwrite
-//
-// The drain running before markLifecycleStateForWake's status.Apply(pod) is a
-// legal interleaving, and the one production hit at 11:40:05 took.
+// virtual-kubelet's PodController stores the handed pointer (node/pod.go:336),
+// DeepCopies it only at drain time (:222), and blind-writes the copy with
+// ResourceVersion="0" (:251) — a drain between the ready patch and
+// status.Apply would push pre-patch annotations and revert ready to creating.
 func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
-	p, pod, client := newRevertFixture(t)
+	p, pod, v, client := newWakeClientsetFixture(t)
+	p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 
 	var drained *corev1.Pod
 	p.notifyHook = func(handed *corev1.Pod) {
 		drained = handed.DeepCopy()
 	}
 
-	p.markReadyAfterIP(t.Context(), pod, p.vmForPod("ns", "demo-0"), true)
+	p.markReadyAfterIP(t.Context(), pod, v, true)
 
 	if drained == nil {
 		t.Fatal("notify was never called; the framework push is not being modelled")
@@ -68,28 +46,22 @@ func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
 	}
 }
 
-// The framework's own contract, node/pod.go:268-269:
-//
-//	// The pod must be DeepCopy'd prior to enqueuePodStatusUpdate.
-//
-// p.notify hands over the live pointer, and the worker DeepCopies it from
-// another goroutine while markLifecycleStateForWake writes the same object
-// under p.mu — a lock the framework never takes. Run under -race.
+// vk's contract (node/pod.go:268): the pod must be DeepCopy'd before enqueue —
+// the worker copies it from another goroutine. Run under -race.
 func TestWakeNotifyDoesNotShareMutablePod(t *testing.T) {
-	p, pod, _ := newRevertFixture(t)
+	p, pod, v, _ := newWakeClientsetFixture(t)
+	p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
 
 	var wg sync.WaitGroup
 	p.notifyHook = func(handed *corev1.Pod) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 200 {
 				_ = handed.DeepCopy()
 				time.Sleep(time.Microsecond)
 			}
-		}()
+		})
 	}
 
-	p.markReadyAfterIP(t.Context(), pod, p.vmForPod("ns", "demo-0"), true)
+	p.markReadyAfterIP(t.Context(), pod, v, true)
 	wg.Wait()
 }

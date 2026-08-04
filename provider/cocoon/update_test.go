@@ -11,7 +11,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -274,32 +273,20 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 }
 
 // vm-service reads pod.status.podIP the moment it sees lifecycle-state=ready,
-// so the podIP must reach the apiserver first. refreshStatus alone only mutates
-// the in-memory pod and NotifyPods just queues the push, while the annotation
-// patch goes direct — the queue losing that race made wakes SSH to the address
-// the VM held before the hibernate.
+// so the podIP must reach the apiserver before the ready patch.
 func TestFinalizeDropNICWakePublishesIPBeforeReady(t *testing.T) {
-	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
-	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
-	client := fake.NewSimpleClientset(&corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "demo-0"},
-	})
-	p.Clientset = client
+	p, pod, v, client := newWakeClientsetFixture(t)
 
 	var mu sync.Mutex
 	var seq []string
 	client.PrependReactor("*", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		switch a := action.(type) {
-		case k8stesting.UpdateActionImpl:
-			if a.GetSubresource() == "status" {
-				if updated, ok := a.GetObject().(*corev1.Pod); ok {
-					seq = append(seq, "status ip="+updated.Status.PodIP)
-				}
-			}
-		case k8stesting.PatchActionImpl:
-			if strings.Contains(string(a.GetPatch()), string(meta.LifecycleStateReady)) {
+		if a, ok := action.(k8stesting.PatchActionImpl); ok {
+			switch {
+			case a.GetSubresource() == "status" && strings.Contains(string(a.GetPatch()), `"podIP":"172.20.1.228"`):
+				seq = append(seq, "status ip=172.20.1.228")
+			case a.GetSubresource() == "" && strings.Contains(string(a.GetPatch()), string(meta.LifecycleStateReady)):
 				seq = append(seq, "ready")
 			}
 		}
@@ -711,6 +698,15 @@ func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provi
 	p.trackPod(pod, v)
 	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
 	return p, pod, v
+}
+
+func newWakeClientsetFixture(t *testing.T) (*Provider, *corev1.Pod, *vm.VM, *fake.Clientset) {
+	t.Helper()
+	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
+	client := fake.NewSimpleClientset(pod)
+	p.Clientset = client
+	return p, pod, v, client
 }
 
 func execArgvs(rt *fakeRuntime) []string {

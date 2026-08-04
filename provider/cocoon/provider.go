@@ -257,12 +257,15 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 	})
 }
 
+// notify hands the framework a copy taken under p.mu: vk stores the pointer
+// and DeepCopies it only at drain time, racing the locked writes to tracked pods.
 func (p *Provider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
 	hook := p.notifyHook
+	handoff := pod.DeepCopy()
 	p.mu.RUnlock()
 	if hook != nil {
-		hook(pod)
+		hook(handoff)
 	}
 }
 
