@@ -34,6 +34,15 @@ func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, stat
 	}
 }
 
+// markReadyPublished flips lifecycle-state=ready with the pod status already
+// readable on the apiserver: publish precedes the direct patch, notify follows.
+func (p *Provider) markReadyPublished(ctx context.Context, pod *corev1.Pod) {
+	p.refreshStatus(ctx, pod)
+	p.publishPodStatus(ctx, pod)
+	p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	p.notify(pod)
+}
+
 // applyLifecycleLocked requires p.mu held; the caller flushes the returned status outside the lock when applied.
 func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
 	key := meta.PodKey(pod.Namespace, pod.Name)

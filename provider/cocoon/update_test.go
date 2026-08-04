@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -265,6 +269,57 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	// Ready bump must coincide with the fresh IP on pod.Status — the original bug.
 	if got := pod.Status.PodIP; got != "172.20.1.228" {
 		t.Fatalf("pod.Status.PodIP = %q, want 172.20.1.228 (must be published before Ready)", got)
+	}
+}
+
+// vm-service reads pod.status.podIP the moment it sees lifecycle-state=ready,
+// so the podIP must reach the apiserver before the ready patch.
+func TestFinalizeDropNICWakePublishesIPBeforeReady(t *testing.T) {
+	p, pod, v, client := newWakeClientsetFixture(t)
+
+	var mu sync.Mutex
+	var seq []string
+	client.PrependReactor("*", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if a, ok := action.(k8stesting.PatchActionImpl); ok {
+			switch {
+			case a.GetSubresource() == "status" && strings.Contains(string(a.GetPatch()), `"podIP":"172.20.1.228"`):
+				seq = append(seq, "status ip=172.20.1.228")
+			case a.GetSubresource() == "" && strings.Contains(string(a.GetPatch()), string(meta.LifecycleStateReady)):
+				seq = append(seq, "ready")
+			}
+		}
+		return false, nil, nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		p.markReadyAfterIP(t.Context(), pod, v, true)
+		close(done)
+	}()
+	time.AfterFunc(10*time.Millisecond, func() {
+		p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("markReadyAfterIP did not return within budget")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	publishedAt := slices.Index(seq, "status ip=172.20.1.228")
+	readyAt := slices.Index(seq, "ready")
+	if publishedAt < 0 {
+		t.Fatalf("podIP was never published to the apiserver, writes = %v", seq)
+	}
+	if readyAt < 0 {
+		t.Fatalf("ready was never patched, writes = %v", seq)
+	}
+	if publishedAt > readyAt {
+		t.Errorf("ready patched before the podIP reached the apiserver, writes = %v", seq)
 	}
 }
 
@@ -643,6 +698,15 @@ func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provi
 	p.trackPod(pod, v)
 	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
 	return p, pod, v
+}
+
+func newWakeClientsetFixture(t *testing.T) (*Provider, *corev1.Pod, *vm.VM, *fake.Clientset) {
+	t.Helper()
+	p, pod, v := newDropNICWakeFixture(t, 2*time.Second, 1*time.Millisecond)
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
+	client := fake.NewSimpleClientset(pod)
+	p.Clientset = client
+	return p, pod, v, client
 }
 
 func execArgvs(rt *fakeRuntime) []string {

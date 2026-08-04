@@ -2,10 +2,14 @@ package cocoon
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -49,6 +53,35 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 		},
 	}
 	return status, nil
+}
+
+// publishPodStatus writes the tracked pod.Status straight to the apiserver;
+// NotifyPods only queues, so a caller's next direct patch could land first.
+func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
+	if p.Clientset == nil {
+		return
+	}
+	logger := log.WithFunc("Provider.publishPodStatus")
+	p.mu.RLock()
+	patch, err := json.Marshal(map[string]any{"status": pod.Status})
+	p.mu.RUnlock()
+	if err != nil {
+		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
+		return
+	}
+	var lastErr error
+	for range lifecyclePatchAttempts {
+		_, lastErr = p.Clientset.CoreV1().Pods(pod.Namespace).Patch(
+			ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
+		if lastErr == nil {
+			return
+		}
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
+			return
+		}
+	}
+	logger.Errorf(ctx, lastErr,
+		"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
 }
 
 func podStatusMatches(current, expected corev1.PodStatus) bool {
