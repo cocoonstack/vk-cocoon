@@ -142,13 +142,20 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 		// direct while notify only queues the status, so leaving the podIP to
 		// the queue lets ready land first and vm-service read an empty IP.
 		p.publishPodStatus(ctx, pod)
-		p.notify(pod)
 		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
 			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
 			if wake {
 				metrics.WakeTotal.WithLabelValues("ok").Inc()
 			}
 		}
+		// After the patch, and on a copy taken under p.mu: virtual-kubelet keeps
+		// this pointer and DeepCopies it at drain time (node/pod.go:336, :222),
+		// then blind writes it with ResourceVersion="0". Handing over the live
+		// pod before the patch lets that push revert ready back to creating.
+		p.mu.RLock()
+		handoff := pod.DeepCopy()
+		p.mu.RUnlock()
+		p.notify(handoff)
 		return
 	}
 	kind, event := "clone", "PostCloneIPWaitTimeout"
