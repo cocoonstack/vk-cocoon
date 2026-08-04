@@ -3,9 +3,11 @@ package cocoon
 import (
 	"context"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -49,6 +51,34 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 		},
 	}
 	return status, nil
+}
+
+// publishPodStatus writes the tracked pod.Status straight to the apiserver.
+// NotifyPods only queues the push, so callers that must have a field readable
+// before their next annotation patch (which goes direct) cannot rely on it.
+func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
+	if p.Clientset == nil {
+		return
+	}
+	var lastErr error
+	for range lifecyclePatchAttempts {
+		current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err == nil {
+			p.mu.RLock()
+			current.Status = *pod.Status.DeepCopy()
+			p.mu.RUnlock()
+			_, err = p.Clientset.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, current, metav1.UpdateOptions{})
+		}
+		if err == nil {
+			return
+		}
+		lastErr = err
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
+			return
+		}
+	}
+	log.WithFunc("Provider.publishPodStatus").Errorf(ctx, lastErr,
+		"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
 }
 
 func podStatusMatches(current, expected corev1.PodStatus) bool {

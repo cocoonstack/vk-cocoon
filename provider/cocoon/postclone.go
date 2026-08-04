@@ -138,6 +138,10 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 	}
 	if gotIP {
 		p.refreshStatus(ctx, pod)
+		// Ahead of ready, and synchronously: the annotation patch below goes
+		// direct while notify only queues the status, so leaving the podIP to
+		// the queue lets ready land first and vm-service read an empty IP.
+		p.publishPodStatus(ctx, pod)
 		p.notify(pod)
 		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
 			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
