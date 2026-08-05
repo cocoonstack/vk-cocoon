@@ -126,7 +126,7 @@ func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	}
 
 	spec := meta.VMSpec{VMName: "vk-ns-demo-0", Network: "cocoon-dhcp"}
-	if _, cloneErr := p.cloneFromHibernate(t.Context(), spec, src); cloneErr != nil {
+	if _, cloneErr := p.cloneFromHibernate(t.Context(), spec, src, vm.CPUPolicy{}); cloneErr != nil {
 		t.Fatalf("cloneFromHibernate: %v", cloneErr)
 	}
 	if rt.cloned == nil || rt.cloned.FromDir != src.dir || rt.cloned.From != "" {

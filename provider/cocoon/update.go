@@ -227,7 +227,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	cloneStart := time.Now()
-	v, err := p.cloneFromHibernate(ctx, spec, src)
+	v, err := p.cloneFromHibernate(ctx, spec, src, podCPUPolicy(pod))
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
@@ -245,7 +245,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 // cloneFromHibernate clones the VM from a resolved wake source. CH+Windows
 // hibernate snapshots are captured NIC-less, so the clone hot-adds a fresh
 // NIC that Windows enumerates as new hardware; src is released either way.
-func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src wakeSource) (*vm.VM, error) {
+func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src wakeSource, policy vm.CPUPolicy) (*vm.VM, error) {
 	defer src.release()
 	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
 		return nil, err
@@ -259,6 +259,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 		NoDirectIO:  spec.NoDirectIO,
 		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
 		Pull:        src.snapshot != nil && src.snapshot.Image != "",
+		CPUPolicy:   policy,
 	}
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = new(1)

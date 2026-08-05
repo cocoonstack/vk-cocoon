@@ -56,6 +56,7 @@ Full steps in [Installation](docs/installation.md).
 - [Runtime reconciliation](docs/reconcile.md) — startup reconcile, VM events
 - [Post-clone network hints](docs/post-clone.md) — manual guest fixups
 - [Node resources](docs/node-resources.md) — host-probed Capacity/Allocatable
+- [CPU QoS](docs/cpu-qos.md) — pod requests/limits onto per-VM cgroup policy
 - [Metrics & monitoring](docs/metrics.md) — the three metrics surfaces
 - [Configuration](docs/configuration.md) — every environment variable
 - [Installation](docs/installation.md) — systemd unit and building from source

@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -184,4 +185,9 @@ func (p *Provider) recordLifecycleFlushed(key, snap string) {
 		return
 	}
 	p.lifecycleFlushed[key] = snap
+}
+
+func splitPodKey(key string) (string, string) {
+	ns, name, _ := strings.Cut(key, "/")
+	return ns, name
 }

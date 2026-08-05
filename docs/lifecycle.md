@@ -57,9 +57,16 @@ and the hibernate transition.
      constructs a digest reference (`repo@sha256:xxx`) from the snapshot
      metadata and pulls the exact image version recorded at snapshot
      time. Then `Runtime.Clone(from=<local>, to=spec.VMName)`. Pod-side
-     CPU/memory/storage are not plumbed into clone — cocoon clone
-     inherits all guest resources from the snapshot. Only the `vm run`
-     path translates pod resources into VM resources.
+     guest topology (vCPU count/memory/storage) is not plumbed into
+     clone — cocoon clone inherits it from the snapshot. Host-side
+     cgroup CPU policy is: cocoon never inherits cgroup knobs from a
+     snapshot, so every clone path passes `--cpu-weight` (from the
+     pod's requests via kubelet's cgroup v2 conversion, minimum 1 for
+     BestEffort) and, only when the pod has a CPU limit,
+     `--cpu-quota-us` with `--cpu-period-us`; without a limit cocoon's
+     Guaranteed-at-N quota applies. Only the `vm run` path additionally
+     translates pod resources into guest resources: vCPU count rounds
+     the CPU limit up (requests when no limit is set).
    - **Mode `run`** (`Managed=true`): `ensureRunImage` makes the image
      available locally before launching the VM. It peeks the OCI
      manifest via `Puller.Registry`: cocoonstack cloud-image artifacts

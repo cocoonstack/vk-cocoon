@@ -10,7 +10,11 @@ with values the scheduler can trust.
   read from `/proc/meminfo` so a 1Gi-default node is advertised under the
   right key).
 - **Allocatable** = Capacity minus a reserve fraction (default 20%,
-  override via `VK_RESERVE_PERCENT`).
+  override via `VK_RESERVE_PERCENT`). The reserve is accounting only;
+  pair it with cocoon's `cgroup_cpus` fence to make it physical — the
+  fence keeps VM threads (vCPU, virtio, io_uring workers) off the
+  reserved cores, which then serve vk-cocoon's own probe loops,
+  clone/wake execution, and snapshot transfers.
 - **Storage allocatable** uses `statfs` available bytes (`Bavail`)
   instead of total — base images, existing COW overlays, and snapshots
   are naturally excluded from the budget.

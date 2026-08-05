@@ -43,9 +43,10 @@ pushed status honest:
 cocoon is the authoritative VM controller and exposes its contract
 through its CLI. vk-cocoon shells out (`vm/`) rather than linking against
 cocoon's internals — the subprocess boundary is architectural, not tech
-debt. Per-VM stats are the one exception: they are read from `/proc`
-using the hypervisor PID tracked in memory, so a metrics scrape never
-forks a `cocoon` process.
+debt. Per-VM stats are the one exception: CPU and throttling are read
+from the VM's cocoon cgroup scope (`cpu.stat`), RSS and network from
+`/proc` using the hypervisor PID tracked in memory, so a metrics scrape
+never forks a `cocoon` process.
 
 ## Place in the cocoonstack
 

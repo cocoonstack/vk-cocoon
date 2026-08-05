@@ -19,6 +19,12 @@ KillMode=process
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536
+# Raise vk-cocoon's share within system.slice so probe loops, clone/wake
+# execution, and snapshot transfers win contention against co-located
+# daemons. The VM fleet itself lives in cocoon.slice, arbitrated a level
+# up — bound it with cocoon's cgroup_cpus fence, not this knob; no
+# AllowedCPUs here so clone's multi-core restore is never confined.
+CPUWeight=1000
 # CAP_NET_RAW lets the probe loop open an ICMPv4 raw socket for
 # its guest-reachability check. Without it the pinger falls back
 # to "an IP was resolved == Ready", which is still correct but

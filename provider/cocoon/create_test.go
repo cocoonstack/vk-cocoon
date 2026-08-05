@@ -570,6 +570,122 @@ func TestCreatePodRunMode(t *testing.T) {
 	}
 }
 
+func TestCreatePodRunModeBurstableCPUPolicy(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-burst",
+		Image:  "ubuntu-22.04",
+		Mode:   "run",
+	})
+	pod.Spec.Containers = []corev1.Container{{
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		},
+	}}
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.ran == nil {
+		t.Fatal("Runtime.Run was not called")
+	}
+	if rt.ran.CPU != 2 {
+		t.Fatalf("Run CPU = %d, want 2 (vCPU bounds at the limit, not the request)", rt.ran.CPU)
+	}
+	if rt.ran.CPUWeight != 20 || rt.ran.CPUQuotaUs != 200000 {
+		t.Fatalf("Run CPU policy = weight %d quota %d, want 20/200000", rt.ran.CPUWeight, rt.ran.CPUQuotaUs)
+	}
+}
+
+func TestCreatePodCloneModePassesCPUPolicy(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-clone-policy",
+		Image:  "golden",
+	})
+	pod.Spec.Containers = []corev1.Container{{
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1500m")},
+		},
+	}}
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil {
+		t.Fatal("Runtime.Clone was not called")
+	}
+	if rt.cloned.CPUWeight != 39 || rt.cloned.CPUQuotaUs != 150000 {
+		t.Fatalf("Clone CPU policy = weight %d quota %d, want 39/150000", rt.cloned.CPUWeight, rt.cloned.CPUQuotaUs)
+	}
+}
+
+func TestPodCPUPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources corev1.ResourceRequirements
+		want      vm.CPUPolicy
+	}{
+		{
+			name: "burstable derives quota from limits and weight from requests",
+			resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			},
+			want: vm.CPUPolicy{CPUWeight: 20, CPUQuotaUs: 200000, CPUPeriodUs: 100000},
+		},
+		{
+			name: "limits only fall back to limits for weight",
+			resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+			},
+			want: vm.CPUPolicy{CPUWeight: 39, CPUQuotaUs: 100000, CPUPeriodUs: 100000},
+		},
+		{
+			name: "requests only leave quota at cocoon defaults",
+			resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			},
+			want: vm.CPUPolicy{CPUWeight: 79},
+		},
+		{
+			name: "sub-10m limit clamps quota to the kernel floor",
+			resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m")},
+			},
+			want: vm.CPUPolicy{CPUWeight: 1, CPUQuotaUs: 1000, CPUPeriodUs: 100000},
+		},
+		{
+			name: "no cpu resources get kubelet's BestEffort minimum weight",
+			want: vm.CPUPolicy{CPUWeight: 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-policy"})
+			pod.Spec.Containers = []corev1.Container{{Resources: tt.resources}}
+			if policy := podCPUPolicy(pod); policy != tt.want {
+				t.Errorf("podCPUPolicy = %+v, want %+v", policy, tt.want)
+			}
+		})
+	}
+}
+
+func TestCPUWeightFromMilliBounds(t *testing.T) {
+	if got := cpuWeightFromMilli(1); got != 1 {
+		t.Errorf("cpuWeightFromMilli(1) = %d, want 1 (min clamp)", got)
+	}
+	if got := cpuWeightFromMilli(300000); got != 10000 {
+		t.Errorf("cpuWeightFromMilli(300000) = %d, want 10000 (max clamp)", got)
+	}
+}
+
 func TestLocalSnapshotName(t *testing.T) {
 	tests := []struct {
 		repo, tag, want string

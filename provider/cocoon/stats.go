@@ -6,20 +6,27 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/cocoonstack/vk-cocoon/vm"
 
 	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	statsv1alpha1 "k8s.io/kubelet/pkg/apis/stats/v1alpha1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 
 	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 const statsSampleTTL = 2 * time.Second
+
+// cgroupParent must match cocoon's cgroup_parent config; override via
+// COCOON_CGROUP_PARENT when cocoon's does.
+var cgroupParent = sync.OnceValue(func() string {
+	return commonk8s.EnvOrDefault("COCOON_CGROUP_PARENT", vm.DefaultCgroupParent)
+})
 
 // vmSnapshot is a minimal copy of VM state taken under lock so /proc
 // reads happen outside the critical section.
@@ -37,11 +44,13 @@ type vmSnapshot struct {
 // vmSample is one cached stats reading for a tracked VM.
 type vmSample struct {
 	vmSnapshot
-	cpuSeconds float64
-	memBytes   int64
-	diskCOW    int64
-	rxBytes    uint64
-	txBytes    uint64
+	cpuSeconds       float64
+	throttledSeconds float64
+	nrThrottled      int64
+	memBytes         int64
+	diskCOW          int64
+	rxBytes          uint64
+	txBytes          uint64
 }
 
 // metrics-server and kubectl top consume this endpoint.
@@ -90,7 +99,7 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 			newGauge(float64(node.MemoryUsedBytes), nowMs, nil)),
 	}
 
-	var containerCPU, containerMem, podCPU, podMem []*dto.Metric
+	var containerCPU, containerMem, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
 	for _, s := range samples {
 		cpuSec := s.cpuSeconds
 		memBytes := float64(s.memBytes)
@@ -102,6 +111,8 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 		}
 		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
 		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
+		throttledSec = append(throttledSec, newCounter(s.throttledSeconds, nowMs, containerLabels))
+		throttledPeriods = append(throttledPeriods, newCounter(float64(s.nrThrottled), nowMs, containerLabels))
 
 		podLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
@@ -118,6 +129,10 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 				"Cumulative cpu time consumed by the container in core-seconds", containerCPU...),
 			newGaugeFamily("container_memory_working_set_bytes",
 				"Current working set of the container in bytes", containerMem...),
+			newCounterFamily("container_cpu_cfs_throttled_seconds_total",
+				"Total time the container's VM cgroup spent throttled in seconds", throttledSec...),
+			newCounterFamily("container_cpu_cfs_throttled_periods_total",
+				"Number of throttled enforcement periods of the container's VM cgroup", throttledPeriods...),
 			newCounterFamily("pod_cpu_usage_seconds_total",
 				"Cumulative cpu time consumed by the pod in core-seconds", podCPU...),
 			newGaugeFamily("pod_memory_working_set_bytes",
@@ -139,10 +154,14 @@ func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	snaps := p.snapshotTrackedVMs()
 	vms := make([]vmSample, 0, len(snaps))
 	for _, s := range snaps {
-		cpu, rss := readProcStatCPURSS(s.PID)
+		// CPU from the cgroup scope, not /proc: the VMM's utime/stime never
+		// sees the virtio and io_uring kernel workers the scope contains.
+		usage, throttledSec, throttled := vm.ScopeCPUStat(cgroupParent(), s.ID)
 		sample := vmSample{
-			vmSnapshot: s, cpuSeconds: cpu, memBytes: rss,
-			diskCOW: vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID),
+			vmSnapshot: s, cpuSeconds: usage,
+			throttledSeconds: throttledSec, nrThrottled: throttled,
+			memBytes: readProcRSS(s.PID),
+			diskCOW:  vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID),
 		}
 		if s.Tap != "" {
 			sample.rxBytes, sample.txBytes = readProcNetDev(s.PID, s.Tap)
@@ -165,17 +184,16 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	defer p.mu.RUnlock()
 
 	out := make([]vmSnapshot, 0, len(p.pods))
-	for key, pod := range p.pods {
+	for _, pod := range p.pods {
 		spec := meta.ParseVMSpec(pod)
 		v := p.vmsByName[spec.VMName]
 		if v == nil || v.PID == 0 {
 			continue
 		}
-		ns, name := splitPodKey(key)
 		snap := vmSnapshot{
 			ID: v.ID, PID: v.PID,
 			Hypervisor: v.Hypervisor, Backend: spec.Backend,
-			VMName: spec.VMName, Namespace: ns, PodName: name,
+			VMName: spec.VMName, Namespace: pod.Namespace, PodName: pod.Name,
 		}
 		if len(v.NetworkConfigs) > 0 {
 			snap.Tap = v.NetworkConfigs[0].Tap
@@ -195,11 +213,6 @@ func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
 			Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
 		},
 	}
-}
-
-func splitPodKey(key string) (string, string) {
-	ns, name, _ := strings.Cut(key, "/")
-	return ns, name
 }
 
 func readNodeCPUSeconds() float64 {
@@ -241,29 +254,27 @@ func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
 }
 
-func readProcStatCPURSS(pid int) (cpuSeconds float64, rssBytes int64) {
+func readProcRSS(pid int) int64 {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return 0, 0
+		return 0
 	}
-	return parseProcStat(string(data), os.Getpagesize())
+	return parseProcStatRSS(string(data), os.Getpagesize())
 }
 
-// parseProcStat extracts utime+stime and RSS from a /proc/<pid>/stat line
-// (fields 14, 15, 24; split after the parenthesized comm, which may contain spaces).
-func parseProcStat(s string, pageSize int) (cpuSeconds float64, rssBytes int64) {
+// parseProcStatRSS extracts RSS from a /proc/<pid>/stat line (field 24;
+// split after the parenthesized comm, which may contain spaces).
+func parseProcStatRSS(s string, pageSize int) int64 {
 	idx := strings.LastIndex(s, ")")
 	if idx < 0 || idx+2 >= len(s) {
-		return 0, 0
+		return 0
 	}
 	fields := strings.Fields(s[idx+2:])
 	if len(fields) < 22 {
-		return 0, 0
+		return 0
 	}
-	utime, _ := strconv.ParseInt(fields[11], 10, 64)
-	stime, _ := strconv.ParseInt(fields[12], 10, 64)
 	rssPages, _ := strconv.ParseInt(fields[21], 10, 64)
-	return float64(utime+stime) / 100, rssPages * int64(pageSize) // CLK_TCK
+	return rssPages * int64(pageSize)
 }
 
 func newCounterFamily(name, help string, metrics ...*dto.Metric) *dto.MetricFamily {

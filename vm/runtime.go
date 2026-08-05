@@ -100,8 +100,17 @@ func ParseRestoreMode(s string) (RestoreMode, error) {
 	}
 }
 
+// CPUPolicy carries the host-side cgroup CPU knobs cocoon applies to a
+// VM. Cocoon never inherits them from a snapshot, so zero values mean
+// Guaranteed-at-N defaults on run and clone alike.
+type CPUPolicy struct {
+	CPUWeight   int
+	CPUQuotaUs  int64
+	CPUPeriodUs int64
+}
+
 // CloneOptions is the input to Runtime.Clone. Resource fields inherit
-// from the snapshot unless overridden.
+// from the snapshot unless overridden — except CPUPolicy (see its doc).
 type CloneOptions struct {
 	From        string
 	To          string
@@ -110,6 +119,7 @@ type CloneOptions struct {
 	NoDirectIO  bool
 	Pull        bool
 	RestoreMode RestoreMode
+	CPUPolicy
 	// FromDir maps to `cocoon vm clone --from-dir`: when set, From is
 	// ignored and --pull is forced (the dir holds snapshot data, not
 	// base image layers).
@@ -129,6 +139,7 @@ type RunOptions struct {
 	OS         string
 	Backend    string
 	NoDirectIO bool
+	CPUPolicy
 }
 
 // VMEvent is a single event from the cocoon event stream.

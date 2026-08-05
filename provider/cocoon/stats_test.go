@@ -7,22 +7,18 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
-func TestParseProcStat(t *testing.T) {
+func TestParseProcStatRSS(t *testing.T) {
 	// comm carries spaces and parens; fields after it: state=R, then 20+ numeric.
 	line := "1234 (cloud (hv) proc) R 1 1 1 0 -1 4194560 100 0 0 0 250 150 0 0 20 0 4 0 12345 999424 512 18446744073709551615"
-	cpu, rss := parseProcStat(line, 4096)
-	if cpu != 4.0 {
-		t.Errorf("cpu = %v, want 4.0 ((250+150)/100)", cpu)
-	}
-	if rss != 512*4096 {
+	if rss := parseProcStatRSS(line, 4096); rss != 512*4096 {
 		t.Errorf("rss = %d, want %d", rss, 512*4096)
 	}
 }
 
-func TestParseProcStatMalformed(t *testing.T) {
+func TestParseProcStatRSSMalformed(t *testing.T) {
 	for _, s := range []string{"", "no comm here", "1 (x) R 1 2 3"} {
-		if cpu, rss := parseProcStat(s, 4096); cpu != 0 || rss != 0 {
-			t.Errorf("parseProcStat(%q) = %v,%d, want zeros", s, cpu, rss)
+		if rss := parseProcStatRSS(s, 4096); rss != 0 {
+			t.Errorf("parseProcStatRSS(%q) = %d, want 0", s, rss)
 		}
 	}
 }
