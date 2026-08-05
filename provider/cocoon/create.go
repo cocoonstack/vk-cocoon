@@ -15,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/ociutil"
@@ -503,23 +502,16 @@ func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) 
 }
 
 func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
-	logger := log.WithFunc("Provider.patchRuntimeAnnotations")
 	annos := map[string]any{
 		meta.AnnotationVMID: v.ID,
 		meta.AnnotationIP:   v.IP,
 	}
-	var lastErr error
-	for range lifecyclePatchAttempts {
-		err := p.patchPodAnnotations(ctx, namespace, name, annos)
-		if err == nil {
-			return
-		}
-		lastErr = err
-		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
-			return
-		}
+	if err := patchWithRetry(ctx, func() error {
+		return p.patchPodAnnotations(ctx, namespace, name, annos)
+	}); err != nil {
+		log.WithFunc("Provider.patchRuntimeAnnotations").
+			Errorf(ctx, err, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 	}
-	logger.Errorf(ctx, lastErr, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
@@ -653,10 +645,7 @@ func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 		policy.CPUQuotaUs = max(limit.MilliValue()*cpuPeriodUs/1000, minQuotaUs) //nolint:mnd // millicores per core
 		policy.CPUPeriodUs = cpuPeriodUs
 	}
-	request := resources.Requests[corev1.ResourceCPU]
-	if request.IsZero() {
-		request = resources.Limits[corev1.ResourceCPU]
-	}
+	request := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceCPU)
 	policy.CPUWeight = cpuWeightFromMilli(request.MilliValue())
 	return policy
 }

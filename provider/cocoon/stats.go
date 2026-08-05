@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,16 +20,12 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-const (
-	statsSampleTTL = 2 * time.Second
+const statsSampleTTL = 2 * time.Second
 
-	// defaultCgroupParent mirrors cocoon's cgroup_parent default; override
-	// via COCOON_CGROUP_PARENT when cocoon's config does.
-	defaultCgroupParent = "cocoon.slice"
-)
-
-var cgroupParentDir = sync.OnceValue(func() string {
-	return filepath.Join("/sys/fs/cgroup", commonk8s.EnvOrDefault("COCOON_CGROUP_PARENT", defaultCgroupParent))
+// cgroupParent must match cocoon's cgroup_parent config; override via
+// COCOON_CGROUP_PARENT when cocoon's does.
+var cgroupParent = sync.OnceValue(func() string {
+	return commonk8s.EnvOrDefault("COCOON_CGROUP_PARENT", vm.DefaultCgroupParent)
 })
 
 // vmSnapshot is a minimal copy of VM state taken under lock so /proc
@@ -161,7 +156,7 @@ func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	for _, s := range snaps {
 		// CPU from the cgroup scope, not /proc: the VMM's utime/stime never
 		// sees the virtio and io_uring kernel workers the scope contains.
-		usage, throttledSec, throttled := readScopeCPUStat(s.ID)
+		usage, throttledSec, throttled := vm.ScopeCPUStat(cgroupParent(), s.ID)
 		sample := vmSample{
 			vmSnapshot: s, cpuSeconds: usage,
 			throttledSeconds: throttledSec, nrThrottled: throttled,
@@ -189,17 +184,16 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	defer p.mu.RUnlock()
 
 	out := make([]vmSnapshot, 0, len(p.pods))
-	for key, pod := range p.pods {
+	for _, pod := range p.pods {
 		spec := meta.ParseVMSpec(pod)
 		v := p.vmsByName[spec.VMName]
 		if v == nil || v.PID == 0 {
 			continue
 		}
-		ns, name := splitPodKey(key)
 		snap := vmSnapshot{
 			ID: v.ID, PID: v.PID,
 			Hypervisor: v.Hypervisor, Backend: spec.Backend,
-			VMName: spec.VMName, Namespace: ns, PodName: name,
+			VMName: spec.VMName, Namespace: pod.Namespace, PodName: pod.Name,
 		}
 		if len(v.NetworkConfigs) > 0 {
 			snap.Tap = v.NetworkConfigs[0].Tap
@@ -219,11 +213,6 @@ func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
 			Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
 		},
 	}
-}
-
-func splitPodKey(key string) (string, string) {
-	ns, name, _ := strings.Cut(key, "/")
-	return ns, name
 }
 
 func readNodeCPUSeconds() float64 {
@@ -263,39 +252,6 @@ func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *
 	mem := uint64(max(memBytes, 0))     //nolint:gosec // clamped to non-negative via max
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
-}
-
-// readScopeCPUStat reads a VM's cpu.stat from its cocoon cgroup scope;
-// zeros when the scope is gone (VM dying) or the parent slice mismatches.
-func readScopeCPUStat(vmID string) (usageSeconds, throttledSeconds float64, nrThrottled int64) {
-	data, err := os.ReadFile(filepath.Join(cgroupParentDir(), "vm-"+vmID+".scope", "cpu.stat")) //nolint:gosec // path derives from env config + tracked VM ID
-	if err != nil {
-		return 0, 0, 0
-	}
-	usageUs, throttledUs, throttled := parseCPUStat(string(data))
-	return float64(usageUs) / 1e6, float64(throttledUs) / 1e6, throttled
-}
-
-func parseCPUStat(s string) (usageUs, throttledUs, nrThrottled int64) {
-	for line := range strings.Lines(s) {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok {
-			continue
-		}
-		n, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			continue
-		}
-		switch key {
-		case "usage_usec":
-			usageUs = n
-		case "throttled_usec":
-			throttledUs = n
-		case "nr_throttled":
-			nrThrottled = n
-		}
-	}
-	return usageUs, throttledUs, nrThrottled
 }
 
 func readProcRSS(pid int) int64 {

@@ -114,39 +114,37 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.VM {
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
-	var g errgroup.Group
-	g.SetLimit(startupFanOut)
+	var stale []int
 	for i := range vms {
-		v := &vms[i]
-		if v.State != vm.StateCreating {
-			keep[i] = v
+		if vms[i].State != vm.StateCreating {
+			keep[i] = &vms[i]
 			continue
 		}
-		g.Go(func() error {
-			outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
-			recordStaleCreateOutcome(outcome, err)
-			if err != nil {
-				logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
-				p.watchBusyCreate(v.ID)
-				return nil
-			}
-			switch outcome {
-			case vm.StaleCreateNotCreating:
-				if fresh, settled := p.classifySettledCreate(ctx, v.ID); !settled {
-					p.watchBusyCreate(v.ID)
-				} else if fresh != nil {
-					keep[i] = fresh
-				}
-			case vm.StaleCreateBusy:
-				logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
-				p.watchBusyCreate(v.ID)
-			default:
-				logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
-			}
-			return nil
-		})
+		stale = append(stale, i)
 	}
-	_ = g.Wait() // workers report per-record outcomes via keep, never errors
+	fanOut(startupFanOut, stale, func(i int) {
+		v := &vms[i]
+		outcome, err := p.Runtime.ReconcileStaleCreate(ctx, v.ID)
+		recordStaleCreateOutcome(outcome, err)
+		if err != nil {
+			logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
+			p.watchBusyCreate(v.ID)
+			return
+		}
+		switch outcome {
+		case vm.StaleCreateNotCreating:
+			if fresh, settled := p.classifySettledCreate(ctx, v.ID); !settled {
+				p.watchBusyCreate(v.ID)
+			} else if fresh != nil {
+				keep[i] = fresh
+			}
+		case vm.StaleCreateBusy:
+			logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
+			p.watchBusyCreate(v.ID)
+		default:
+			logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
+		}
+	})
 	kept := make([]vm.VM, 0, len(vms))
 	for _, v := range keep {
 		if v != nil {

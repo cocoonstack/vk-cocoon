@@ -246,20 +246,18 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	}
 }
 
-// willRunSAC mirrors applyWindowsStaticIP's guard so CreatePod can defer Ready.
+// willRunSAC adds the OS gate to the shared guard so CreatePod can defer Ready.
 func (p *Provider) willRunSAC(spec meta.VMSpec, v *vm.VM) bool {
-	if spec.OS != string(cocoonv1.OSWindows) || p.GuestSAC == nil {
-		return false
-	}
-	return slices.ContainsFunc(v.NetworkConfigs, isStaticNIC)
+	return spec.OS == string(cocoonv1.OSWindows) && p.sacStaticIPNeeded(v)
+}
+
+func (p *Provider) sacStaticIPNeeded(v *vm.VM) bool {
+	return p.GuestSAC != nil && slices.ContainsFunc(v.NetworkConfigs, isStaticNIC)
 }
 
 // applyWindowsStaticIP reports ran=true only when SAC actually executed, so callers do not count skips as successes.
 func (p *Provider) applyWindowsStaticIP(ctx context.Context, pod *corev1.Pod, v *vm.VM) (bool, error) {
-	if p.GuestSAC == nil || len(v.NetworkConfigs) == 0 {
-		return false, nil
-	}
-	if !slices.ContainsFunc(v.NetworkConfigs, isStaticNIC) {
+	if !p.sacStaticIPNeeded(v) {
 		return false, nil
 	}
 

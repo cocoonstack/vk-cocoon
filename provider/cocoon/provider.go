@@ -457,13 +457,9 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 	}
 }
 
-// handleVMGone processes a DELETED or MODIFIED(stopped/error) event.
-// It double-checks via `cocoon vm inspect` before acting to avoid
-// false positives from transient states (e.g. watchdog restart).
-//
-// - VM gone (inspect fails): delete pod → operator recreates.
-// - VM stopped/error: restart via `cocoon vm start` → probe re-pings.
-// - VM still running: ignore (false alarm).
+// handleVMGone handles a DELETED or MODIFIED(stopped/error) event,
+// re-inspecting first so a transient state (e.g. watchdog restart)
+// cannot evict a live pod.
 func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	logger := log.WithFunc("Provider.handleVMGone")
 
@@ -566,15 +562,10 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 	return nil, lastErr
 }
 
-// scheduleDeferredRecheck spawns a background goroutine that keeps
-// re-inspecting a VM whose event classification was inconclusive, until
-// cocoon returns a definitive answer or the pod is no longer tracked.
-// Dedup'd via pendingRecheck so repeated transient events for the same
-// VM don't multiply goroutines.
-//
-// The lifecycle-ctx check and recheckWG.Add happen under p.mu to pair
-// with Close's cancel-under-lock, so every goroutine this function
-// starts is visible to Close's Wait.
+// scheduleDeferredRecheck re-inspects an inconclusive VM in the background,
+// dedup'd via pendingRecheck. The ctx check and recheckWG.Add happen under
+// p.mu to pair with Close's cancel-under-lock, so every goroutine started
+// here is visible to Close's Wait.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.mu.Lock()
 	if p.lifecycleCtx.Err() != nil {
@@ -592,9 +583,7 @@ func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	go p.runDeferredRecheck(p.lifecycleCtx, vmID)
 }
 
-// runDeferredRecheck is the deferred-recheck loop started by
-// scheduleDeferredRecheck. Exits when the VM resolves or the pod
-// stops being tracked.
+// runDeferredRecheck loops until the VM resolves or the pod stops being tracked.
 func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	logger := log.WithFunc("Provider.runDeferredRecheck")
 	defer p.recheckWG.Done()
@@ -628,9 +617,7 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 				p.evictPod(ctx, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget")
 				return
 			}
-			if delay < maxDelay {
-				delay = min(delay*2, maxDelay)
-			}
+			delay = min(delay*2, maxDelay)
 		case v.State != vm.StateRunning:
 			// Stopped/error — let the normal event path handle restart.
 			// Feeding a synthetic event keeps restart-cooldown bookkeeping
@@ -666,11 +653,10 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 	return "", nil, ""
 }
 
-// evictPod deletes the pod from the API server first, then clears the
-// in-memory tables only on success. Keeping K8s as the authoritative
-// step means a transient API failure leaves memory intact so the next
-// VM event or probe can retry, rather than leaving a live K8s pod with
-// no provider record. The pod is always marked PodFailed on success.
+// evictPod deletes the pod from the API server first and clears the
+// in-memory tables only on success: a transient API failure leaves memory
+// intact so the next VM event or probe retries, never a live K8s pod
+// with no provider record. The pod is marked PodFailed on success.
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
@@ -766,6 +752,22 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 		p.refreshStatus(ctx, pod)
 		p.notify(pod)
 	}
+}
+
+// patchWithRetry runs fn up to lifecyclePatchAttempts times with
+// lifecyclePatchInterval between failures; a canceled ctx returns nil —
+// there is nothing left to log against on shutdown.
+func patchWithRetry(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for range lifecyclePatchAttempts {
+		if lastErr = fn(); lastErr == nil {
+			return nil
+		}
+		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
+			return nil
+		}
+	}
+	return lastErr
 }
 
 // fanOut runs f over items with bounded concurrency; f logs its own failures.

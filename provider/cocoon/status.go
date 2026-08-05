@@ -9,7 +9,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -69,19 +68,15 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
 		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
 		return
 	}
-	var lastErr error
-	for range lifecyclePatchAttempts {
-		_, lastErr = p.Clientset.CoreV1().Pods(pod.Namespace).Patch(
+	err = patchWithRetry(ctx, func() error {
+		_, patchErr := p.Clientset.CoreV1().Pods(pod.Namespace).Patch(
 			ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
-		if lastErr == nil {
-			return
-		}
-		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
-			return
-		}
+		return patchErr
+	})
+	if err != nil {
+		logger.Errorf(ctx, err,
+			"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
 	}
-	logger.Errorf(ctx, lastErr,
-		"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
 }
 
 func podStatusMatches(current, expected corev1.PodStatus) bool {
