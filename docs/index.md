@@ -26,6 +26,8 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
   manual network fixup and how the hint annotation surfaces it
 - [Node resources](node-resources.md) — host-probed Capacity /
   Allocatable and the override knobs
+- [CPU QoS](cpu-qos.md) — how pod requests/limits map onto cocoon's
+  per-VM cgroup policy, with recipes
 - [Metrics & monitoring](metrics.md) — the kubelet stats API, the
   metrics-server resource endpoint, and the `cocoon_vk_*` families
 - [Configuration](configuration.md) — every environment variable
