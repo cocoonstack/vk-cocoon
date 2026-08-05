@@ -654,7 +654,17 @@ func TestPodCPUPolicy(t *testing.T) {
 			},
 			want: vm.CPUPolicy{CPUWeight: 79},
 		},
-		{name: "no cpu resources leave both at defaults"},
+		{
+			name: "sub-10m limit clamps quota to the kernel floor",
+			resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m")},
+			},
+			want: vm.CPUPolicy{CPUWeight: 1, CPUQuotaUs: 1000, CPUPeriodUs: 100000},
+		},
+		{
+			name: "no cpu resources get kubelet's BestEffort minimum weight",
+			want: vm.CPUPolicy{CPUWeight: 1},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

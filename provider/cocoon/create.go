@@ -32,6 +32,8 @@ const (
 	// cpuPeriodUs is the cpu.max period the quota is computed against;
 	// passed alongside the quota so the math never drifts from cocoon's default.
 	cpuPeriodUs = 100000
+	// minQuotaUs is the kernel's cpu.max floor; kubelet clamps sub-10m limits the same way.
+	minQuotaUs = 1000
 
 	// kubelet's cgroup v2 shares→weight conversion bounds.
 	minCPUShares = 2
@@ -638,8 +640,9 @@ func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 }
 
 // podCPUPolicy derives cgroup knobs: quota caps at the CPU limit and
-// never falls back to requests, weight tracks requests (limits when
-// unset, mirroring the K8s Guaranteed defaulting).
+// never falls back to requests, weight always tracks requests (limits
+// when unset, mirroring the K8s Guaranteed defaulting) so a BestEffort
+// pod gets kubelet's minimum share, not cocoon's vCPU-count default.
 func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	if len(pod.Spec.Containers) == 0 {
 		return vm.CPUPolicy{}
@@ -647,16 +650,14 @@ func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	resources := pod.Spec.Containers[0].Resources
 	var policy vm.CPUPolicy
 	if limit := resources.Limits[corev1.ResourceCPU]; !limit.IsZero() {
-		policy.CPUQuotaUs = limit.MilliValue() * cpuPeriodUs / 1000 //nolint:mnd // millicores per core
+		policy.CPUQuotaUs = max(limit.MilliValue()*cpuPeriodUs/1000, minQuotaUs) //nolint:mnd // millicores per core
 		policy.CPUPeriodUs = cpuPeriodUs
 	}
 	request := resources.Requests[corev1.ResourceCPU]
 	if request.IsZero() {
 		request = resources.Limits[corev1.ResourceCPU]
 	}
-	if !request.IsZero() {
-		policy.CPUWeight = cpuWeightFromMilli(request.MilliValue())
-	}
+	policy.CPUWeight = cpuWeightFromMilli(request.MilliValue())
 	return policy
 }
 
