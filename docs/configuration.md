@@ -24,7 +24,8 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |
 | `VK_KUBELET_PORT` | `10250` | Port the virtual node's kubelet API listens on and advertises. Override when a real kubelet on the same host already owns `:10250` (e.g. a co-located k3s server node). |
 | `VK_METRICS_ADDR` | `:9091` | Plain-HTTP prometheus listener. |
-| `VK_RESERVE_PERCENT` | `20` | Percentage of host resources reserved for the host OS (0-100). Allocatable = Capacity × (100 - reserve) / 100. |
+| `VK_RESERVE_PERCENT` | `20` | Percentage of host resources reserved for the host OS (0-100). Allocatable = Capacity × (100 - reserve) / 100. Align with cocoon's `cgroup_cpus` fence so the accounting reserve matches the physically fenced cores. |
+| `COCOON_CGROUP_PARENT` | `cocoon.slice` | cgroup v2 slice holding cocoon's per-VM CPU scopes; must match cocoon's `cgroup_parent` config. Per-VM CPU usage and throttling stats are read from `<slice>/vm-<id>.scope/cpu.stat`. |
 | `VK_NODE_CPU` | auto-detected | Override CPU capacity (auto: `runtime.NumCPU()`). |
 | `VK_NODE_MEM` | auto-detected | Override memory capacity (auto: `/proc/meminfo` MemTotal). |
 | `VK_NODE_STORAGE` | auto-detected | Override storage capacity (auto: `statfs` on `COCOON_ROOT_DIR`). |

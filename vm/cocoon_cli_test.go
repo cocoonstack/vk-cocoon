@@ -226,6 +226,11 @@ func TestBuildCloneArgs(t *testing.T) {
 			opts: CloneOptions{From: "snap-a", To: "vm-n", Backend: "firecracker", NICs: ptr.To(1)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-n", "snap-a"},
 		},
+		{
+			name: "cpu policy knobs",
+			opts: CloneOptions{From: "snap-a", To: "vm-p", CPUPolicy: CPUPolicy{CPUWeight: 20, CPUQuotaUs: 200000, CPUPeriodUs: 100000}},
+			want: []string{"vm", "clone", "--output", "json", "--name", "vm-p", "--cpu-weight", "20", "--cpu-quota-us", "200000", "--cpu-period-us", "100000", "snap-a"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,6 +323,11 @@ func TestBuildRunArgs(t *testing.T) {
 			name: "zero cpu and empty quantities omit their flags",
 			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-g", Storage: "20Gi"},
 			want: []string{"vm", "run", "--output", "json", "--name", "vm-g", "--storage", "21474836480", "ghcr.io/x/y:1"},
+		},
+		{
+			name: "cpu policy knobs",
+			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-h", CPU: 2, CPUPolicy: CPUPolicy{CPUWeight: 79, CPUQuotaUs: 150000}},
+			want: []string{"vm", "run", "--output", "json", "--name", "vm-h", "--cpu", "2", "--cpu-weight", "79", "--cpu-quota-us", "150000", "ghcr.io/x/y:1"},
 		},
 	}
 	for _, tc := range cases {

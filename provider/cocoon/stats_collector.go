@@ -11,15 +11,17 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 	out := make([]provider.VMStats, 0, len(samples))
 	for _, s := range samples {
 		out = append(out, provider.VMStats{
-			VMName:     s.VMName,
-			PodName:    s.PodName,
-			Namespace:  s.Namespace,
-			Backend:    s.Backend,
-			CPUSeconds: s.cpuSeconds,
-			MemoryRSS:  s.memBytes,
-			DiskCOW:    s.diskCOW,
-			NetRxBytes: s.rxBytes,
-			NetTxBytes: s.txBytes,
+			VMName:              s.VMName,
+			PodName:             s.PodName,
+			Namespace:           s.Namespace,
+			Backend:             s.Backend,
+			CPUSeconds:          s.cpuSeconds,
+			CPUThrottledSeconds: s.throttledSeconds,
+			CPUThrottledPeriods: s.nrThrottled,
+			MemoryRSS:           s.memBytes,
+			DiskCOW:             s.diskCOW,
+			NetRxBytes:          s.rxBytes,
+			NetTxBytes:          s.txBytes,
 		})
 	}
 	return out, node

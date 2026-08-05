@@ -6,8 +6,11 @@ defaults to `10250` and is set by `VK_KUBELET_PORT`.
 ## `:10250/stats/summary` — kubelet stats API
 
 Consumed by metrics-server and `kubectl top`. Reports per-pod CPU
-(cumulative nanoseconds) and memory (RSS field 24) from one
-`/proc/<pid>/stat` read, plus per-pod network I/O from the TAP device
+(cumulative nanoseconds) from the VM's cocoon cgroup scope
+(`<COCOON_CGROUP_PARENT>/vm-<id>.scope/cpu.stat` `usage_usec` — unlike
+the VMM's utime/stime, it includes the virtio and io_uring kernel
+workers the scope contains) and memory (RSS field 24) from
+`/proc/<pid>/stat`, plus per-pod network I/O from the TAP device
 inside each VM's network namespace (`/proc/<pid>/net/dev`). Node-level
 CPU and memory are read from `/proc/stat` and `/proc/meminfo`.
 
@@ -17,7 +20,11 @@ Prometheus text format with the metric families metrics-server and HPA
 require: `node_cpu_usage_seconds_total`,
 `node_memory_working_set_bytes`, `container_cpu_usage_seconds_total`,
 `container_memory_working_set_bytes`, `pod_cpu_usage_seconds_total`,
-`pod_memory_working_set_bytes`.
+`pod_memory_working_set_bytes`, plus the cAdvisor-style throttling
+counters `container_cpu_cfs_throttled_seconds_total` and
+`container_cpu_cfs_throttled_periods_total` from the VM scope's
+`cpu.stat` (`throttled_usec` / `nr_throttled`) — who is hitting their
+CPU quota.
 
 ## `:9091/metrics` — vk-cocoon metrics
 
@@ -25,7 +32,9 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 
 | Metric | Type | Description |
 |---|---|---|
-| `cocoon_vk_vm_cpu_seconds_total{vm,pod,namespace,backend}` | Counter | Per-VM cumulative CPU |
+| `cocoon_vk_vm_cpu_seconds_total{vm,pod,namespace,backend}` | Counter | Per-VM cumulative CPU (cgroup scope `usage_usec`) |
+| `cocoon_vk_vm_cpu_throttled_seconds_total{vm,pod,namespace,backend}` | Counter | Per-VM time throttled by the CPU quota |
+| `cocoon_vk_vm_cpu_throttled_periods_total{vm,pod,namespace,backend}` | Counter | Per-VM throttled enforcement periods |
 | `cocoon_vk_vm_memory_rss_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM RSS |
 | `cocoon_vk_vm_disk_cow_bytes{vm,pod,namespace,backend}` | Gauge | Per-VM COW overlay actual size |
 | `cocoon_vk_vm_network_rx_bytes_total` / `tx_bytes_total` | Counter | Per-VM TAP network I/O |
@@ -58,12 +67,13 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched by startup reconcile (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
 
 All three metrics surfaces share one complete sample for two seconds,
-so reported values may trail `/proc` by up to that interval. Per-VM
-stats use the hypervisor PID tracked in memory — no shell-out to `cocoon`
-on each scrape. The tracking table is snapshot-copied under RLock and
-`/proc` reads happen outside the lock to avoid blocking
-CreatePod/DeletePod. When a VM is restarted in-place (event watcher →
-`cocoon vm start`), the PID is re-inspected and refreshed.
+so reported values may trail the kernel by up to that interval. Per-VM
+CPU and throttling come from the VM's cocoon cgroup scope; RSS and
+network still use the hypervisor PID tracked in memory — no shell-out
+to `cocoon` on each scrape. The tracking table is snapshot-copied under
+RLock and the `/proc` + cgroup reads happen outside the lock to avoid
+blocking CreatePod/DeletePod. When a VM is restarted in-place (event
+watcher → `cocoon vm start`), the PID is re-inspected and refreshed.
 
 ## Kubernetes Events
 

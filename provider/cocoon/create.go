@@ -24,9 +24,19 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// importDetachTimeout backstops a shared import flight: it outlives every
-// individual caller, so a stalled registry stream needs a deadline of its own.
-const importDetachTimeout = 30 * time.Minute
+const (
+	// importDetachTimeout backstops a shared import flight: it outlives every
+	// individual caller, so a stalled registry stream needs a deadline of its own.
+	importDetachTimeout = 30 * time.Minute
+
+	// cpuPeriodUs is the cpu.max period the quota is computed against;
+	// passed alongside the quota so the math never drifts from cocoon's default.
+	cpuPeriodUs = 100000
+
+	// kubelet's cgroup v2 shares→weight conversion bounds.
+	minCPUShares = 2
+	maxCPUShares = 262144
+)
 
 func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.CreatePod")
@@ -206,6 +216,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	backend := spec.Backend
 	noDirectIO := spec.NoDirectIO
 	mode := strings.ToLower(spec.Mode)
+	policy := podCPUPolicy(pod)
 	fromDir, err := parseCloneFromDirAnnotation(pod)
 	if err != nil {
 		return nil, "", err
@@ -215,7 +226,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", err
 		}
-		v, err := p.cloneFromHibernate(ctx, spec, src)
+		v, err := p.cloneFromHibernate(ctx, spec, src, policy)
 		if err != nil {
 			return nil, "", err
 		}
@@ -243,6 +254,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Backend:     backend,
 			NoDirectIO:  noDirectIO,
 			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+			CPUPolicy:   policy,
 		})
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
@@ -263,6 +275,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Backend:     backend,
 			NoDirectIO:  noDirectIO,
 			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+			CPUPolicy:   policy,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
@@ -279,6 +292,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Image:      runImage,
 			Name:       spec.VMName,
 			CPU:        cpu,
+			CPUPolicy:  policy,
 			Memory:     memory,
 			Network:    spec.Network,
 			Storage:    spec.Storage,
@@ -320,6 +334,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			NoDirectIO:  noDirectIO,
 			Pull:        srcImage != "",
 			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+			CPUPolicy:   policy,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
@@ -609,22 +624,54 @@ func forkSnapshotName(sourceVMName string) string {
 	return "fork-" + sourceVMName
 }
 
-// vmResourceOverrides translates pod resources into cocoon CLI args (milliCPU rounds up).
+// vmResourceOverrides translates pod resources into cocoon CLI args. vCPU
+// rounds the CPU limit up (requests when unset): the count is a hard cap
+// under cocoon's cgroup scope, so it must bound at the limit.
 func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	if len(pod.Spec.Containers) == 0 {
 		return 0, ""
 	}
 	resources := pod.Spec.Containers[0].Resources
-	cpu := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceCPU)
+	cpu := selectQuantity(resources.Limits, resources.Requests, corev1.ResourceCPU)
 	memory := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
 	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 
-func selectQuantity(requests, limits corev1.ResourceList, name corev1.ResourceName) resource.Quantity {
-	if q, ok := requests[name]; ok && !q.IsZero() {
+// podCPUPolicy derives cgroup knobs: quota caps at the CPU limit and
+// never falls back to requests, weight tracks requests (limits when
+// unset, mirroring the K8s Guaranteed defaulting).
+func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
+	if len(pod.Spec.Containers) == 0 {
+		return vm.CPUPolicy{}
+	}
+	resources := pod.Spec.Containers[0].Resources
+	var policy vm.CPUPolicy
+	if limit := resources.Limits[corev1.ResourceCPU]; !limit.IsZero() {
+		policy.CPUQuotaUs = limit.MilliValue() * cpuPeriodUs / 1000 //nolint:mnd // millicores per core
+		policy.CPUPeriodUs = cpuPeriodUs
+	}
+	request := resources.Requests[corev1.ResourceCPU]
+	if request.IsZero() {
+		request = resources.Limits[corev1.ResourceCPU]
+	}
+	if !request.IsZero() {
+		policy.CPUWeight = cpuWeightFromMilli(request.MilliValue())
+	}
+	return policy
+}
+
+// cpuWeightFromMilli mirrors kubelet's cgroup v2 conversion so a VM's
+// contention share matches what kubelet grants the same requests.
+func cpuWeightFromMilli(milli int64) int {
+	shares := min(max(milli*1024/1000, minCPUShares), maxCPUShares)
+	return int(1 + (shares-minCPUShares)*9999/(maxCPUShares-minCPUShares))
+}
+
+func selectQuantity(primary, fallback corev1.ResourceList, name corev1.ResourceName) resource.Quantity {
+	if q, ok := primary[name]; ok && !q.IsZero() {
 		return q
 	}
-	if q, ok := limits[name]; ok && !q.IsZero() {
+	if q, ok := fallback[name]; ok && !q.IsZero() {
 		return q
 	}
 	return resource.Quantity{}

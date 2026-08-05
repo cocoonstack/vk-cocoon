@@ -19,11 +19,13 @@ type VMStats struct {
 	Namespace string
 	Backend   string
 
-	CPUSeconds float64 // cumulative CPU seconds
-	MemoryRSS  int64   // bytes
-	DiskCOW    int64   // bytes (COW overlay actual size)
-	NetRxBytes uint64
-	NetTxBytes uint64
+	CPUSeconds          float64 // cumulative CPU seconds
+	CPUThrottledSeconds float64
+	CPUThrottledPeriods int64
+	MemoryRSS           int64 // bytes
+	DiskCOW             int64 // bytes (COW overlay actual size)
+	NetRxBytes          uint64
+	NetTxBytes          uint64
 }
 
 // NodeStats holds node-level resource usage for metrics collection.

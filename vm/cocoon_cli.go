@@ -443,6 +443,7 @@ func buildCloneArgs(opts CloneOptions) []string {
 	if opts.NICs != nil && opts.Backend != BackendFirecracker {
 		args = append(args, "--nics", strconv.Itoa(*opts.NICs))
 	}
+	args = appendCPUPolicyArgs(args, opts.CPUPolicy)
 	if opts.FromDir != "" {
 		return append(args, "--from-dir", opts.FromDir)
 	}
@@ -457,6 +458,7 @@ func buildRunArgs(opts RunOptions) []string {
 	if opts.CPU > 0 {
 		args = append(args, "--cpu", strconv.Itoa(opts.CPU))
 	}
+	args = appendCPUPolicyArgs(args, opts.CPUPolicy)
 	if memory := normalizeSizeArg(opts.Memory); memory != "" {
 		args = append(args, "--memory", memory)
 	}
@@ -476,6 +478,19 @@ func buildRunArgs(opts RunOptions) []string {
 		args = append(args, "--no-direct-io")
 	}
 	args = append(args, opts.Image)
+	return args
+}
+
+func appendCPUPolicyArgs(args []string, policy CPUPolicy) []string {
+	if policy.CPUWeight > 0 {
+		args = append(args, "--cpu-weight", strconv.Itoa(policy.CPUWeight))
+	}
+	if policy.CPUQuotaUs > 0 {
+		args = append(args, "--cpu-quota-us", strconv.FormatInt(policy.CPUQuotaUs, 10))
+	}
+	if policy.CPUPeriodUs > 0 {
+		args = append(args, "--cpu-period-us", strconv.FormatInt(policy.CPUPeriodUs, 10))
+	}
 	return args
 }
 
