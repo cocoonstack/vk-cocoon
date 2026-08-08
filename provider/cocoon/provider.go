@@ -79,8 +79,13 @@ type Provider struct {
 	OrphanPolicy provider.OrphanPolicy
 	RestoreMode  vm.RestoreMode
 
-	Clientset    kubernetes.Interface
-	Runtime      vm.Runtime
+	Clientset kubernetes.Interface
+	Runtime   vm.Runtime
+	// MacosBin is the cocoon-macos binary os=macos pods dispatch to;
+	// empty falls back to defaultMacosBinary. MacosBridge is the host
+	// bridge their tap NICs join; empty falls back to macosCNIBridge.
+	MacosBin     string
+	MacosBridge  string
 	Puller       *snapshots.Puller
 	Pusher       *snapshots.Pusher
 	PeerRestorer *snapshots.PeerRestorer
@@ -108,7 +113,12 @@ type Provider struct {
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
 	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
 	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
+	macosImageSF   singleflight.Group   // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
 	notifyHook     func(*corev1.Pod)
+
+	// macOS test seams; production leaves them nil (real exec / real signal-0 probe).
+	macosExecFn         func(context.Context, ...string) (string, error)
+	macosProcessAliveFn func(int) bool
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
 	lifecycleFlushed map[string]string
@@ -339,19 +349,26 @@ func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
-// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
-func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
+// updateTrackedVM applies mutate to the tracked VM (copy-on-write for
+// concurrency safety) and returns the updated record, or nil when the pod's
+// VM changed underneath the caller (same-name recreate).
+func (p *Provider) updateTrackedVM(namespace, name, vmID string, mutate func(*vm.VM)) *vm.VM {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(namespace, name)
 	v, ok := p.vmsByPod[key]
 	if !ok || v.ID != vmID {
-		return false
+		return nil
 	}
 	updated := *v
-	updated.IP = ip
+	mutate(&updated)
 	p.setVMLocked(key, &updated)
-	return true
+	return &updated
+}
+
+// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
+func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
+	return p.updateTrackedVM(namespace, name, vmID, func(v *vm.VM) { v.IP = ip }) != nil
 }
 
 // resolveVMIP returns the VM's IP, falling back to a cocoon-net lease
@@ -646,6 +663,11 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
+		// cocoon's event stream cannot describe cocoon-macos guests; a
+		// name-colliding CH event must match the CH record, not a macOS one.
+		if isMacosVM(tracked) {
+			continue
+		}
 		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
 			return key, p.pods[key], tracked.ID
 		}

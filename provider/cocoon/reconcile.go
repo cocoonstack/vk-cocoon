@@ -63,10 +63,15 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 	}
 	matched := make(map[string]bool, len(vms))
-	var probePods []*corev1.Pod
+	var probePods, macosPods []*corev1.Pod
 
 	for i := range podItems(pods) {
 		pod := &pods.Items[i]
+		// os=macos guests live outside Runtime.List; adopt them via cocoon-macos.
+		if isMacosSpec(meta.ParseVMSpec(pod)) {
+			macosPods = append(macosPods, pod)
+			continue
+		}
 		runtime := meta.ParseVMRuntime(pod)
 		if runtime.VMID == "" {
 			if v := p.adoptByVMName(ctx, pod, vmByName); v != nil {
@@ -94,8 +99,12 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		probePods = append(probePods, pod)
 	}
 	// First probes run synchronously (3s worst case each) and this path
-	// gates node registration — start them bounded-parallel.
+	// gates node registration — start them bounded-parallel. macOS adoption
+	// also inspects and patches per pod, so it fans out the same way.
 	fanOut(startupFanOut, probePods, p.startProbeIfEnabled)
+	fanOut(startupFanOut, macosPods, func(pod *corev1.Pod) {
+		p.reconcileMacosPod(ctx, pod, meta.ParseVMSpec(pod))
+	})
 
 	for i := range vms {
 		if matched[vms[i].ID] {

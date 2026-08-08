@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/ociutil"
 
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -53,7 +55,16 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, nil)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
-	if existing := p.vmByName(spec.VMName); existing != nil {
+	// os=macos dispatches to the standalone cocoon-macos QEMU backend before
+	// any cloud-hypervisor machinery (adopt-by-name, hibernate evidence,
+	// snapshot pull) runs; none of it applies to a QEMU guest.
+	if isMacosSpec(spec) {
+		return p.createMacosPod(ctx, pod, spec)
+	}
+
+	// A macOS-owned name must not be adopted through the CH path (its probe and
+	// lifecycle verbs would misfire); only createMacosPod may bind it.
+	if existing := p.vmByName(spec.VMName); existing != nil && existing.Hypervisor != macosHypervisor {
 		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
 		p.startProbeIfEnabled(pod)
@@ -495,31 +506,44 @@ func (p *Provider) vmByName(name string) *vm.VM {
 // applyRuntime writes VMID/IP annotations onto the in-memory pod (under
 // p.mu against GetPod's DeepCopy) and patches them back to the API server.
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	p.mu.Lock()
-	meta.VMRuntime{VMID: v.ID, IP: v.IP}.Apply(pod)
-	p.mu.Unlock()
-	p.patchRuntimeAnnotations(ctx, pod.Namespace, pod.Name, v)
+	p.applyVMRuntime(ctx, pod, meta.VMRuntime{VMID: v.ID, IP: v.IP})
 }
 
-func (p *Provider) patchRuntimeAnnotations(ctx context.Context, namespace, name string, v *vm.VM) {
+// applyVMRuntime is the shared write path for the runtime-annotation
+// contract; a zero VNCPort is omitted both in memory (VMRuntime.Apply) and
+// from the patch.
+func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.VMRuntime) {
+	p.mu.Lock()
+	rt.Apply(pod)
+	p.mu.Unlock()
 	annos := map[string]any{
-		meta.AnnotationVMID: v.ID,
-		meta.AnnotationIP:   v.IP,
+		meta.AnnotationVMID: rt.VMID,
+		meta.AnnotationIP:   rt.IP,
+	}
+	if rt.VNCPort != 0 {
+		annos[meta.AnnotationVNCPort] = strconv.Itoa(int(rt.VNCPort))
 	}
 	if err := patchWithRetry(ctx, func() error {
-		return p.patchPodAnnotations(ctx, namespace, name, annos)
+		return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, annos)
 	}); err != nil {
-		log.WithFunc("Provider.patchRuntimeAnnotations").
-			Errorf(ctx, err, "annotation patch failed after retries for %s/%s, will reconcile on restart", namespace, name)
+		log.WithFunc("Provider.applyVMRuntime").
+			Errorf(ctx, err, "annotation patch failed after retries for %s/%s, will reconcile on restart", pod.Namespace, pod.Name)
 	}
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
+	p.startProbe(pod,
+		p.buildProbe(pod.Namespace, pod.Name),
+		p.buildOnUpdate(pod.Namespace, pod.Name))
+}
+
+// startProbe registers the per-pod readiness agent; nil Probes is the
+// no-probe mode.
+func (p *Provider) startProbe(pod *corev1.Pod, probe probes.Probe, onUpdate probes.OnUpdate) {
 	if p.Probes == nil || pod.DeletionTimestamp != nil {
 		return
 	}
-	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.Probes.Start(key, p.buildProbe(pod.Namespace, pod.Name), p.buildOnUpdate(pod.Namespace, pod.Name))
+	p.Probes.Start(meta.PodKey(pod.Namespace, pod.Name), probe, onUpdate)
 }
 
 func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
