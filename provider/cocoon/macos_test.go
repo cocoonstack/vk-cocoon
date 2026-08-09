@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,18 +55,7 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
-	calls := stubMacosExec(p, func(args []string) (string, error) {
-		switch {
-		case macosCallIs(args, "vm", "inspect"):
-			return "", errors.New("no record")
-		case macosCallIs(args, "image", "inspect"):
-			return "{}", nil // image already in the local store
-		case macosCallIs(args, "vm", "run"):
-			return "macos-demo (pid 4242)\n", nil
-		default:
-			return "", nil
-		}
-	})
+	calls := stubMacosExec(p, freshCreateHandler)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("CreatePod: %v", err)
@@ -131,18 +121,7 @@ func TestCreateMacosPodSkipsDuplicateRun(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
-	calls := stubMacosExec(p, func(args []string) (string, error) {
-		switch {
-		case macosCallIs(args, "vm", "inspect"):
-			return "", errors.New("no record")
-		case macosCallIs(args, "image", "inspect"):
-			return "{}", nil
-		case macosCallIs(args, "vm", "run"):
-			return "macos-demo (pid 4242)\n", nil
-		default:
-			return "", nil
-		}
-	})
+	calls := stubMacosExec(p, freshCreateHandler)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("first CreatePod: %v", err)
@@ -160,12 +139,7 @@ func TestCreateMacosPodAdoptsLiveVM(t *testing.T) {
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
-	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if macosCallIs(args, "vm", "inspect") {
-			return macosInspectJSON, nil
-		}
-		return "", nil
-	})
+	calls := stubMacosExec(p, inspectOnlyHandler)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("CreatePod: %v", err)
@@ -188,12 +162,7 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.macosProcessAliveFn = func(int) bool { return false }
-	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if macosCallIs(args, "vm", "inspect") {
-			return macosInspectJSON, nil
-		}
-		return "", nil
-	})
+	calls := stubMacosExec(p, inspectOnlyHandler)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("CreatePod: %v", err)
@@ -368,12 +337,7 @@ func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.Runtime = &fakeRuntime{}
 	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
-	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if macosCallIs(args, "vm", "inspect") {
-			return macosInspectJSON, nil
-		}
-		return "", nil
-	})
+	calls := stubMacosExec(p, inspectOnlyHandler)
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
@@ -412,8 +376,30 @@ func stubMacosExec(p *Provider, handler func(args []string) (string, error)) fun
 	return func() [][]string {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([][]string(nil), calls...)
+		return slices.Clone(calls)
 	}
+}
+
+// freshCreateHandler answers no record, image present, launch OK — the
+// fresh `vm run` path.
+func freshCreateHandler(args []string) (string, error) {
+	switch {
+	case macosCallIs(args, "vm", "inspect"):
+		return "", errors.New("no record")
+	case macosCallIs(args, "image", "inspect"):
+		return "{}", nil
+	case macosCallIs(args, "vm", "run"):
+		return "macos-demo (pid 4242)\n", nil
+	default:
+		return "", nil
+	}
+}
+
+func inspectOnlyHandler(args []string) (string, error) {
+	if macosCallIs(args, "vm", "inspect") {
+		return macosInspectJSON, nil
+	}
+	return "", nil
 }
 
 func macosCallIs(args []string, verb, sub string) bool {

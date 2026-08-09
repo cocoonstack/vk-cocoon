@@ -221,22 +221,16 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 	rt := meta.VMRuntime{
 		VMID:    v.ID,
 		IP:      p.resolveVMIP(pod.Namespace, pod.Name, v),
-		VNCPort: int32(macosVNCPortBase + macosVNCDisplay(spec)), //nolint:gosec // display is bounded 1..99 by macosVNCDisplay
+		VNCPort: int32(macosVNCPortBase + macosVNCDisplay(spec)), //nolint:gosec // display is bounded 0..99 by macosVNCDisplay
 	}
-	vncPort := strconv.Itoa(int(rt.VNCPort))
-	p.mu.RLock()
 	if rt.IP == "" {
 		// No lease yet (restart adoption): keep the pre-restart address; the
 		// probe republishes the live one on its next Ready flip.
+		p.mu.RLock()
 		rt.IP = pod.Annotations[meta.AnnotationIP]
+		p.mu.RUnlock()
 	}
-	applied := pod.Annotations[meta.AnnotationVMID] == rt.VMID &&
-		pod.Annotations[meta.AnnotationIP] == rt.IP &&
-		pod.Annotations[meta.AnnotationVNCPort] == vncPort
-	p.mu.RUnlock()
-	if !applied {
-		p.applyVMRuntime(ctx, pod, rt)
-	}
+	p.applyVMRuntime(ctx, pod, rt)
 	p.startMacosProbe(pod)
 }
 

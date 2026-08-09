@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -63,13 +64,18 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 	}
 	matched := make(map[string]bool, len(vms))
-	var probePods, macosPods []*corev1.Pod
+	type macosPod struct {
+		pod  *corev1.Pod
+		spec meta.VMSpec
+	}
+	var probePods []*corev1.Pod
+	var macosPods []macosPod
 
 	for i := range podItems(pods) {
 		pod := &pods.Items[i]
 		// os=macos guests live outside Runtime.List; adopt them via cocoon-macos.
-		if isMacosSpec(meta.ParseVMSpec(pod)) {
-			macosPods = append(macosPods, pod)
+		if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
+			macosPods = append(macosPods, macosPod{pod, spec})
 			continue
 		}
 		runtime := meta.ParseVMRuntime(pod)
@@ -98,12 +104,17 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
-	// First probes run synchronously (3s worst case each) and this path
-	// gates node registration — start them bounded-parallel.
-	fanOut(startupFanOut, probePods, p.startProbeIfEnabled)
-	fanOut(startupFanOut, macosPods, func(pod *corev1.Pod) {
-		p.reconcileMacosPod(ctx, pod, meta.ParseVMSpec(pod))
+	// First probes run synchronously (3s worst case each) and this path gates
+	// node registration — start them bounded-parallel; the two fan-outs touch
+	// disjoint state, so overlap them too.
+	var wg sync.WaitGroup
+	wg.Go(func() { fanOut(startupFanOut, probePods, p.startProbeIfEnabled) })
+	wg.Go(func() {
+		fanOut(startupFanOut, macosPods, func(mp macosPod) {
+			p.reconcileMacosPod(ctx, mp.pod, mp.spec)
+		})
 	})
+	wg.Wait()
 
 	for i := range vms {
 		if matched[vms[i].ID] {

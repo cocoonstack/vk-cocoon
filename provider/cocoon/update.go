@@ -67,9 +67,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 			p.failOp(ctx, pod, "HibernateUnsupported", "update", err)
 			return err
 		}
-		p.republishLifecycleOnGenerationBump(ctx, pod)
-		metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
-		return nil
+		return p.noopUpdate(ctx, pod)
 	}
 
 	wantHibernate := bool(meta.ReadHibernateState(pod))
@@ -87,13 +85,18 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	default:
-		// Skip refresh+notify so we don't echo the incoming pod back.
-		p.republishLifecycleOnGenerationBump(ctx, pod)
-		metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
-		return nil
+		return p.noopUpdate(ctx, pod)
 	}
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
+	return nil
+}
+
+// noopUpdate republishes lifecycle intent, skipping refresh+notify so the
+// incoming pod is not echoed back.
+func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
+	p.republishLifecycleOnGenerationBump(ctx, pod)
+	metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
 	return nil
 }
 
