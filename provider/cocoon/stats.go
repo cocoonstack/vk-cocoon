@@ -34,6 +34,7 @@ type vmSnapshot struct {
 	ID         string
 	PID        int
 	Tap        string
+	DiskPath   string
 	Hypervisor string
 	Backend    string
 	Namespace  string
@@ -154,14 +155,19 @@ func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	snaps := p.snapshotTrackedVMs()
 	vms := make([]vmSample, 0, len(snaps))
 	for _, s := range snaps {
-		// CPU from the cgroup scope, not /proc: the VMM's utime/stime never
-		// sees the virtio and io_uring kernel workers the scope contains.
-		usage, throttledSec, throttled := vm.ScopeCPUStat(cgroupParent(), s.ID)
-		sample := vmSample{
-			vmSnapshot: s, cpuSeconds: usage,
-			throttledSeconds: throttledSec, nrThrottled: throttled,
-			memBytes: readProcRSS(s.PID),
-			diskCOW:  vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID),
+		sample := vmSample{vmSnapshot: s}
+		if s.Hypervisor == macosHypervisor {
+			// qemu runs outside cocoon's cgroup slice and run-dir.
+			stat := readProcStat(s.PID)
+			sample.cpuSeconds = parseProcStatCPUSeconds(stat)
+			sample.memBytes = parseProcStatRSS(stat, os.Getpagesize())
+			sample.diskCOW = fileSize(s.DiskPath)
+		} else {
+			sample.memBytes = readProcRSS(s.PID)
+			// CPU from the cgroup scope, not /proc: the VMM's utime/stime never
+			// sees the virtio and io_uring kernel workers the scope contains.
+			sample.cpuSeconds, sample.throttledSeconds, sample.nrThrottled = vm.ScopeCPUStat(cgroupParent(), s.ID)
+			sample.diskCOW = vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
 		}
 		if s.Tap != "" {
 			sample.rxBytes, sample.txBytes = readProcNetDev(s.PID, s.Tap)
@@ -191,7 +197,7 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 			continue
 		}
 		snap := vmSnapshot{
-			ID: v.ID, PID: v.PID,
+			ID: v.ID, PID: v.PID, DiskPath: v.DiskPath,
 			Hypervisor: v.Hypervisor, Backend: spec.Backend,
 			VMName: spec.VMName, Namespace: pod.Namespace, PodName: pod.Name,
 		}
@@ -255,21 +261,50 @@ func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *
 }
 
 func readProcRSS(pid int) int64 {
+	return parseProcStatRSS(readProcStat(pid), os.Getpagesize())
+}
+
+func readProcStat(pid int) string {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// procStatFields splits a /proc/<pid>/stat line after the parenthesized comm
+// (which may contain spaces); proc(5) field N lands at index N-3.
+func procStatFields(s string) []string {
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 || idx+2 >= len(s) {
+		return nil
+	}
+	return strings.Fields(s[idx+2:])
+}
+
+func parseProcStatCPUSeconds(s string) float64 {
+	fields := procStatFields(s)
+	if len(fields) < 13 {
+		return 0
+	}
+	utime, _ := strconv.ParseFloat(fields[11], 64)
+	stime, _ := strconv.ParseFloat(fields[12], 64)
+	return (utime + stime) / 100 // USER_HZ
+}
+
+func fileSize(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	fi, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}
-	return parseProcStatRSS(string(data), os.Getpagesize())
+	return fi.Size()
 }
 
-// parseProcStatRSS extracts RSS from a /proc/<pid>/stat line (field 24;
-// split after the parenthesized comm, which may contain spaces).
 func parseProcStatRSS(s string, pageSize int) int64 {
-	idx := strings.LastIndex(s, ")")
-	if idx < 0 || idx+2 >= len(s) {
-		return 0
-	}
-	fields := strings.Fields(s[idx+2:])
+	fields := procStatFields(s)
 	if len(fields) < 22 {
 		return 0
 	}

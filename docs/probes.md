@@ -25,11 +25,11 @@ The `probes/` package owns that loop:
       all firewall profiles), and it decouples readiness from specific
       services so the same probe works for Linux and Windows guests alike.
 
-   `os=macos` pods get a different closure: their `probe-port` annotation
-   is only a slot allocation (it derives the VNC display), and the probe
-   dials the guest's own sshd on `:22`, requiring the `SSH-` banner — a
-   cold macOS boot takes minutes and its DHCP lease appears long before
-   sshd answers.
+   `os=macos` pods get a different closure: the probe dials the guest's
+   own sshd on `:22`, requiring the `SSH-` banner — a cold macOS boot
+   takes minutes and its DHCP lease appears long before sshd answers —
+   and, on finding the QEMU process dead, restarts the record in place
+   (rate-limited); nothing else can see a crashed QEMU guest.
 2. The first probe runs **synchronously inside `Start`** so the
    refreshStatus/notify pass that `CreatePod` does before returning
    already reflects the initial reachability decision.

@@ -43,9 +43,8 @@ const (
 	macosDefaultCPUs  = 4
 	macosDefaultMemMB = 8192
 
-	// macosDefaultProbeSlot: no slot annotated → display 22 → VNC port 5922.
-	macosDefaultProbeSlot = 2222
-	macosVNCPortBase      = 5900
+	macosVNCPortBase = 5900
+	macosVNCPortSpan = 100
 
 	// macosCNIBridge is the cocoon-net host bridge cloud-hypervisor VMs use.
 	macosCNIBridge = "cni0"
@@ -71,17 +70,48 @@ func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervis
 
 func (p *Provider) macosBridge() string { return cmp.Or(p.MacosBridge, macosCNIBridge) }
 
-// macosVNCDisplay maps the per-node probe-port slot (readiness itself probes
-// the guest's sshd on :22) to a VNC display: slots come from a contiguous
-// range narrower than 100, so mod-100 stays collision-free per node.
-func macosVNCDisplay(spec meta.VMSpec) int {
-	slot := macosDefaultProbeSlot
-	if raw := strings.TrimSpace(spec.ProbePort); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 65535 {
-			slot = v
+// claimMacosVNCPort reserves a node-unique VNC host port for key, preferring
+// a previously published port while it is still free; 0 means exhausted (VNC off).
+func (p *Provider) claimMacosVNCPort(key string, preferred int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if port, ok := p.macosVNC[key]; ok {
+		return port
+	}
+	used := make(map[int]bool, len(p.macosVNC))
+	for _, port := range p.macosVNC {
+		used[port] = true
+	}
+	if preferred >= macosVNCPortBase && preferred < macosVNCPortBase+macosVNCPortSpan && !used[preferred] {
+		p.macosVNC[key] = preferred
+		return preferred
+	}
+	for d := range macosVNCPortSpan {
+		if port := macosVNCPortBase + d; !used[port] {
+			p.macosVNC[key] = port
+			return port
 		}
 	}
-	return slot % 100
+	return 0
+}
+
+// adoptMacosVNCPort records the display a live guest actually serves.
+func (p *Provider) adoptMacosVNCPort(key string, rec *macosVMRecord) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if rec.VNC < 0 {
+		delete(p.macosVNC, key)
+		return 0
+	}
+	port := macosVNCPortBase + rec.VNC
+	p.macosVNC[key] = port
+	return port
+}
+
+func (p *Provider) macosVNCPortFor(key string) int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.macosVNC[key]
 }
 
 func macosCPUs(pod *corev1.Pod) int {
@@ -112,13 +142,15 @@ type macosVMRecord struct {
 	PID   int    `json:"pid"`
 	MAC   string `json:"mac"`
 	Tap   string `json:"tap"`
+	Disk  string `json:"disk"`
+	VNC   int    `json:"vnc"` // display number; -1 = off
 }
 
 func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
 	if rec == nil {
 		return
 	}
-	v.PID, v.MAC = rec.PID, rec.MAC
+	v.PID, v.MAC, v.DiskPath = rec.PID, rec.MAC, rec.Disk
 	if rec.Tap != "" {
 		v.NetworkConfigs = []*vm.NetworkConfig{{Tap: rec.Tap, MAC: rec.MAC}}
 	}
@@ -133,8 +165,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 			fmt.Errorf("macos pod %s missing %s annotation", key, meta.AnnotationImage))
 	}
-	disp := macosVNCDisplay(spec)
-	logger.Infof(ctx, "%s: macOS dispatch vm=%s image=%s vnc=%d", key, spec.VMName, spec.Image, macosVNCPortBase+disp)
+	logger.Infof(ctx, "%s: macOS dispatch vm=%s image=%s", key, spec.VMName, spec.Image)
 
 	if p.macosAlreadyTracked(key, spec.VMName) {
 		logger.Infof(ctx, "%s: macOS VM %s already tracked; adopting duplicate CreatePod", key, spec.VMName)
@@ -148,32 +179,32 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		return nil
 	}
 
+	preferred := int(meta.ParseVMRuntime(pod).VNCPort)
+	var port int
 	rec := p.macosInspect(ctx, spec.VMName)
 	switch {
 	case rec != nil && p.macosProcessAlive(rec.PID):
+		port = p.adoptMacosVNCPort(key, rec)
 		logger.Infof(ctx, "%s: adopting live macOS VM %s (pid %d)", key, spec.VMName, rec.PID)
 	case rec != nil:
+		port = p.claimMacosVNCPort(key, preferred)
 		logger.Infof(ctx, "%s: macOS VM %s record exists but process is dead — `vm start`", key, spec.VMName)
-		// VNC is launch-scoped in cocoon-macos (a bare `vm start` disables it),
-		// so re-assert the display the annotation advertises.
-		if out, err := p.macosExec(ctx, "vm", "start", "--vnc", strconv.Itoa(disp), spec.VMName); err != nil {
+		if out, err := p.startMacosVM(ctx, spec.VMName, port); err != nil {
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm start %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
 		rec = p.macosInspect(ctx, spec.VMName)
 	default:
+		port = p.claimMacosVNCPort(key, preferred)
 		if err := p.ensureMacosImage(ctx, spec.Image); err != nil {
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed", err)
 		}
-		args := []string{
+		args := appendMacosVNCArg([]string{
 			"vm", "run", "--name", spec.VMName,
 			"--cpus", strconv.Itoa(macosCPUs(pod)),
 			"--memory", strconv.Itoa(macosMemMB(pod)),
-			"--vnc", strconv.Itoa(disp),
-			"--random-smbios",
-			"--net", "tap", "--bridge", p.macosBridge(),
-			spec.Image,
-		}
+		}, port)
+		args = append(args, "--random-smbios", "--net", "tap", "--bridge", p.macosBridge(), spec.Image)
 		if out, err := p.macosExec(ctx, args...); err != nil {
 			// A failed inspect above is indistinguishable from a missing record,
 			// so this `vm run` may have merely collided with a live same-name
@@ -181,10 +212,10 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm run %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
-		logger.Infof(ctx, "%s: launched macOS VM %s (bridge=%s, vnc=%d)", key, spec.VMName, p.macosBridge(), macosVNCPortBase+disp)
+		logger.Infof(ctx, "%s: launched macOS VM %s (bridge=%s, vnc=%d)", key, spec.VMName, p.macosBridge(), port)
 		rec = p.macosInspect(ctx, spec.VMName)
 	}
-	p.registerMacosVM(ctx, pod, spec, rec)
+	p.registerMacosVM(ctx, pod, spec, rec, port)
 
 	p.mu.Lock()
 	pod.Status.Phase = corev1.PodRunning
@@ -208,7 +239,7 @@ func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 
 // registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and
 // starts the SSH readiness probe.
-func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord) {
+func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) {
 	v := &vm.VM{
 		ID:         macosVMID(spec.VMName),
 		Name:       spec.VMName,
@@ -221,7 +252,7 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 	rt := meta.VMRuntime{
 		VMID:    v.ID,
 		IP:      p.resolveVMIP(pod.Namespace, pod.Name, v),
-		VNCPort: int32(macosVNCPortBase + macosVNCDisplay(spec)), //nolint:gosec // display is bounded 0..99 by macosVNCDisplay
+		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
 	if rt.IP == "" {
 		// No lease yet (restart adoption): keep the pre-restart address; the
@@ -244,7 +275,7 @@ func (p *Provider) startMacosProbe(pod *corev1.Pod) {
 // appears minutes before sshd on a cold boot, so the two waits stay distinct.
 func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 	// Goroutine-confined: the probes.Manager runs one probe at a time per agent.
-	var lastInspect time.Time
+	var lastInspect, lastRestart time.Time
 	return func(ctx context.Context) (bool, string) {
 		v := p.vmForPod(namespace, name)
 		if v == nil {
@@ -262,6 +293,21 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 			if v == nil || v.MAC == "" {
 				return false, "waiting for vm record"
 			}
+		}
+		if v.PID > 0 && !p.macosProcessAlive(v.PID) {
+			// The CH event stream and orphan scan cannot see QEMU guests, so a
+			// crash is repaired here or never.
+			if time.Since(lastRestart) < macosInspectRetryEvery {
+				return false, "qemu process dead"
+			}
+			lastRestart = time.Now()
+			if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
+				return false, "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
+			}
+			if rec := p.macosInspect(ctx, v.Name); rec != nil {
+				p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+			}
+			return false, "qemu restarted"
 		}
 		ip := p.resolveVMIP(namespace, name, v)
 		if ip == "" {
@@ -371,7 +417,7 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	// Seed before the probe's first run: it may flip Ready, and a later seed
 	// would overwrite that with the pod's pre-restart annotation.
 	p.seedLifecycleIntentFromPod(pod)
-	p.registerMacosVM(ctx, pod, spec, rec)
+	p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec))
 }
 
 // ensureMacosImage materializes the image in the node-local cocoon-macos store.
@@ -407,11 +453,24 @@ func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMReco
 	if err != nil {
 		return nil
 	}
-	var rec macosVMRecord
+	rec := macosVMRecord{VNC: -1}
 	if json.Unmarshal([]byte(out), &rec) != nil || strings.TrimSpace(rec.Name) == "" {
 		return nil
 	}
 	return &rec
+}
+
+// startMacosVM boots a dead record, re-asserting the VNC display (launch-scoped
+// in cocoon-macos, a bare `vm start` disables it); port 0 leaves VNC off.
+func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (string, error) {
+	return p.macosExec(ctx, append(appendMacosVNCArg([]string{"vm", "start"}, port), vmName)...)
+}
+
+func appendMacosVNCArg(args []string, port int) []string {
+	if port != 0 {
+		args = append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase))
+	}
+	return args
 }
 
 // macosExec runs a cocoon-macos subcommand. `vm run`/`vm start` detach from

@@ -22,7 +22,9 @@ const macosInspectJSON = `{
 	"image": "macos-tahoe-26-img",
 	"pid": 4242,
 	"mac": "52:54:00:12:34:56",
-	"tap": "bt12345678-0"
+	"tap": "bt12345678-0",
+	"disk": "/var/lib/cocoon-macos/vms/macos-demo/disk.qcow2",
+	"vnc": 7
 }`
 
 func TestIsMacosSpec(t *testing.T) {
@@ -34,20 +36,26 @@ func TestIsMacosSpec(t *testing.T) {
 	}
 }
 
-func TestMacosVNCDisplay(t *testing.T) {
-	for _, tc := range []struct {
-		slot string
-		want int
-	}{
-		{"2275", 75},
-		{"", 22},      // default slot 2222
-		{"2200", 0},   // x00 slot maps to display 0 (port 5900); mod-100 stays injective
-		{"abc", 22},   // unparseable falls back to the default slot
-		{"70000", 22}, // out of range
-	} {
-		if got := macosVNCDisplay(meta.VMSpec{ProbePort: tc.slot}); got != tc.want {
-			t.Errorf("macosVNCDisplay(%q) = %d, want %d", tc.slot, got, tc.want)
-		}
+func TestClaimMacosVNCPort(t *testing.T) {
+	p := newTestProvider(t)
+	if got := p.claimMacosVNCPort("ns/a", 0); got != 5900 {
+		t.Errorf("first claim = %d, want 5900", got)
+	}
+	if got := p.claimMacosVNCPort("ns/b", 0); got != 5901 {
+		t.Errorf("second claim = %d, want 5901", got)
+	}
+	if got := p.claimMacosVNCPort("ns/a", 0); got != 5900 {
+		t.Errorf("replayed claim = %d, want idempotent 5900", got)
+	}
+	if got := p.claimMacosVNCPort("ns/c", 5950); got != 5950 {
+		t.Errorf("preferred free port = %d, want 5950", got)
+	}
+	if got := p.claimMacosVNCPort("ns/d", 5950); got != 5902 {
+		t.Errorf("preferred taken port = %d, want next free 5902", got)
+	}
+	p.forgetPod("ns", "a")
+	if got := p.claimMacosVNCPort("ns/e", 0); got != 5900 {
+		t.Errorf("claim after release = %d, want freed 5900", got)
 	}
 }
 
@@ -70,7 +78,7 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 		"--name macos-demo",
 		"--cpus 4",
 		"--memory 8192",
-		"--vnc 75",
+		"--vnc 0",
 		"--random-smbios",
 		"--net tap --bridge cni0",
 	} {
@@ -108,8 +116,8 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	if got.Annotations[meta.AnnotationVMID] != "qemu-macos-demo" {
 		t.Errorf("VMID annotation = %q", got.Annotations[meta.AnnotationVMID])
 	}
-	if got.Annotations[meta.AnnotationVNCPort] != "5975" {
-		t.Errorf("VNC port annotation = %q, want 5975", got.Annotations[meta.AnnotationVNCPort])
+	if got.Annotations[meta.AnnotationVNCPort] != "5900" {
+		t.Errorf("VNC port annotation = %q, want 5900", got.Annotations[meta.AnnotationVNCPort])
 	}
 	// Ready is deferred to the SSH probe, so lifecycle must still be creating.
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateCreating {
@@ -152,8 +160,19 @@ func TestCreateMacosPodAdoptsLiveVM(t *testing.T) {
 	if v == nil || v.PID != 4242 || v.MAC != "52:54:00:12:34:56" {
 		t.Fatalf("adopted VM record incomplete: %+v", v)
 	}
+	if v.DiskPath != "/var/lib/cocoon-macos/vms/macos-demo/disk.qcow2" {
+		t.Errorf("adopted VM missing disk path: %q", v.DiskPath)
+	}
 	if len(v.NetworkConfigs) != 1 || v.NetworkConfigs[0].Tap != "bt12345678-0" {
 		t.Fatalf("adopted VM missing tap network config: %+v", v.NetworkConfigs)
+	}
+	got, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	// The live guest's own display (record vnc=7) wins over fresh allocation.
+	if got.Annotations[meta.AnnotationVNCPort] != "5907" {
+		t.Errorf("VNC port annotation = %q, want adopted 5907", got.Annotations[meta.AnnotationVNCPort])
 	}
 }
 
@@ -161,8 +180,15 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.macosProcessAliveFn = func(int) bool { return false }
-	calls := stubMacosExec(p, inspectOnlyHandler)
+	started := false
+	p.macosProcessAliveFn = func(int) bool { return started }
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		if macosCallIs(args, "vm", "start") {
+			started = true
+			return "macos-demo (pid 4242)\n", nil
+		}
+		return inspectOnlyHandler(args)
+	})
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("CreatePod: %v", err)
@@ -174,11 +200,81 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	}
 	// VNC is launch-scoped in cocoon-macos: a bare `vm start` disables it while
 	// the vnc-port annotation still advertises the display.
-	if joined := strings.Join(starts[0], " "); !strings.Contains(joined, "--vnc 75") {
+	if joined := strings.Join(starts[0], " "); !strings.Contains(joined, "--vnc 0") {
 		t.Errorf("`vm start` must re-assert the VNC display, got: %s", joined)
 	}
 	if len(macosCallsWithPrefix(all, "vm", "run")) != 0 {
 		t.Fatalf("dead record must not relaunch via `vm run` (disk corruption), got %v", all)
+	}
+}
+
+func TestCreateMacosPodsAllocateDistinctVNCPorts(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	spec2 := macosSpec()
+	spec2.VMName = "macos-demo-2"
+	pod2 := newPodWithSpec(spec2)
+	pod2.Name = "demo-1"
+	p.Clientset = fake.NewSimpleClientset(pod, pod2)
+	calls := stubMacosExec(p, freshCreateHandler)
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("first CreatePod: %v", err)
+	}
+	if err := p.CreatePod(t.Context(), pod2); err != nil {
+		t.Fatalf("second CreatePod: %v", err)
+	}
+	runs := macosCallsWithPrefix(calls(), "vm", "run")
+	if len(runs) != 2 {
+		t.Fatalf("want 2 vm runs, got %v", runs)
+	}
+	first, second := strings.Join(runs[0], " "), strings.Join(runs[1], " ")
+	if !strings.Contains(first, "--vnc 0") || !strings.Contains(second, "--vnc 1") {
+		t.Fatalf("same-node guests must get distinct displays:\n %s\n %s", first, second)
+	}
+}
+
+func TestMacosProbeRestartsDeadQemu(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.macosProcessAliveFn = func(pid int) bool { return pid == 4243 }
+	started := false
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		switch {
+		case macosCallIs(args, "vm", "start"):
+			started = true
+			return "macos-demo (pid 4243)\n", nil
+		case macosCallIs(args, "vm", "inspect"):
+			if started {
+				return strings.Replace(macosInspectJSON, "4242", "4243", 1), nil
+			}
+			return macosInspectJSON, nil
+		default:
+			return "", nil
+		}
+	})
+	p.trackPod(pod, &vm.VM{
+		ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor,
+		State: vm.StateRunning, PID: 4242, MAC: "52:54:00:12:34:56",
+	})
+
+	probe := p.buildMacosProbe("ns", "demo-0")
+	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "restarted") {
+		t.Fatalf("dead qemu must trigger a restart, got ready=%v msg=%q", ready, msg)
+	}
+	if starts := macosCallsWithPrefix(calls(), "vm", "start"); len(starts) != 1 {
+		t.Fatalf("want one vm start, got %v", starts)
+	}
+	if v := p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4243 {
+		t.Fatalf("record not refreshed after restart: %+v", v)
+	}
+	// Alive again: the next tick moves on to lease resolution, no second start.
+	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "lease") {
+		t.Fatalf("restarted guest should wait for its lease, got ready=%v msg=%q", ready, msg)
+	}
+	if starts := macosCallsWithPrefix(calls(), "vm", "start"); len(starts) != 1 {
+		t.Fatalf("live guest must not be restarted again, got %v", starts)
 	}
 }
 

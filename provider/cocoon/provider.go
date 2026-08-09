@@ -105,6 +105,7 @@ type Provider struct {
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
 	vmsByName      map[string]*vm.VM
+	macosVNC       map[string]int       // key=pod, node-unique VNC host-port reservations for macOS guests
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
@@ -158,6 +159,7 @@ func NewProvider(ctx context.Context) *Provider {
 		pods:             map[string]*corev1.Pod{},
 		vmsByPod:         map[string]*vm.VM{},
 		vmsByName:        map[string]*vm.VM{},
+		macosVNC:         map[string]int{},
 		lastRestart:      map[string]time.Time{},
 		pendingRecheck:   map[string]struct{}{},
 		resumedOps:       map[string]struct{}{},
@@ -335,6 +337,7 @@ func (p *Provider) untrackPod(key string) {
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
+	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
 	delete(p.lifecycleFlushed, key)
 	p.mu.Unlock()
