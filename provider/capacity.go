@@ -96,6 +96,54 @@ func StorageBytes() (total, available int64) {
 	return statTotalBytes(stat), statAvailBytes(stat)
 }
 
+// ReadKeyedProcFile reads the named "Key: value" fields from path (e.g.
+// /proc/meminfo, /proc/<pid>/status) in a single pass, in native unit (kB).
+func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
+	f, err := os.Open(path) //nolint:gosec // path is a fixed /proc file, never user input
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
+
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[n] = true
+	}
+	result := make(map[string]int64, len(names))
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		// Key test on raw bytes keeps non-matching lines allocation-free on the per-pod stats path.
+		rawKey, rest, ok := bytes.Cut(scanner.Bytes(), []byte(":"))
+		if !ok || !want[string(rawKey)] {
+			continue
+		}
+		key := string(rawKey)
+		parts := strings.Fields(string(rest))
+		if len(parts) < 1 {
+			continue
+		}
+		v, parseErr := strconv.ParseInt(parts[0], 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("%s: parse %s: %w", path, key, parseErr)
+		}
+		result[key] = v
+		if len(result) == len(want) {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(result) != len(want) {
+		for _, n := range names {
+			if _, ok := result[n]; !ok {
+				return nil, fmt.Errorf("%s: %s not found", path, n)
+			}
+		}
+	}
+	return result, nil
+}
+
 func reserveQuantity(q resource.Quantity, pct int) resource.Quantity {
 	v := q.Value()
 	alloc := v * int64(100-pct) / 100
@@ -173,54 +221,6 @@ func detectStorageOrOverride() (total, avail resource.Quantity, err error) {
 	totalQ := *resource.NewQuantity(statTotalBytes(stat), resource.BinarySI)
 	availQ := *resource.NewQuantity(statAvailBytes(stat), resource.BinarySI)
 	return totalQ, availQ, nil
-}
-
-// ReadKeyedProcFile reads the named "Key: value" fields from path (e.g.
-// /proc/meminfo, /proc/<pid>/status) in a single pass, in native unit (kB).
-func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
-	f, err := os.Open(path) //nolint:gosec // path is a fixed /proc file, never user input
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close() //nolint:errcheck // read-only file handle, close error is informational
-
-	want := make(map[string]bool, len(names))
-	for _, n := range names {
-		want[n] = true
-	}
-	result := make(map[string]int64, len(names))
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		// Key test on raw bytes keeps non-matching lines allocation-free on the per-pod stats path.
-		rawKey, rest, ok := bytes.Cut(scanner.Bytes(), []byte(":"))
-		if !ok || !want[string(rawKey)] {
-			continue
-		}
-		key := string(rawKey)
-		parts := strings.Fields(string(rest))
-		if len(parts) < 1 {
-			continue
-		}
-		v, parseErr := strconv.ParseInt(parts[0], 10, 64)
-		if parseErr != nil {
-			return nil, fmt.Errorf("%s: parse %s: %w", path, key, parseErr)
-		}
-		result[key] = v
-		if len(result) == len(want) {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	if len(result) != len(want) {
-		for _, n := range names {
-			if _, ok := result[n]; !ok {
-				return nil, fmt.Errorf("%s: %s not found", path, n)
-			}
-		}
-	}
-	return result, nil
 }
 
 func parseQuantityEnv(key, fallback string) (resource.Quantity, error) {

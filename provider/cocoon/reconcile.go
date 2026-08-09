@@ -99,8 +99,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		probePods = append(probePods, pod)
 	}
 	// First probes run synchronously (3s worst case each) and this path
-	// gates node registration — start them bounded-parallel. macOS adoption
-	// also inspects and patches per pod, so it fans out the same way.
+	// gates node registration — start them bounded-parallel.
 	fanOut(startupFanOut, probePods, p.startProbeIfEnabled)
 	fanOut(startupFanOut, macosPods, func(pod *corev1.Pod) {
 		p.reconcileMacosPod(ctx, pod, meta.ParseVMSpec(pod))

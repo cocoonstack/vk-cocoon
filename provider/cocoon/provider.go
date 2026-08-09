@@ -82,8 +82,8 @@ type Provider struct {
 	Clientset kubernetes.Interface
 	Runtime   vm.Runtime
 	// MacosBin is the cocoon-macos binary os=macos pods dispatch to;
-	// empty falls back to defaultMacosBinary. MacosBridge is the host
-	// bridge their tap NICs join; empty falls back to macosCNIBridge.
+	// MacosBridge is the host bridge their tap NICs join. Empty values
+	// fall back to defaultMacosBinary / macosCNIBridge.
 	MacosBin     string
 	MacosBridge  string
 	Puller       *snapshots.Puller

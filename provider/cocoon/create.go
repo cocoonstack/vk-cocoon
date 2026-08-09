@@ -55,16 +55,15 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.trackPod(pod, nil)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
-	// os=macos dispatches to the standalone cocoon-macos QEMU backend before
-	// any cloud-hypervisor machinery (adopt-by-name, hibernate evidence,
-	// snapshot pull) runs; none of it applies to a QEMU guest.
+	// Dispatch before any cloud-hypervisor machinery (adopt-by-name, hibernate
+	// evidence, snapshot pull) runs; none of it applies to a QEMU guest.
 	if isMacosSpec(spec) {
 		return p.createMacosPod(ctx, pod, spec)
 	}
 
-	// A macOS-owned name must not be adopted through the CH path (its probe and
-	// lifecycle verbs would misfire); only createMacosPod may bind it.
-	if existing := p.vmByName(spec.VMName); existing != nil && existing.Hypervisor != macosHypervisor {
+	// A macOS-owned name must not be adopted through the CH path (its probe
+	// and lifecycle verbs would misfire); only createMacosPod may bind it.
+	if existing := p.vmByName(spec.VMName); existing != nil && !isMacosVM(existing) {
 		p.applyRuntime(ctx, pod, existing)
 		p.trackPod(pod, existing)
 		p.startProbeIfEnabled(pod)
@@ -510,8 +509,7 @@ func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) 
 }
 
 // applyVMRuntime is the shared write path for the runtime-annotation
-// contract; a zero VNCPort is omitted both in memory (VMRuntime.Apply) and
-// from the patch.
+// contract; a zero VNCPort is omitted in memory and from the patch.
 func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.VMRuntime) {
 	p.mu.Lock()
 	rt.Apply(pod)
@@ -537,8 +535,7 @@ func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
 		p.buildOnUpdate(pod.Namespace, pod.Name))
 }
 
-// startProbe registers the per-pod readiness agent; nil Probes is the
-// no-probe mode.
+// startProbe registers the per-pod readiness agent; nil Probes disables probing.
 func (p *Provider) startProbe(pod *corev1.Pod, probe probes.Probe, onUpdate probes.OnUpdate) {
 	if p.Probes == nil || pod.DeletionTimestamp != nil {
 		return

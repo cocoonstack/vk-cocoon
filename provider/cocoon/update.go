@@ -59,8 +59,8 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
-	// os=macos: hibernate cannot apply (cocoon-macos snapshots are offline
-	// disk snapshots); every other update is an annotation echo.
+	// os=macos: hibernate cannot apply (offline disk snapshots); every other
+	// update is an annotation echo.
 	if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
 		if meta.ReadHibernateState(pod) {
 			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)

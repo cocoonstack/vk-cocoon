@@ -14,23 +14,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/snapshot"
 )
 
-// newStagingDir creates a fresh dir under root. root MUST share a filesystem
-// with cocoon's data dir: clone hardlinks memory files, and the cross-device
-// fallback is a symlink the staging delete would break.
-func newStagingDir(root, localName string) (string, error) {
-	if root == "" {
-		return "", errors.New("staging root is not configured")
-	}
-	if err := os.MkdirAll(root, 0o750); err != nil {
-		return "", fmt.Errorf("create staging root: %w", err)
-	}
-	dir, err := os.MkdirTemp(root, sanitizeStagingPrefix(localName)+"-")
-	if err != nil {
-		return "", fmt.Errorf("create staging dir: %w", err)
-	}
-	return dir, nil
-}
-
 // SweepStaging removes every entry under root at startup — leftovers are
 // crashed restores, re-pullable by construction.
 func SweepStaging(ctx context.Context, root string) {
@@ -50,6 +33,23 @@ func SweepStaging(ctx context.Context, root string) {
 		}
 		logger.Infof(ctx, "removed stale staging entry %s", p)
 	}
+}
+
+// newStagingDir creates a fresh dir under root. root MUST share a filesystem
+// with cocoon's data dir: clone hardlinks memory files, and the cross-device
+// fallback is a symlink the staging delete would break.
+func newStagingDir(root, localName string) (string, error) {
+	if root == "" {
+		return "", errors.New("staging root is not configured")
+	}
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return "", fmt.Errorf("create staging root: %w", err)
+	}
+	dir, err := os.MkdirTemp(root, sanitizeStagingPrefix(localName)+"-")
+	if err != nil {
+		return "", fmt.Errorf("create staging dir: %w", err)
+	}
+	return dir, nil
 }
 
 func sanitizeStagingPrefix(name string) string {
