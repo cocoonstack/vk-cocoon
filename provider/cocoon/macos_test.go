@@ -16,15 +16,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-func macosSpec() meta.VMSpec {
-	return meta.VMSpec{
-		VMName:    "macos-demo",
-		Image:     "macos-tahoe-26-img",
-		OS:        string(cocoonv1.OSMacos),
-		ProbePort: "2275",
-	}
-}
-
 const macosInspectJSON = `{
 	"name": "macos-demo",
 	"image": "macos-tahoe-26-img",
@@ -32,33 +23,6 @@ const macosInspectJSON = `{
 	"mac": "52:54:00:12:34:56",
 	"tap": "bt12345678-0"
 }`
-
-// stubMacosExec records every cocoon-macos dispatch and answers via handler.
-func stubMacosExec(p *Provider, handler func(args []string) (string, error)) func() [][]string {
-	var mu sync.Mutex
-	var calls [][]string
-	p.macosExecFn = func(_ context.Context, args ...string) (string, error) {
-		mu.Lock()
-		calls = append(calls, args)
-		mu.Unlock()
-		return handler(args)
-	}
-	return func() [][]string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([][]string(nil), calls...)
-	}
-}
-
-func macosCallsWithPrefix(calls [][]string, verb, sub string) [][]string {
-	var out [][]string
-	for _, c := range calls {
-		if len(c) >= 2 && c[0] == verb && c[1] == sub {
-			out = append(out, c)
-		}
-	}
-	return out
-}
 
 func TestIsMacosSpec(t *testing.T) {
 	if !isMacosSpec(meta.VMSpec{OS: "macos"}) || !isMacosSpec(meta.VMSpec{OS: "MacOS"}) {
@@ -76,9 +40,9 @@ func TestMacosVNCDisplay(t *testing.T) {
 	}{
 		{"2275", 75},
 		{"", 22},      // default slot 2222
-		{"2200", 1},   // last-two-digits 0 must not collide on display 0
+		{"2200", 0},   // x00 slot maps to display 0 (port 5900); mod-100 stays injective
 		{"abc", 22},   // unparseable falls back to the default slot
-		{"70000", 22}, /* out of range */
+		{"70000", 22}, // out of range
 	} {
 		if got := macosVNCDisplay(meta.VMSpec{ProbePort: tc.slot}); got != tc.want {
 			t.Errorf("macosVNCDisplay(%q) = %d, want %d", tc.slot, got, tc.want)
@@ -92,11 +56,11 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	calls := stubMacosExec(p, func(args []string) (string, error) {
 		switch {
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "inspect":
+		case macosCallIs(args, "vm", "inspect"):
 			return "", errors.New("no record")
-		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+		case macosCallIs(args, "image", "inspect"):
 			return "{}", nil // image already in the local store
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "run":
+		case macosCallIs(args, "vm", "run"):
 			return "macos-demo (pid 4242)\n", nil
 		default:
 			return "", nil
@@ -169,11 +133,11 @@ func TestCreateMacosPodSkipsDuplicateRun(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	calls := stubMacosExec(p, func(args []string) (string, error) {
 		switch {
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "inspect":
+		case macosCallIs(args, "vm", "inspect"):
 			return "", errors.New("no record")
-		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+		case macosCallIs(args, "image", "inspect"):
 			return "{}", nil
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "run":
+		case macosCallIs(args, "vm", "run"):
 			return "macos-demo (pid 4242)\n", nil
 		default:
 			return "", nil
@@ -197,7 +161,7 @@ func TestCreateMacosPodAdoptsLiveVM(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
 	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if len(args) >= 2 && args[0] == "vm" && args[1] == "inspect" {
+		if macosCallIs(args, "vm", "inspect") {
 			return macosInspectJSON, nil
 		}
 		return "", nil
@@ -225,7 +189,7 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.macosProcessAliveFn = func(int) bool { return false }
 	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if len(args) >= 2 && args[0] == "vm" && args[1] == "inspect" {
+		if macosCallIs(args, "vm", "inspect") {
 			return macosInspectJSON, nil
 		}
 		return "", nil
@@ -235,8 +199,14 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 		t.Fatalf("CreatePod: %v", err)
 	}
 	all := calls()
-	if len(macosCallsWithPrefix(all, "vm", "start")) != 1 {
+	starts := macosCallsWithPrefix(all, "vm", "start")
+	if len(starts) != 1 {
 		t.Fatalf("dead record must dispatch `vm start`, got %v", all)
+	}
+	// VNC is launch-scoped in cocoon-macos: a bare `vm start` disables it while
+	// the vnc-port annotation still advertises the display.
+	if joined := strings.Join(starts[0], " "); !strings.Contains(joined, "--vnc 75") {
+		t.Errorf("`vm start` must re-assert the VNC display, got: %s", joined)
 	}
 	if len(macosCallsWithPrefix(all, "vm", "run")) != 0 {
 		t.Fatalf("dead record must not relaunch via `vm run` (disk corruption), got %v", all)
@@ -249,11 +219,11 @@ func TestCreateMacosPodRunFailureKeepsSameNameVM(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset(pod)
 	calls := stubMacosExec(p, func(args []string) (string, error) {
 		switch {
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "inspect":
+		case macosCallIs(args, "vm", "inspect"):
 			return "", errors.New("transient inspect failure")
-		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+		case macosCallIs(args, "image", "inspect"):
 			return "{}", nil
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "run":
+		case macosCallIs(args, "vm", "run"):
 			return "macOS VM macos-demo already exists", errors.New("exit status 1")
 		default:
 			return "", nil
@@ -284,17 +254,17 @@ func TestCreateMacosPodAutoPullsWhenImageMissing(t *testing.T) {
 	pulled := false
 	calls := stubMacosExec(p, func(args []string) (string, error) {
 		switch {
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "inspect":
+		case macosCallIs(args, "vm", "inspect"):
 			return "", errors.New("no record")
-		case len(args) >= 2 && args[0] == "image" && args[1] == "inspect":
+		case macosCallIs(args, "image", "inspect"):
 			if pulled {
 				return "{}", nil
 			}
 			return "", errors.New("image not found")
-		case len(args) >= 2 && args[0] == "image" && args[1] == "pull":
+		case macosCallIs(args, "image", "pull"):
 			pulled = true
 			return "pulled macos-tahoe-26-img", nil
-		case len(args) >= 2 && args[0] == "vm" && args[1] == "run":
+		case macosCallIs(args, "vm", "run"):
 			return "macos-demo (pid 4242)\n", nil
 		default:
 			return "", nil
@@ -318,12 +288,10 @@ func TestCreateMacosPodFailsWhenAutoPullFails(t *testing.T) {
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
 	stubMacosExec(p, func(args []string) (string, error) {
-		switch {
-		case len(args) >= 2 && args[0] == "image" && args[1] == "pull":
+		if macosCallIs(args, "image", "pull") {
 			return "registry unreachable", errors.New("exit status 1")
-		default:
-			return "", errors.New("not found")
 		}
+		return "", errors.New("not found")
 	})
 
 	err := p.CreatePod(t.Context(), pod)
@@ -401,7 +369,7 @@ func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	p.Runtime = &fakeRuntime{}
 	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
 	calls := stubMacosExec(p, func(args []string) (string, error) {
-		if len(args) >= 2 && args[0] == "vm" && args[1] == "inspect" {
+		if macosCallIs(args, "vm", "inspect") {
 			return macosInspectJSON, nil
 		}
 		return "", nil
@@ -420,4 +388,44 @@ func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	if p.Probes.Get(meta.PodKey("ns", "demo-0")).LastSeen.IsZero() {
 		t.Fatal("readiness probe not started for the adopted macOS pod")
 	}
+}
+
+func macosSpec() meta.VMSpec {
+	return meta.VMSpec{
+		VMName:    "macos-demo",
+		Image:     "macos-tahoe-26-img",
+		OS:        string(cocoonv1.OSMacos),
+		ProbePort: "2275",
+	}
+}
+
+// stubMacosExec records every cocoon-macos dispatch and answers via handler.
+func stubMacosExec(p *Provider, handler func(args []string) (string, error)) func() [][]string {
+	var mu sync.Mutex
+	var calls [][]string
+	p.macosExecFn = func(_ context.Context, args ...string) (string, error) {
+		mu.Lock()
+		calls = append(calls, args)
+		mu.Unlock()
+		return handler(args)
+	}
+	return func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([][]string(nil), calls...)
+	}
+}
+
+func macosCallIs(args []string, verb, sub string) bool {
+	return len(args) >= 2 && args[0] == verb && args[1] == sub
+}
+
+func macosCallsWithPrefix(calls [][]string, verb, sub string) [][]string {
+	var out [][]string
+	for _, c := range calls {
+		if macosCallIs(c, verb, sub) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

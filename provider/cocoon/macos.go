@@ -71,12 +71,9 @@ func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervis
 
 func (p *Provider) macosBridge() string { return cmp.Or(p.MacosBridge, macosCNIBridge) }
 
-// macosVNCDisplay maps the per-node probe-port slot to a VNC display so two
-// macOS guests on one node never collide on the VNC host port (5900+display).
-// For macOS pods the probe-port annotation is a slot allocation, not a guest
-// port to dial — readiness always probes the guest's own sshd on :22. Slot
-// allocators hand out per-node-unique ports, so the last two digits are a
-// stable, collision-free display in practice.
+// macosVNCDisplay maps the per-node probe-port slot (readiness itself probes
+// the guest's sshd on :22) to a VNC display: slots come from a contiguous
+// range narrower than 100, so mod-100 stays collision-free per node.
 func macosVNCDisplay(spec meta.VMSpec) int {
 	slot := macosDefaultProbeSlot
 	if raw := strings.TrimSpace(spec.ProbePort); raw != "" {
@@ -84,11 +81,7 @@ func macosVNCDisplay(spec meta.VMSpec) int {
 			slot = v
 		}
 	}
-	d := slot % 100
-	if d <= 0 {
-		d = 1
-	}
-	return d
+	return slot % 100
 }
 
 func macosCPUs(pod *corev1.Pod) int {
@@ -161,7 +154,9 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		logger.Infof(ctx, "%s: adopting live macOS VM %s (pid %d)", key, spec.VMName, rec.PID)
 	case rec != nil:
 		logger.Infof(ctx, "%s: macOS VM %s record exists but process is dead — `vm start`", key, spec.VMName)
-		if out, err := p.macosExec(ctx, "vm", "start", spec.VMName); err != nil {
+		// VNC is launch-scoped in cocoon-macos (a bare `vm start` disables it),
+		// so re-assert the display the annotation advertises.
+		if out, err := p.macosExec(ctx, "vm", "start", "--vnc", strconv.Itoa(disp), spec.VMName); err != nil {
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm start %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
