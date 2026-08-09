@@ -59,6 +59,17 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
+	// os=macos: hibernate cannot apply (offline disk snapshots); every other
+	// update is an annotation echo.
+	if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
+		if meta.ReadHibernateState(pod) {
+			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)
+			p.failOp(ctx, pod, "HibernateUnsupported", "update", err)
+			return err
+		}
+		return p.noopUpdate(ctx, pod)
+	}
+
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 	haveVM := v != nil
 
@@ -74,13 +85,18 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	default:
-		// Skip refresh+notify so we don't echo the incoming pod back.
-		p.republishLifecycleOnGenerationBump(ctx, pod)
-		metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
-		return nil
+		return p.noopUpdate(ctx, pod)
 	}
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
+	return nil
+}
+
+// noopUpdate republishes lifecycle intent, skipping refresh+notify so the
+// incoming pod is not echoed back.
+func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
+	p.republishLifecycleOnGenerationBump(ctx, pod)
+	metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
 	return nil
 }
 

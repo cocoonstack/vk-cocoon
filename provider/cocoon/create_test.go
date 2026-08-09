@@ -1825,6 +1825,23 @@ type fakeInspectStep struct {
 	err error
 }
 
+type netResizeCall struct {
+	vmID   string
+	target int
+}
+
+type fakeExecCall struct {
+	vmID  string
+	argv  []string
+	env   map[string]string
+	stdin string
+}
+
+type fakeLogsCall struct {
+	vmID string
+	tail int
+}
+
 type fakeRuntime struct {
 	cloned        *vm.CloneOptions
 	ran           *vm.RunOptions
@@ -2091,11 +2108,6 @@ func (f *fakeRuntime) Start(_ context.Context, vmID string) error {
 	return nil
 }
 
-type netResizeCall struct {
-	vmID   string
-	target int
-}
-
 func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -2105,13 +2117,6 @@ func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) er
 		return fmt.Errorf("cocoon vm net %s: vm is not running: vm not running", vmID)
 	}
 	return f.netResizeErr
-}
-
-type fakeExecCall struct {
-	vmID  string
-	argv  []string
-	env   map[string]string
-	stdin string
 }
 
 func (f *fakeRuntime) Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -2140,11 +2145,6 @@ func (f *fakeRuntime) Exec(ctx context.Context, vmID string, argv []string, env 
 		return utilexec.CodeExitError{Err: fmt.Errorf("fake exec: exit %d", f.execExitCode), Code: f.execExitCode}
 	}
 	return nil
-}
-
-type fakeLogsCall struct {
-	vmID string
-	tail int
 }
 
 func (f *fakeRuntime) Logs(_ context.Context, vmID string, tail int) (io.ReadCloser, error) {

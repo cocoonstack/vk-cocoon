@@ -172,6 +172,11 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if pod.DeletionTimestamp != nil || v == nil {
 		return ""
 	}
+	// macOS guests have no CH resume steps (no post-clone, no SAC, no
+	// hibernate); reconcileMacosPod already re-armed their readiness probe.
+	if isMacosVM(v) {
+		return ""
+	}
 	if meta.ReadHibernateState(pod) {
 		return resumeOpHibernate
 	}

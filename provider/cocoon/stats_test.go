@@ -23,6 +23,18 @@ func TestParseProcStatRSSMalformed(t *testing.T) {
 	}
 }
 
+func TestParseProcStatCPUSeconds(t *testing.T) {
+	line := "1234 (qemu (vm) proc) R 1 1 1 0 -1 4194560 100 0 0 0 250 150 0 0 20 0 4 0 12345 999424 512 18446744073709551615"
+	if got := parseProcStatCPUSeconds(line); got != 4 {
+		t.Errorf("cpu seconds = %v, want 4 (utime 250 + stime 150 over USER_HZ)", got)
+	}
+	for _, s := range []string{"", "no comm here", "1 (x) R 1 2 3"} {
+		if got := parseProcStatCPUSeconds(s); got != 0 {
+			t.Errorf("parseProcStatCPUSeconds(%q) = %v, want 0", s, got)
+		}
+	}
+}
+
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
 	seeded := []vmSample{{vmSnapshot: vmSnapshot{VMName: "vk-ns-demo-0"}, cpuSeconds: 7}}

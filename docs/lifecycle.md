@@ -7,7 +7,10 @@ and the hibernate transition.
 
 ## CreatePod
 
-1. Parse `meta.VMSpec` from the pod annotations.
+1. Parse `meta.VMSpec` from the pod annotations. `os=macos` pods branch
+   here to the self-contained cocoon-macos path (see
+   [macOS guests](../README.md#macos-guests)) — the remaining steps are
+   cloud-hypervisor-only.
 2. If a VM with `spec.VMName` already exists locally, adopt it
    (idempotent on restart). Adoption hinges on `StartupReconcile` having
    populated `vmsByName`; before reconcile completes, CreatePod treats
@@ -95,8 +98,8 @@ and the hibernate transition.
 5. Resolve the IP from the cocoon-net JSON lease file by MAC.
 6. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations
    back so the operator and other consumers can pick them up. `VNCPort`
-   is intentionally left unset here — cloud-hypervisor has no VNC server,
-   so only the pre-seeded static-toolbox path ever carries a non-zero
+   stays unset on this path — cloud-hypervisor has no VNC server; the
+   macOS path and the pre-seeded static-toolbox path publish a non-zero
    value.
 7. Launch a per-pod probe agent (see [Readiness probing](probes.md)). The
    agent's first probe runs synchronously so the initial `notify` push
@@ -106,7 +109,8 @@ and the hibernate transition.
 
 ## DeletePod
 
-1. Decode `meta.VMSpec`.
+1. Decode `meta.VMSpec`. `os=macos` pods tear down via
+   `cocoon-macos vm rm` and skip the snapshot logic below.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via
@@ -132,7 +136,9 @@ and the hibernate transition.
 
 The only update vk-cocoon honors is a `HibernateState` transition.
 Anything else is a no-op (the operator deletes and recreates the pod for
-genuine spec changes).
+genuine spec changes). `os=macos` pods reject hibernate outright —
+cocoon-macos snapshots are offline disk snapshots with no live
+save/restore.
 
 | Transition | Behavior |
 |---|---|

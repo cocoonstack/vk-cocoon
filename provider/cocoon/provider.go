@@ -79,8 +79,13 @@ type Provider struct {
 	OrphanPolicy provider.OrphanPolicy
 	RestoreMode  vm.RestoreMode
 
-	Clientset    kubernetes.Interface
-	Runtime      vm.Runtime
+	Clientset kubernetes.Interface
+	Runtime   vm.Runtime
+	// MacosBin is the cocoon-macos binary os=macos pods dispatch to;
+	// MacosBridge is the host bridge their tap NICs join. Empty values
+	// fall back to defaultMacosBinary / macosCNIBridge.
+	MacosBin     string
+	MacosBridge  string
 	Puller       *snapshots.Puller
 	Pusher       *snapshots.Pusher
 	PeerRestorer *snapshots.PeerRestorer
@@ -100,6 +105,7 @@ type Provider struct {
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
 	vmsByName      map[string]*vm.VM
+	macosVNC       map[string]int       // key=pod, node-unique VNC host-port reservations for macOS guests
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
@@ -108,7 +114,12 @@ type Provider struct {
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
 	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
 	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
+	macosImageSF   singleflight.Group   // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
 	notifyHook     func(*corev1.Pod)
+
+	// macOS test seams; production leaves them nil (real exec / real signal-0 probe).
+	macosExecFn         func(context.Context, ...string) (string, error)
+	macosProcessAliveFn func(int) bool
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
 	lifecycleFlushed map[string]string
@@ -148,6 +159,7 @@ func NewProvider(ctx context.Context) *Provider {
 		pods:             map[string]*corev1.Pod{},
 		vmsByPod:         map[string]*vm.VM{},
 		vmsByName:        map[string]*vm.VM{},
+		macosVNC:         map[string]int{},
 		lastRestart:      map[string]time.Time{},
 		pendingRecheck:   map[string]struct{}{},
 		resumedOps:       map[string]struct{}{},
@@ -325,6 +337,7 @@ func (p *Provider) untrackPod(key string) {
 	p.mu.Lock()
 	p.dropVMLocked(key)
 	delete(p.pods, key)
+	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
 	delete(p.lifecycleFlushed, key)
 	p.mu.Unlock()
@@ -339,19 +352,26 @@ func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
-// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
-func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
+// updateTrackedVM applies mutate to the tracked VM (copy-on-write for
+// concurrency safety) and returns the updated record, or nil when the pod's
+// VM changed underneath the caller (same-name recreate).
+func (p *Provider) updateTrackedVM(namespace, name, vmID string, mutate func(*vm.VM)) *vm.VM {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(namespace, name)
 	v, ok := p.vmsByPod[key]
 	if !ok || v.ID != vmID {
-		return false
+		return nil
 	}
 	updated := *v
-	updated.IP = ip
+	mutate(&updated)
 	p.setVMLocked(key, &updated)
-	return true
+	return &updated
+}
+
+// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
+func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
+	return p.updateTrackedVM(namespace, name, vmID, func(v *vm.VM) { v.IP = ip }) != nil
 }
 
 // resolveVMIP returns the VM's IP, falling back to a cocoon-net lease
@@ -563,30 +583,25 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 }
 
 // scheduleDeferredRecheck re-inspects an inconclusive VM in the background,
-// dedup'd via pendingRecheck. The ctx check and recheckWG.Add happen under
+// dedup'd via pendingRecheck. The ctx check and recheckWG.Go happen under
 // p.mu to pair with Close's cancel-under-lock, so every goroutine started
 // here is visible to Close's Wait.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.lifecycleCtx.Err() != nil {
-		p.mu.Unlock()
 		return
 	}
 	if _, running := p.pendingRecheck[vmID]; running {
-		p.mu.Unlock()
 		return
 	}
 	p.pendingRecheck[vmID] = struct{}{}
-	p.recheckWG.Add(1)
-	p.mu.Unlock()
-
-	go p.runDeferredRecheck(p.lifecycleCtx, vmID)
+	p.recheckWG.Go(func() { p.runDeferredRecheck(p.lifecycleCtx, vmID) })
 }
 
 // runDeferredRecheck loops until the VM resolves or the pod stops being tracked.
 func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	logger := log.WithFunc("Provider.runDeferredRecheck")
-	defer p.recheckWG.Done()
 	defer func() {
 		p.mu.Lock()
 		delete(p.pendingRecheck, vmID)
@@ -646,6 +661,11 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
+		// cocoon's event stream cannot describe cocoon-macos guests; a
+		// name-colliding CH event must match the CH record, not a macOS one.
+		if isMacosVM(tracked) {
+			continue
+		}
 		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
 			return key, p.pods[key], tracked.ID
 		}

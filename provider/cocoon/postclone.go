@@ -119,7 +119,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 	}
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
-	p.emitPostCloneHint(ctx, pod, spec, v, sourceImage, joinedErr)
+	p.emitPostCloneHint(ctx, pod, plan, joinedErr)
 	joinedMsg := joinedErr.Error()
 	p.emitWarningf(pod, "PostCloneExecExhausted", "%s", truncate(op+": "+joinedMsg, eventMessageMaxBytes))
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(joinedMsg, lifecycleMessageMaxBytes))
@@ -213,11 +213,7 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 }
 
 // emitPostCloneHint writes the manual-recovery script + per-attempt error chain.
-func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage string, joinedErr error) {
-	plan, ok := planPostClone(spec, v, sourceImage)
-	if !ok {
-		return
-	}
+func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, plan postClonePlan, joinedErr error) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(plan.hint))
 	p.setPodAnnotation(ctx, pod, annotationPostCloneHint, encoded)
 	if joinedErr != nil {

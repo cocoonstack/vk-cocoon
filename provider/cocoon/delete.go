@@ -21,6 +21,9 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	spec := meta.ParseVMSpec(pod)
+	if isMacosSpec(spec) {
+		return p.deleteMacosPod(ctx, pod, spec)
+	}
 	// A seat release keeps the local snapshot as the same-node warm-wake cache; resolveWakeSource still gates it on the :hibernate tag.
 	keepSnapshots := meta.ReadKeepSnapshotOnDelete(pod)
 

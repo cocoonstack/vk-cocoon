@@ -66,6 +66,7 @@ type VM struct {
 	IP             string
 	MAC            string
 	PID            int
+	DiskPath       string
 	NetworkConfigs []*NetworkConfig
 }
 

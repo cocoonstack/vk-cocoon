@@ -9,7 +9,10 @@ every restart, and it reacts to cocoon's live event stream in between.
 On every restart vk-cocoon:
 
 1. Lists every pod scheduled to its node via
-   `fieldSelector=spec.nodeName=<VK_NODE_NAME>`.
+   `fieldSelector=spec.nodeName=<VK_NODE_NAME>`. `os=macos` pods are
+   split out here and adopted via `cocoon-macos vm inspect` plus a PID
+   probe (they never appear in `Runtime.List`); a dead or missing record
+   is left for the CreatePod replay to restart in place.
 2. Lists every VM the cocoon runtime knows about via `Runtime.List`.
 3. Routes every record still in `creating` through cocoon's lock-checked
    `vm reconcile-stale-create` verb (needs cocoon > v0.5.7 on the node)
