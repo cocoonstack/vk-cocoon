@@ -251,13 +251,7 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 				return false, "qemu process dead"
 			}
 			lastRestart = time.Now()
-			if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
-				return false, "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
-			}
-			if rec := p.macosInspect(ctx, v.Name); rec != nil {
-				p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
-			}
-			return false, "qemu restarted"
+			return false, p.recoverMacosVM(ctx, namespace, name, v)
 		}
 		ip := p.resolveVMIP(namespace, name, v)
 		if ip == "" {
@@ -265,6 +259,24 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 		}
 		return macosSSHReady(ctx, net.JoinHostPort(ip, macosGuestSSHPort))
 	}
+}
+
+// recoverMacosVM adopts a live record or `vm start`s a dead one, detached from
+// the probe deadline — a slow start outlives it and would strand a stale PID.
+func (p *Provider) recoverMacosVM(ctx context.Context, namespace, name string, v *vm.VM) string {
+	ctx, cancel := detachedLaunchCtx(ctx)
+	defer cancel()
+	if rec := p.macosInspect(ctx, v.Name); rec != nil && p.macosProcessAlive(rec.PID) {
+		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+		return "adopted running qemu"
+	}
+	if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
+		return "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
+	}
+	if rec := p.macosInspect(ctx, v.Name); rec != nil {
+		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+	}
+	return "qemu restarted"
 }
 
 func (p *Provider) buildMacosOnUpdate(namespace, name string) probes.OnUpdate {
@@ -398,7 +410,7 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 	}
 	if len(args) >= 2 && args[0] == "vm" && (args[1] == "run" || args[1] == "start") {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), macosLaunchTimeout)
+		ctx, cancel = detachedLaunchCtx(ctx)
 		defer cancel()
 	}
 	bin := cmp.Or(p.MacosBin, defaultMacosBinary)
@@ -481,6 +493,10 @@ func appendMacosVNCArg(args []string, port int) []string {
 		args = append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase))
 	}
 	return args
+}
+
+func detachedLaunchCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), macosLaunchTimeout)
 }
 
 // macosSSHReady dials addr and requires the "SSH-" banner: a bare TCP accept
