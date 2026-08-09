@@ -12,6 +12,8 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Path to a GCP service-account JSON key with `roles/artifactregistry.writer`, fed to ADC for the snapshot push. Unset falls back to the read-only node instance SA. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
+| `VK_COCOON_MACOS_BIN` | `/usr/local/bin/cocoon-macos` | cocoon-macos binary `os=macos` pods dispatch to. |
+| `COCOON_MACOS_BRIDGE` | `cni0` | Host bridge macOS guests' tap NICs join for a DHCP'd routed IP. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
 | `VK_RESTORE_MODE` | `ondemand` | Guest-memory restore mode for Cloud Hypervisor clones: `copy`, `ondemand`, or `mmap`. Windows VMs always use `copy` (lazy restore stalls DHCP boot); Firecracker has no restore mode. `mmap` shares page cache across clones of one snapshot — the fastest fan-out — but requires a Cloud Hypervisor build with mmap restore support (cocoonstack/cloud-hypervisor `dev`); on other CH builds clones fail, so it is opt-in. Invalid values abort startup. |
 | `VK_STAGING_DIR` | `/var/lib/cocoon/vk-staging` | Temporary destination for peer-restored raw snapshot files. Keep it on the Cocoon run-directory filesystem to preserve hardlinks; stale entries are swept at startup. |
