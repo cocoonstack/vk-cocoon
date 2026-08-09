@@ -60,14 +60,6 @@ const (
 	macosInspectRetryEvery = 10 * time.Second
 )
 
-func isMacosSpec(spec meta.VMSpec) bool {
-	return strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
-}
-
-func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
-
-func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
-
 func (p *Provider) macosBridge() string { return cmp.Or(p.MacosBridge, macosCNIBridge) }
 
 // claimMacosVNCPort reserves a node-unique VNC host port for key, preferring
@@ -112,48 +104,6 @@ func (p *Provider) macosVNCPortFor(key string) int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.macosVNC[key]
-}
-
-func macosCPUs(pod *corev1.Pod) int {
-	if cpus, _ := vmResourceOverrides(pod); cpus > 0 {
-		return cpus
-	}
-	return macosDefaultCPUs
-}
-
-// macosMemMB returns whole MiB because cocoon-macos' --memory flag is MiB,
-// unlike cocoon's byte-normalized size args.
-func macosMemMB(pod *corev1.Pod) int {
-	if len(pod.Spec.Containers) > 0 {
-		resources := pod.Spec.Containers[0].Resources
-		q := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
-		if mb := q.Value() / (1 << 20); mb > 0 {
-			return int(mb)
-		}
-	}
-	return macosDefaultMemMB
-}
-
-// macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for
-// adopt-vs-restart decisions and lease resolution.
-type macosVMRecord struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
-	PID   int    `json:"pid"`
-	MAC   string `json:"mac"`
-	Tap   string `json:"tap"`
-	Disk  string `json:"disk"`
-	VNC   int    `json:"vnc"` // display number; -1 = off
-}
-
-func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
-	if rec == nil {
-		return
-	}
-	v.PID, v.MAC, v.DiskPath = rec.PID, rec.MAC, rec.Disk
-	if rec.Tap != "" {
-		v.NetworkConfigs = []*vm.NetworkConfig{{Tap: rec.Tap, MAC: rec.MAC}}
-	}
 }
 
 // createMacosPod launches (or re-adopts) the QEMU guest for a pod. CreatePod
@@ -346,26 +296,6 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 	p.markReadyPublished(ctx, pod)
 }
 
-// macosSSHReady dials addr and requires the "SSH-" banner: a bare TCP accept
-// is not proof of life while the guest is still booting.
-func macosSSHReady(ctx context.Context, addr string) (bool, string) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false, "ssh probe " + addr + ": " + err.Error()
-	}
-	defer conn.Close() //nolint:errcheck // probe-only connection
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetReadDeadline(deadline)
-	}
-	buf := make([]byte, 16)
-	n, _ := conn.Read(buf)
-	if n > 0 && strings.HasPrefix(string(buf[:n]), "SSH-") {
-		return true, "ssh ok"
-	}
-	return false, "no ssh banner at " + addr
-}
-
 // deleteMacosPod tears down the QEMU guest (`vm rm` also terminates the
 // process) and drops the pod from the tables; snapshot-on-delete cannot apply.
 func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
@@ -389,13 +319,6 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	p.notify(pod)
 	metrics.PodLifecycleTotal.WithLabelValues("delete", "ok", "").Inc()
 	return nil
-}
-
-// macosVMMissing matches cocoon-macos' missing-VM output. A missing binary
-// produces no output at all (the error comes from exec), so it cannot match.
-func macosVMMissing(out string) bool {
-	s := strings.ToLower(out)
-	return strings.Contains(s, "not found") || strings.Contains(s, "no such")
 }
 
 // reconcileMacosPod re-adopts a live QEMU guest after a vk-cocoon restart
@@ -466,13 +389,6 @@ func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (s
 	return p.macosExec(ctx, append(appendMacosVNCArg([]string{"vm", "start"}, port), vmName)...)
 }
 
-func appendMacosVNCArg(args []string, port int) []string {
-	if port != 0 {
-		args = append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase))
-	}
-	return args
-}
-
 // macosExec runs a cocoon-macos subcommand. `vm run`/`vm start` detach from
 // the caller's cancellation (an aborted CreatePod must not kill the CLI
 // mid-launch, or the guest leaks outside its record); the rest stay cancellable.
@@ -508,4 +424,88 @@ func (p *Provider) macosProcessAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for
+// adopt-vs-restart decisions and lease resolution.
+type macosVMRecord struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	PID   int    `json:"pid"`
+	MAC   string `json:"mac"`
+	Tap   string `json:"tap"`
+	Disk  string `json:"disk"`
+	VNC   int    `json:"vnc"` // display number; -1 = off
+}
+
+func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
+	if rec == nil {
+		return
+	}
+	v.PID, v.MAC, v.DiskPath = rec.PID, rec.MAC, rec.Disk
+	if rec.Tap != "" {
+		v.NetworkConfigs = []*vm.NetworkConfig{{Tap: rec.Tap, MAC: rec.MAC}}
+	}
+}
+
+func isMacosSpec(spec meta.VMSpec) bool {
+	return strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
+}
+
+func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
+
+func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
+
+func macosCPUs(pod *corev1.Pod) int {
+	if cpus, _ := vmResourceOverrides(pod); cpus > 0 {
+		return cpus
+	}
+	return macosDefaultCPUs
+}
+
+// macosMemMB returns whole MiB because cocoon-macos' --memory flag is MiB,
+// unlike cocoon's byte-normalized size args.
+func macosMemMB(pod *corev1.Pod) int {
+	if len(pod.Spec.Containers) > 0 {
+		resources := pod.Spec.Containers[0].Resources
+		q := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
+		if mb := q.Value() / (1 << 20); mb > 0 {
+			return int(mb)
+		}
+	}
+	return macosDefaultMemMB
+}
+
+func appendMacosVNCArg(args []string, port int) []string {
+	if port != 0 {
+		args = append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase))
+	}
+	return args
+}
+
+// macosSSHReady dials addr and requires the "SSH-" banner: a bare TCP accept
+// is not proof of life while the guest is still booting.
+func macosSSHReady(ctx context.Context, addr string) (bool, string) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false, "ssh probe " + addr + ": " + err.Error()
+	}
+	defer conn.Close() //nolint:errcheck // probe-only connection
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetReadDeadline(deadline)
+	}
+	buf := make([]byte, 16)
+	n, _ := conn.Read(buf)
+	if n > 0 && strings.HasPrefix(string(buf[:n]), "SSH-") {
+		return true, "ssh ok"
+	}
+	return false, "no ssh banner at " + addr
+}
+
+// macosVMMissing matches cocoon-macos' missing-VM output. A missing binary
+// produces no output at all (the error comes from exec), so it cannot match.
+func macosVMMissing(out string) bool {
+	s := strings.ToLower(out)
+	return strings.Contains(s, "not found") || strings.Contains(s, "no such")
 }
