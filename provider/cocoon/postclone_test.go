@@ -241,7 +241,11 @@ func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
 	for i := range 80 {
 		errs = append(errs, fmt.Errorf("attempt %d: %s", i, strings.Repeat("x", 100)))
 	}
-	p.emitPostCloneHint(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", errors.Join(errs...))
+	plan, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "")
+	if !ok {
+		t.Fatal("static-IP network config must need post-clone setup")
+	}
+	p.emitPostCloneHint(t.Context(), pod, plan, errors.Join(errs...))
 
 	got := pod.Annotations[annotationPostCloneErrors]
 	if got == "" {

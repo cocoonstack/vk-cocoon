@@ -10,7 +10,6 @@ import (
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -36,7 +35,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		list, err := p.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(gctx, metav1.ListOptions{
 			FieldSelector: "spec.nodeName=" + p.NodeName,
 		})
-		if err != nil && !apierrors.IsNotFound(err) {
+		if err != nil {
 			return fmt.Errorf("list pods on %s: %w", p.NodeName, err)
 		}
 		pods = list
@@ -71,7 +70,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	var probePods []*corev1.Pod
 	var macosPods []macosPod
 
-	for i := range podItems(pods) {
+	for i := range pods.Items {
 		pod := &pods.Items[i]
 		// os=macos guests live outside Runtime.List; adopt them via cocoon-macos.
 		if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
@@ -310,13 +309,6 @@ func (p *Provider) indexOrphanByName(v *vm.VM) {
 	p.mu.Lock()
 	p.vmsByName[v.Name] = v
 	p.mu.Unlock()
-}
-
-func podItems(list *corev1.PodList) []corev1.Pod {
-	if list == nil {
-		return nil
-	}
-	return list.Items
 }
 
 // inFlightCreate: vm run passes through created between the create-lock windows.

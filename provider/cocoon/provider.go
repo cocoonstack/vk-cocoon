@@ -580,30 +580,25 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 }
 
 // scheduleDeferredRecheck re-inspects an inconclusive VM in the background,
-// dedup'd via pendingRecheck. The ctx check and recheckWG.Add happen under
+// dedup'd via pendingRecheck. The ctx check and recheckWG.Go happen under
 // p.mu to pair with Close's cancel-under-lock, so every goroutine started
 // here is visible to Close's Wait.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.lifecycleCtx.Err() != nil {
-		p.mu.Unlock()
 		return
 	}
 	if _, running := p.pendingRecheck[vmID]; running {
-		p.mu.Unlock()
 		return
 	}
 	p.pendingRecheck[vmID] = struct{}{}
-	p.recheckWG.Add(1)
-	p.mu.Unlock()
-
-	go p.runDeferredRecheck(p.lifecycleCtx, vmID)
+	p.recheckWG.Go(func() { p.runDeferredRecheck(p.lifecycleCtx, vmID) })
 }
 
 // runDeferredRecheck loops until the VM resolves or the pod stops being tracked.
 func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	logger := log.WithFunc("Provider.runDeferredRecheck")
-	defer p.recheckWG.Done()
 	defer func() {
 		p.mu.Lock()
 		delete(p.pendingRecheck, vmID)

@@ -94,9 +94,6 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 // Cocoonstack cloud-image artifacts must go through Puller.EnsureCloudImageFromRaw
 // instead — `cocoon image pull` mistakes them for container images.
 func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) error {
-	if image == "" {
-		return nil
-	}
 	args := []string{"image", "pull"}
 	if force {
 		args = append(args, "--force")
@@ -112,9 +109,6 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 // Image runs `cocoon image inspect` as a local-presence probe; "not found
 // in any backend" maps to ErrImageNotFound.
 func (c *CocoonCLI) Image(ctx context.Context, name string) error {
-	if name == "" {
-		return errors.New("cocoon image inspect: name is empty")
-	}
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {
 		if strings.Contains(strings.ToLower(string(out)), "not found in any backend") {
@@ -128,9 +122,6 @@ func (c *CocoonCLI) Image(ctx context.Context, name string) error {
 // ImageImport spawns `cocoon image import <name>` and returns its stdin
 // pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar.
 func (c *CocoonCLI) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
-	if name == "" {
-		return nil, nil, errors.New("cocoon image import: name is empty")
-	}
 	cmd := c.command(ctx, "image", "import", name)
 	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon image import")
 }
