@@ -50,6 +50,10 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		metrics.PodLifecycleTotal.WithLabelValues("create", "skipped", "missing_vmname").Inc()
 		return fmt.Errorf("pod %s/%s missing %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName)
 	}
+	if err := p.assertPodSnapshotCompatibility(pod); err != nil {
+		metrics.PodLifecycleTotal.WithLabelValues("create", "failed", "snapshot_cpu_class_mismatch").Inc()
+		return err
+	}
 
 	// Claim this incarnation before the long bring-up so a forgotten predecessor's stale writers hit the UID guards.
 	p.trackPod(pod, nil)

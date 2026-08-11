@@ -27,6 +27,7 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -97,6 +98,10 @@ func main() {
 	}
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
+	snapshotCompatibilityClass := os.Getenv("VK_SNAPSHOT_CPU_CLASS")
+	if errs := utilvalidation.IsValidLabelValue(snapshotCompatibilityClass); len(errs) != 0 {
+		logger.Fatalf(ctx, errors.New(strings.Join(errs, "; ")), "invalid VK_SNAPSHOT_CPU_CLASS %q", snapshotCompatibilityClass)
+	}
 	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
 		detected, err := commonk8s.DetectNodeIP()
@@ -139,18 +144,19 @@ func main() {
 	go snapshots.SweepStaging(signalCtx, stagingDir)
 
 	p, err := buildProvider(signalCtx, buildOpts{
-		nodeName:     nodeName,
-		ociRegistry:  ociRegistry,
-		leasesPath:   leasesPath,
-		cocoonBin:    cocoonBin,
-		macosBin:     macosBin,
-		macosBridge:  macosBridge,
-		orphanPolicy: orphanPolicy,
-		restoreMode:  restoreMode,
-		stagingDir:   stagingDir,
-		peerPort:     peerPort,
-		clientset:    clientset,
-		recorder:     recorder,
+		nodeName:                   nodeName,
+		snapshotCompatibilityClass: snapshotCompatibilityClass,
+		ociRegistry:                ociRegistry,
+		leasesPath:                 leasesPath,
+		cocoonBin:                  cocoonBin,
+		macosBin:                   macosBin,
+		macosBridge:                macosBridge,
+		orphanPolicy:               orphanPolicy,
+		restoreMode:                restoreMode,
+		stagingDir:                 stagingDir,
+		peerPort:                   peerPort,
+		clientset:                  clientset,
+		recorder:                   recorder,
 	})
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "build provider")
@@ -165,11 +171,7 @@ func main() {
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
-			if cfg.Node.Labels == nil {
-				cfg.Node.Labels = map[string]string{}
-			}
-			cfg.Node.Labels[meta.LabelNodePool] = nodePool
-			cfg.Node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
+			applyNodeLabels(cfg.Node, nodePool, snapshotCompatibilityClass)
 			cfg.Node.Status.NodeInfo.KubeletVersion = version.VERSION
 			cfg.Node.Status.Conditions = defaultNodeConditions()
 			cfg.Node.Status.Addresses = []corev1.NodeAddress{
@@ -235,7 +237,7 @@ func main() {
 	}()
 
 	// NaiveNodeProvider doesn't propagate DaemonEndpoints; patch directly.
-	go patchKubeletEndpoint(signalCtx, clientset, nodeName)
+	go patchNodeLabelsAndEndpoint(signalCtx, clientset, nodeName, nodePool, snapshotCompatibilityClass)
 
 	logger.Infof(signalCtx, "vk-cocoon metrics listening on %s, peer snapshots on %s", metricsAddr, peerAddr)
 	if err := commonhttpx.Run(signalCtx, shutdownTimeout,
@@ -249,18 +251,19 @@ func main() {
 }
 
 type buildOpts struct {
-	nodeName     string
-	ociRegistry  string
-	leasesPath   string
-	cocoonBin    string
-	macosBin     string
-	macosBridge  string
-	orphanPolicy string
-	restoreMode  string
-	stagingDir   string
-	peerPort     string
-	clientset    kubernetes.Interface
-	recorder     record.EventRecorder
+	nodeName                   string
+	snapshotCompatibilityClass string
+	ociRegistry                string
+	leasesPath                 string
+	cocoonBin                  string
+	macosBin                   string
+	macosBridge                string
+	orphanPolicy               string
+	restoreMode                string
+	stagingDir                 string
+	peerPort                   string
+	clientset                  kubernetes.Interface
+	recorder                   record.EventRecorder
 }
 
 func buildRegistry(opts buildOpts) (oci.Registry, error) {
@@ -285,6 +288,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	runtime := vm.NewCocoonCLI(opts.cocoonBin)
 	p := cocoon.NewProvider(ctx)
 	p.NodeName = opts.nodeName
+	p.SnapshotCompatibilityClass = opts.snapshotCompatibilityClass
 	p.Clientset = opts.clientset
 	p.Recorder = opts.recorder
 	p.Runtime = runtime
@@ -310,6 +314,19 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	return p, nil
 }
 
+func applyNodeLabels(node *corev1.Node, nodePool, snapshotCompatibilityClass string) {
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+	node.Labels[meta.LabelNodePool] = nodePool
+	node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
+	if snapshotCompatibilityClass == "" {
+		delete(node.Labels, meta.LabelSnapshotCompatibilityClass)
+		return
+	}
+	node.Labels[meta.LabelSnapshotCompatibilityClass] = snapshotCompatibilityClass
+}
+
 // kubeletAPIPort is overridable via VK_KUBELET_PORT so a co-located kubelet (e.g. k3s) can keep :10250.
 func kubeletAPIPort() int32 {
 	if p, err := strconv.ParseUint(os.Getenv("VK_KUBELET_PORT"), 10, 16); err == nil && p > 0 {
@@ -326,10 +343,11 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 	}
 }
 
-// patchKubeletEndpoint writes daemonEndpoints into the node status
-// with retries to ride out the window between node creation and cache warm-up.
-func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName string) {
-	logger := log.WithFunc("patchKubeletEndpoint")
+// patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with
+// retries to ride out the node-creation window; v-k only patches status after
+// creation, so a re-stamped snapshot CPU class never lands on its own.
+func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
+	logger := log.WithFunc("patchNodeLabelsAndEndpoint")
 	// Give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
@@ -342,10 +360,19 @@ func patchKubeletEndpoint(ctx context.Context, clientset kubernetes.Interface, n
 			}
 			continue
 		}
-		nodeObj.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
+		applyNodeLabels(nodeObj, nodePool, snapshotCompatibilityClass)
+		updated, err := clientset.CoreV1().Nodes().Update(ctx, nodeObj, metav1.UpdateOptions{})
+		if err != nil {
+			logger.Errorf(ctx, err, "re-assert node labels attempt %d", attempt)
+			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+				return
+			}
+			continue
+		}
+		updated.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
 			KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort()},
 		}
-		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
+		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
 			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
