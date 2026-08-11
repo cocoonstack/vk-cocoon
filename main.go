@@ -99,8 +99,8 @@ func main() {
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
 	snapshotCompatibilityClass := os.Getenv("VK_SNAPSHOT_CPU_CLASS")
-	if err := validateSnapshotCompatibilityClass(snapshotCompatibilityClass); err != nil {
-		logger.Fatalf(ctx, err, "invalid VK_SNAPSHOT_CPU_CLASS %q", snapshotCompatibilityClass)
+	if errs := utilvalidation.IsValidLabelValue(snapshotCompatibilityClass); len(errs) != 0 {
+		logger.Fatalf(ctx, errors.New(strings.Join(errs, "; ")), "invalid VK_SNAPSHOT_CPU_CLASS %q", snapshotCompatibilityClass)
 	}
 	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
@@ -320,21 +320,9 @@ func applyNodeLabels(node *corev1.Node, nodePool, snapshotCompatibilityClass str
 	}
 	node.Labels[meta.LabelNodePool] = nodePool
 	node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
-	if snapshotCompatibilityClass == "" {
-		delete(node.Labels, meta.LabelSnapshotCompatibilityClass)
-		return
+	if snapshotCompatibilityClass != "" {
+		node.Labels[meta.LabelSnapshotCompatibilityClass] = snapshotCompatibilityClass
 	}
-	node.Labels[meta.LabelSnapshotCompatibilityClass] = snapshotCompatibilityClass
-}
-
-func validateSnapshotCompatibilityClass(value string) error {
-	if value == "" {
-		return nil
-	}
-	if errs := utilvalidation.IsValidLabelValue(value); len(errs) != 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
 }
 
 // kubeletAPIPort is overridable via VK_KUBELET_PORT so a co-located kubelet (e.g. k3s) can keep :10250.

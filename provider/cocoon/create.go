@@ -149,22 +149,6 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-func (p *Provider) assertPodSnapshotCompatibility(pod *corev1.Pod) error {
-	requested := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]
-	if requested == "" {
-		return nil
-	}
-	if p.SnapshotCompatibilityClass == "" {
-		return fmt.Errorf("pod %s/%s requires snapshot compatibility class %q but node %s is unclassified",
-			pod.Namespace, pod.Name, requested, p.NodeName)
-	}
-	if requested != p.SnapshotCompatibilityClass {
-		return fmt.Errorf("pod %s/%s requires snapshot compatibility class %q but node %s provides %q",
-			pod.Namespace, pod.Name, requested, p.NodeName, p.SnapshotCompatibilityClass)
-	}
-	return nil
-}
-
 // failCreate drops the provisional claim (keep intent) so the kubelet's create
 // retry starts clean; a failed restore also counts as a wake failure.
 func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bool, reason string, err error) error {
