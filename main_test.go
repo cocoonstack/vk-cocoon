@@ -42,4 +42,9 @@ func TestApplyNodeLabels(t *testing.T) {
 	if got := unclassified.Labels["existing"]; got != "keep" {
 		t.Errorf("existing label = %q, want keep", got)
 	}
+
+	applyNodeLabels(classified, "purpose-a", "")
+	if _, ok := classified.Labels[meta.LabelSnapshotCompatibilityClass]; ok {
+		t.Error("declassifying must remove the stale snapshot compatibility label")
+	}
 }

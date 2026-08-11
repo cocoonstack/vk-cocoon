@@ -9,6 +9,10 @@ import (
 )
 
 func (p *Provider) assertPodSnapshotCompatibility(pod *corev1.Pod) error {
+	// Terminal pods never resume a snapshot; a leftover Succeeded Job must not block node registration.
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return nil
+	}
 	requested := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]
 	if requested == "" {
 		return nil

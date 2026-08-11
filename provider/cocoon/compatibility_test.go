@@ -41,6 +41,15 @@ func TestAssertPodSnapshotCompatibility(t *testing.T) {
 		}
 	})
 
+	t.Run("terminal pod", func(t *testing.T) {
+		p := &Provider{NodeName: "node-e", SnapshotCompatibilityClass: "n4-emerald-rapids-v1"}
+		done := pod.DeepCopy()
+		done.Status.Phase = corev1.PodSucceeded
+		if err := p.assertPodSnapshotCompatibility(done); err != nil {
+			t.Fatalf("terminal pod rejected: %v", err)
+		}
+	})
+
 	t.Run("legacy pod", func(t *testing.T) {
 		p := &Provider{NodeName: "node-d", SnapshotCompatibilityClass: "n4-emerald-rapids-v1"}
 		legacy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "legacy"}}
