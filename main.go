@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -361,23 +360,19 @@ func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interf
 			}
 			continue
 		}
-		before := maps.Clone(nodeObj.Labels)
 		applyNodeLabels(nodeObj, nodePool, snapshotCompatibilityClass)
-		if !maps.Equal(before, nodeObj.Labels) {
-			updated, err := clientset.CoreV1().Nodes().Update(ctx, nodeObj, metav1.UpdateOptions{})
-			if err != nil {
-				logger.Errorf(ctx, err, "re-assert node labels attempt %d", attempt)
-				if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
-					return
-				}
-				continue
+		updated, err := clientset.CoreV1().Nodes().Update(ctx, nodeObj, metav1.UpdateOptions{})
+		if err != nil {
+			logger.Errorf(ctx, err, "re-assert node labels attempt %d", attempt)
+			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+				return
 			}
-			nodeObj = updated
+			continue
 		}
-		nodeObj.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
+		updated.Status.DaemonEndpoints = corev1.NodeDaemonEndpoints{
 			KubeletEndpoint: corev1.DaemonEndpoint{Port: kubeletAPIPort()},
 		}
-		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, nodeObj, metav1.UpdateOptions{}); err != nil {
+		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
 			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
