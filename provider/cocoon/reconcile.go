@@ -52,6 +52,11 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	if err := g.Wait(); err != nil {
 		return err
 	}
+	for i := range pods.Items {
+		if err := p.assertPodSnapshotCompatibility(&pods.Items[i]); err != nil {
+			return fmt.Errorf("startup compatibility check: %w", err)
+		}
+	}
 	vms = p.reconcileStaleCreates(ctx, vms)
 
 	vmByID := make(map[string]*vm.VM, len(vms))

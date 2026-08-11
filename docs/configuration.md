@@ -21,6 +21,7 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `VK_COCOON_SNAPSHOT_DIR` | `/var/lib/cocoon/snapshot/localfile` | Cocoon localfile snapshot store served to peers. Override it when Cocoon uses a different root directory. |
 | `VK_NODE_IP` | auto-detected | Override the virtual node's InternalIP address (first non-loopback IPv4 used otherwise). |
 | `VK_NODE_POOL` | `default` | Cocoon pool label stamped onto the registered node. |
+| `VK_SNAPSHOT_CPU_CLASS` | unset | Guest-visible CPU ABI class stamped as `cocoonstack.io/snapshot-cpu-class`. Classified CocoonSets schedule only to an exact match; use a certified class such as `n2-cascade-lake-v1`, not a broad architecture such as `amd64`. |
 | `VK_PROVIDER_ID` | unset | Cloud-provider ProviderID for the virtual node (e.g. `gce://<project>/<zone>/<instance>`). Prevents cloud node lifecycle controllers from deleting the virtual node. |
 | `VK_TLS_CERT` | `/etc/cocoon/vk/tls/vk-kubelet.crt` | Path to the kubelet serving TLS certificate. |
 | `VK_TLS_KEY` | `/etc/cocoon/vk/tls/vk-kubelet.key` | Path to the kubelet serving TLS private key. |

@@ -74,7 +74,8 @@ const (
 
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
-	NodeName string
+	NodeName                   string
+	SnapshotCompatibilityClass string
 
 	OrphanPolicy provider.OrphanPolicy
 	RestoreMode  vm.RestoreMode

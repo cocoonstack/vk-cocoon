@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,25 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+func TestStartupReconcileRejectsIncompatibleBoundPod(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod.Spec.NodeName = "cocoon-pool"
+	pod.Spec.NodeSelector = map[string]string{
+		meta.LabelSnapshotCompatibilityClass: "n2-cascade-lake-v1",
+	}
+
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.SnapshotCompatibilityClass = "n4-emerald-rapids-v1"
+	p.Runtime = &fakeRuntime{}
+	p.Clientset = fake.NewSimpleClientset(pod)
+
+	err := p.StartupReconcile(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "startup compatibility check") {
+		t.Fatalf("StartupReconcile error = %v, want compatibility rejection", err)
+	}
+}
 
 func TestStartupReconcileSkeletonCollectedNotAdopted(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})

@@ -51,6 +51,11 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
+	if err := p.assertPodSnapshotCompatibility(pod); err != nil {
+		metrics.PodLifecycleTotal.WithLabelValues("update", "failed", "snapshot_cpu_class_mismatch").Inc()
+		return err
+	}
+
 	// Before the lookup, so a post-check read can never see mid-resume state.
 	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
 		return err

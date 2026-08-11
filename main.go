@@ -27,6 +27,7 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -97,6 +98,10 @@ func main() {
 	}
 	nodeIP := commonk8s.EnvOrDefault("VK_NODE_IP", "")
 	nodePool := commonk8s.EnvOrDefault("VK_NODE_POOL", meta.DefaultNodePool)
+	snapshotCompatibilityClass := os.Getenv("VK_SNAPSHOT_CPU_CLASS")
+	if err := validateSnapshotCompatibilityClass(snapshotCompatibilityClass); err != nil {
+		logger.Fatalf(ctx, err, "invalid VK_SNAPSHOT_CPU_CLASS %q", snapshotCompatibilityClass)
+	}
 	providerID := os.Getenv("VK_PROVIDER_ID")
 	if nodeIP == "" {
 		detected, err := commonk8s.DetectNodeIP()
@@ -139,18 +144,19 @@ func main() {
 	go snapshots.SweepStaging(signalCtx, stagingDir)
 
 	p, err := buildProvider(signalCtx, buildOpts{
-		nodeName:     nodeName,
-		ociRegistry:  ociRegistry,
-		leasesPath:   leasesPath,
-		cocoonBin:    cocoonBin,
-		macosBin:     macosBin,
-		macosBridge:  macosBridge,
-		orphanPolicy: orphanPolicy,
-		restoreMode:  restoreMode,
-		stagingDir:   stagingDir,
-		peerPort:     peerPort,
-		clientset:    clientset,
-		recorder:     recorder,
+		nodeName:                   nodeName,
+		snapshotCompatibilityClass: snapshotCompatibilityClass,
+		ociRegistry:                ociRegistry,
+		leasesPath:                 leasesPath,
+		cocoonBin:                  cocoonBin,
+		macosBin:                   macosBin,
+		macosBridge:                macosBridge,
+		orphanPolicy:               orphanPolicy,
+		restoreMode:                restoreMode,
+		stagingDir:                 stagingDir,
+		peerPort:                   peerPort,
+		clientset:                  clientset,
+		recorder:                   recorder,
 	})
 	if err != nil {
 		logger.Fatalf(signalCtx, err, "build provider")
@@ -165,11 +171,7 @@ func main() {
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		if cfg.Node != nil {
-			if cfg.Node.Labels == nil {
-				cfg.Node.Labels = map[string]string{}
-			}
-			cfg.Node.Labels[meta.LabelNodePool] = nodePool
-			cfg.Node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
+			applyNodeLabels(cfg.Node, nodePool, snapshotCompatibilityClass)
 			cfg.Node.Status.NodeInfo.KubeletVersion = version.VERSION
 			cfg.Node.Status.Conditions = defaultNodeConditions()
 			cfg.Node.Status.Addresses = []corev1.NodeAddress{
@@ -249,18 +251,19 @@ func main() {
 }
 
 type buildOpts struct {
-	nodeName     string
-	ociRegistry  string
-	leasesPath   string
-	cocoonBin    string
-	macosBin     string
-	macosBridge  string
-	orphanPolicy string
-	restoreMode  string
-	stagingDir   string
-	peerPort     string
-	clientset    kubernetes.Interface
-	recorder     record.EventRecorder
+	nodeName                   string
+	snapshotCompatibilityClass string
+	ociRegistry                string
+	leasesPath                 string
+	cocoonBin                  string
+	macosBin                   string
+	macosBridge                string
+	orphanPolicy               string
+	restoreMode                string
+	stagingDir                 string
+	peerPort                   string
+	clientset                  kubernetes.Interface
+	recorder                   record.EventRecorder
 }
 
 func buildRegistry(opts buildOpts) (oci.Registry, error) {
@@ -285,6 +288,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	runtime := vm.NewCocoonCLI(opts.cocoonBin)
 	p := cocoon.NewProvider(ctx)
 	p.NodeName = opts.nodeName
+	p.SnapshotCompatibilityClass = opts.snapshotCompatibilityClass
 	p.Clientset = opts.clientset
 	p.Recorder = opts.recorder
 	p.Runtime = runtime
@@ -308,6 +312,29 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
 	p.RestoreMode = restoreMode
 	return p, nil
+}
+
+func applyNodeLabels(node *corev1.Node, nodePool, snapshotCompatibilityClass string) {
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+	node.Labels[meta.LabelNodePool] = nodePool
+	node.Labels["node-role.kubernetes.io/cocoon-vm"] = ""
+	if snapshotCompatibilityClass == "" {
+		delete(node.Labels, meta.LabelSnapshotCompatibilityClass)
+		return
+	}
+	node.Labels[meta.LabelSnapshotCompatibilityClass] = snapshotCompatibilityClass
+}
+
+func validateSnapshotCompatibilityClass(value string) error {
+	if value == "" {
+		return nil
+	}
+	if errs := utilvalidation.IsValidLabelValue(value); len(errs) != 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // kubeletAPIPort is overridable via VK_KUBELET_PORT so a co-located kubelet (e.g. k3s) can keep :10250.
