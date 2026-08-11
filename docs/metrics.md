@@ -50,6 +50,7 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_pod_lifecycle_total{op,result,reason}` | Counter | Pod lifecycle operations (`result=ok\|failed\|skipped`, `reason` sub-classifies) |
 | `cocoon_vk_snapshot_pull_total{result}` / `save_total` / `push_total` | Counter | Snapshot pull/save/push counts |
 | `cocoon_vk_snapshot_peer_restore_total{result}` | Counter | Peer restore outcomes (`result=ok\|failed`); failures fall through to the registry pull |
+| `cocoon_vk_snapshot_verify_total{result}` | Counter | Wake-time verification of the local snapshot against the registry tag (`result=ok\|stale\|error`); `stale` discards the local copy and pulls, `error` fails the wake rather than trust an unverified copy |
 | `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
 | `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |

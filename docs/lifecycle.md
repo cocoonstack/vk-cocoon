@@ -5,6 +5,21 @@ cocoon VM operations. Genuine spec changes are handled by the operator
 deleting and recreating the pod; vk-cocoon only acts on create, delete,
 and the hibernate transition.
 
+## Snapshot CPU compatibility
+
+A pod carrying the `cocoonstack.io/snapshot-cpu-class` node selector
+(rendered by cocoon-operator from `spec.snapshotCompatibilityClass`) is
+admitted only on a node whose `VK_SNAPSHOT_CPU_CLASS` matches it exactly;
+an unclassified node rejects it. The gate runs in `CreatePod`, in
+`UpdatePod` so a wake never resumes a memory snapshot on a foreign guest
+CPU ABI, and across every pod already scheduled to the node during
+[startup reconcile](reconcile.md) — a mismatch there is fatal and the
+node never registers, which is the intended outcome for a node whose
+class was mis-set under live classified pods. Terminal (`Succeeded` /
+`Failed`) pods are exempt: they have no VM to resume, so a leftover pod
+cannot wedge node registration. Rejected create/update calls count on
+`cocoon_vk_pod_lifecycle_total{reason="snapshot_cpu_class_mismatch"}`.
+
 ## CreatePod
 
 1. Parse `meta.VMSpec` from the pod annotations. `os=macos` pods branch

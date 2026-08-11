@@ -52,6 +52,13 @@ A pod whose annotated VMID does **not** appear in the local runtime list
 logs a warning and is left to `CreatePod` to recreate on the next
 reconcile.
 
+Right after the listing and before the stale-create sweep, every
+non-terminal pod on the node is checked against the node's snapshot CPU
+class (see
+[Snapshot CPU compatibility](lifecycle.md#snapshot-cpu-compatibility)); a
+mismatch fails startup reconcile, and vk-cocoon refuses to register the
+node rather than resume snapshots on an incompatible host.
+
 ## VM event watcher
 
 In addition to the periodic probe, vk-cocoon subscribes to cocoon's
