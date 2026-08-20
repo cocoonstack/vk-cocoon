@@ -221,8 +221,9 @@ func (p *Provider) startMacosProbe(pod *corev1.Pod) {
 		p.buildMacosOnUpdate(pod.Namespace, pod.Name))
 }
 
-// buildMacosProbe probes the guest's sshd on its cocoon-net IP; the lease
-// appears minutes before sshd on a cold boot, so the two waits stay distinct.
+// buildMacosProbe resolves the guest's cocoon-net IP, then honors probePort
+// when the workload declares an application-level readiness contract. Older
+// macOS pods without probePort keep the SSH fallback for compatibility.
 func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 	// Goroutine-confined: the probes.Manager runs one probe at a time per agent.
 	var lastInspect, lastRestart time.Time
@@ -256,6 +257,9 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 		ip := p.resolveVMIP(namespace, name, v)
 		if ip == "" {
 			return false, "waiting for guest dhcp lease"
+		}
+		if port := p.probePort(namespace, name); port != "" {
+			return p.probeTCP(ctx, ip, port)
 		}
 		return macosSSHReady(ctx, net.JoinHostPort(ip, macosGuestSSHPort))
 	}
