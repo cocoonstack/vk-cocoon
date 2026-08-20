@@ -137,7 +137,7 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 		return
 	}
 	if gotIP {
-		p.refreshStatus(ctx, pod)
+		p.refreshReadyStatus(ctx, pod)
 		// Must land before the ready patch: vm-service reads podIP on ready.
 		p.publishPodStatus(ctx, pod)
 		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {

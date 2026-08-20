@@ -13,6 +13,17 @@ import (
 )
 
 func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
+	return p.getPodStatus(ctx, namespace, name, false)
+}
+
+// getPodStatus only exposes probe readiness after the lifecycle controller has
+// finished the create/clone/restore work. A resumed guest can briefly accept
+// connections before post-clone networking and service setup runs; publishing
+// that transient probe result would let consumers start work against a VM that
+// is about to become unavailable again. allowUnpublishedReady is reserved for
+// the final ready publication path, which writes pod status before flushing the
+// lifecycle annotation.
+func (p *Provider) getPodStatus(ctx context.Context, namespace, name string, allowUnpublishedReady bool) (*corev1.PodStatus, error) {
 	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {
 		return nil, err
@@ -28,7 +39,8 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 	podIP := p.resolveVMIP(namespace, name, v)
 
 	ready := corev1.ConditionFalse
-	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready {
+	lifecycleReady := meta.ReadLifecycleState(pod) == meta.LifecycleStateReady
+	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && (lifecycleReady || allowUnpublishedReady) {
 		ready = corev1.ConditionTrue
 	}
 

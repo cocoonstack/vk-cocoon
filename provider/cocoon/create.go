@@ -548,7 +548,18 @@ func (p *Provider) startProbe(pod *corev1.Pod, probe probes.Probe, onUpdate prob
 }
 
 func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
-	status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
+	p.refreshStatusWithLifecycleGate(ctx, pod, false)
+}
+
+// refreshReadyStatus is used only by the final ready publication path. It
+// allows the already-successful probe result to be written before the ready
+// lifecycle annotation, preserving the status-before-lifecycle ordering.
+func (p *Provider) refreshReadyStatus(ctx context.Context, pod *corev1.Pod) {
+	p.refreshStatusWithLifecycleGate(ctx, pod, true)
+}
+
+func (p *Provider) refreshStatusWithLifecycleGate(ctx context.Context, pod *corev1.Pod, allowUnpublishedReady bool) {
+	status, err := p.getPodStatus(ctx, pod.Namespace, pod.Name, allowUnpublishedReady)
 	if err != nil {
 		return
 	}
