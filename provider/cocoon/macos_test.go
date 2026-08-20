@@ -3,7 +3,9 @@ package cocoon
 import (
 	"context"
 	"errors"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -119,9 +121,37 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	if got.Annotations[meta.AnnotationVNCPort] != "5900" {
 		t.Errorf("VNC port annotation = %q, want 5900", got.Annotations[meta.AnnotationVNCPort])
 	}
-	// Ready is deferred to the SSH probe, so lifecycle must still be creating.
+	// Ready is deferred to the configured guest probe, so lifecycle must still be creating.
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateCreating {
 		t.Errorf("lifecycle state = %q, want creating", state)
+	}
+}
+
+func TestMacosProbeUsesDeclaredProbePort(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+
+	p := newTestProvider(t)
+	spec := macosSpec()
+	spec.ProbePort = port
+	pod := newPodWithSpec(spec)
+	p.trackPod(pod, &vm.VM{
+		ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor,
+		State: vm.StateRunning, IP: "127.0.0.1", MAC: "52:54:00:12:34:56",
+	})
+
+	probe := p.buildMacosProbe("ns", "demo-0")
+	if ready, msg := probe(t.Context()); !ready || msg != "tcp ok" {
+		t.Fatalf("declared probe port should make macOS ready, got ready=%v msg=%q", ready, msg)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "tcp probe "+port) {
+		t.Fatalf("closed declared probe port should make macOS unready, got ready=%v msg=%q", ready, msg)
 	}
 }
 
