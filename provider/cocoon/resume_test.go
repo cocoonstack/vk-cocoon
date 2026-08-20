@@ -88,13 +88,14 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateReady,
 		},
 		{
-			name: "creating with no post-clone marker derives the plan",
+			name: "creating Linux clone with no marker resumes resolver repair",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
 				pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
 			},
-			vms:    []vm.VM{running},
-			wantLC: meta.LifecycleStateReady,
+			vms:      []vm.VM{running},
+			wantExec: true,
+			wantLC:   meta.LifecycleStateReady,
 		},
 		{
 			// Drop-NIC spec + no marker + hibernate evidence = interrupted

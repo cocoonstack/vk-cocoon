@@ -150,19 +150,28 @@ func TestPlanPostClone(t *testing.T) {
 	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
 	dhcpNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}
 
-	t.Run("Linux CH OCI DHCP — no plan", func(t *testing.T) {
+	t.Run("Linux CH OCI DHCP — resolver repair plan", func(t *testing.T) {
 		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
-		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
-		if ok {
-			t.Errorf("CH+OCI+DHCP should not need post-clone setup")
+		plan, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "")
+		if !ok {
+			t.Fatal("Linux clones must repair resolver configuration before Ready")
+		}
+		if !strings.Contains(plan.argv[2], "/run/systemd/resolve/resolv.conf") {
+			t.Errorf("resolver repair missing from plan: %q", plan.argv[2])
+		}
+		if strings.Contains(plan.argv[2], "systemctl restart systemd-networkd") {
+			t.Errorf("CH+DHCP resolver-only plan must not restart networking: %q", plan.argv[2])
 		}
 	})
 
-	t.Run("Linux CH cloudimg DHCP — no plan", func(t *testing.T) {
+	t.Run("Linux CH cloudimg DHCP — resolver repair plan", func(t *testing.T) {
 		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
-		_, ok := planPostClone(meta.VMSpec{Backend: "cloud-hypervisor"}, v, "https://cloud-images.ubuntu.com/img.img")
-		if ok {
-			t.Errorf("cloudimg+DHCP self-heals via netplan fallback; no plan expected")
+		plan, ok := planPostClone(meta.VMSpec{OS: "linux", Backend: "cloud-hypervisor"}, v, "https://cloud-images.ubuntu.com/img.img")
+		if !ok {
+			t.Fatal("Linux cloudimg clones must repair resolver configuration before Ready")
+		}
+		if strings.Contains(plan.argv[2], "cloud-init clean") {
+			t.Errorf("CH+DHCP resolver-only plan must not rerun cloud-init: %q", plan.argv[2])
 		}
 	})
 
@@ -177,6 +186,17 @@ func TestPlanPostClone(t *testing.T) {
 		}
 		if !strings.Contains(plan.argv[2], "Address=10.0.0.2/24") {
 			t.Errorf("script missing static IP config: %q", plan.argv[2])
+		}
+		if !strings.Contains(plan.argv[2], "/run/systemd/resolve/resolv.conf") {
+			t.Errorf("script missing resolver repair: %q", plan.argv[2])
+		}
+	})
+
+	t.Run("Android CH DHCP — no plan", func(t *testing.T) {
+		v := &vm.VM{ID: "x", NetworkConfigs: dhcpNIC}
+		_, ok := planPostClone(meta.VMSpec{OS: "android", Backend: "cloud-hypervisor"}, v, "")
+		if ok {
+			t.Errorf("Android CH+DHCP should not run Linux resolver repair")
 		}
 	})
 
@@ -199,6 +219,22 @@ func TestPlanPostClone(t *testing.T) {
 			t.Errorf("Windows hint should single-quote the script body, got %q", plan.hint)
 		}
 	})
+}
+
+func TestBuildLinuxResolverRepairCommand(t *testing.T) {
+	t.Parallel()
+	cmd := buildLinuxResolverRepairCommand()
+	for _, want := range []string{
+		"systemctl is-active --quiet systemd-resolved",
+		"systemctl is-enabled --quiet systemd-resolved",
+		"[ -s /run/systemd/resolve/resolv.conf ]",
+		"rm -f /etc/resolv.conf",
+		"ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("resolver repair command missing %q: %q", want, cmd)
+		}
+	}
 }
 
 func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
@@ -335,7 +371,7 @@ func TestIsClonedBoot(t *testing.T) {
 	}
 }
 
-func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
+func TestRunPostCloneSetupLinuxDHCPRepairsResolver(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -345,11 +381,14 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 
 	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create", false)
 
-	if len(rt.execCalls) != 0 {
-		t.Errorf("CH+OCI+DHCP no-op path should not call Exec, got %d calls", len(rt.execCalls))
+	if len(rt.execCalls) != 1 {
+		t.Fatalf("Linux CH+DHCP should run one resolver repair, got %d calls", len(rt.execCalls))
 	}
-	if pod.Annotations[annotationPostCloneState] != "" {
-		t.Errorf("no-op should leave post-clone-state unset, got %q", pod.Annotations[annotationPostCloneState])
+	if got := strings.Join(rt.execCalls[0].argv, " "); !strings.Contains(got, "/run/systemd/resolve/resolv.conf") {
+		t.Errorf("resolver repair command missing from Exec: %q", got)
+	}
+	if pod.Annotations[annotationPostCloneState] != postCloneStateDone {
+		t.Errorf("post-clone state = %q, want %q", pod.Annotations[annotationPostCloneState], postCloneStateDone)
 	}
 }
 

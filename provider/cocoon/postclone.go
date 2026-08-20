@@ -355,8 +355,9 @@ type postClonePlan struct {
 	hint string
 }
 
-// planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
-// on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
+// planPostClone returns ok=false when no fixup is needed. Linux clones always
+// repair the systemd-resolved handoff because a snapshot may preserve a plain
+// /etc/resolv.conf that bypasses the DNS servers delivered by DHCP.
 func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
 	if !postCloneNeeded(spec, v) {
 		return postClonePlan{}, false
@@ -365,14 +366,25 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 		argv := buildWindowsPostCloneArgv()
 		return postClonePlan{argv: argv, hint: fmt.Sprintf("%s %s %s '%s'", argv[0], argv[1], argv[2], argv[3])}, true
 	}
-	script := buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs)
+	var cmds []string
+	if needsPostClone(spec.Backend, v.NetworkConfigs) {
+		cmds = append(cmds, buildPostCloneCommands(spec.VMName, spec.Backend, v.ID, sourceImage, v.NetworkConfigs))
+	}
+	if isLinuxSpec(spec) {
+		cmds = append(cmds, buildLinuxResolverRepairCommand())
+	}
+	script := strings.Join(cmds, "\n")
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
 // postCloneNeeded is planPostClone's decision alone — cheap and syscall-free,
 // so lock-holding callers (owedOpFor) can ask without building the plan.
 func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
-	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
+	return spec.OS == string(cocoonv1.OSWindows) || isLinuxSpec(spec) || needsPostClone(spec.Backend, v.NetworkConfigs)
+}
+
+func isLinuxSpec(spec meta.VMSpec) bool {
+	return spec.OS == "" || spec.OS == string(cocoonv1.OSLinux)
 }
 
 func truncate(s string, n int) string {
@@ -397,6 +409,17 @@ func buildWindowsPostCloneArgv() []string {
 		`$x|Disable-PnpDevice -Confirm:$false;` +
 		`$x|Enable-PnpDevice -Confirm:$false`
 	return []string{"powershell", "-nop", "-c", ps}
+}
+
+// buildLinuxResolverRepairCommand reconnects /etc/resolv.conf to
+// systemd-resolved's uplink-aware file. It is intentionally conditional so
+// distros that do not run systemd-resolved keep their native resolver setup.
+func buildLinuxResolverRepairCommand() string {
+	return "if command -v systemctl >/dev/null 2>&1 && " +
+		"(systemctl is-active --quiet systemd-resolved || systemctl is-enabled --quiet systemd-resolved); then " +
+		"i=0; while [ $i -lt 30 ] && [ ! -s /run/systemd/resolve/resolv.conf ]; do i=$((i+1)); sleep 1; done; " +
+		"[ -s /run/systemd/resolve/resolv.conf ] && rm -f /etc/resolv.conf && " +
+		"ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf; fi"
 }
 
 // isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).
