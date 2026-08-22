@@ -388,6 +388,14 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	}
 	lease, err := p.LeaseParser.LookupByMAC(v.MAC)
 	if err != nil {
+		if errors.Is(err, network.ErrNoLease) {
+			// An expired or removed lease invalidates the cached address. Keeping
+			// it could probe or publish an IP that DHCP has reassigned elsewhere.
+			p.setVMIP(namespace, name, v.ID, "")
+			return ""
+		}
+		// Preserve the last known address across transient lease-file I/O or
+		// decode failures; a later probe will retry the authoritative lookup.
 		return v.IP
 	}
 	if lease.IP == v.IP {
