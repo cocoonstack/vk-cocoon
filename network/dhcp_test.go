@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const twoLeases = `[
@@ -56,6 +57,23 @@ func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
 	}
 	if lease.IP != "172.20.0.11" {
 		t.Errorf("IP = %q, want %q", lease.IP, "172.20.0.11")
+	}
+}
+
+func TestLeaseParserSkipsExpiredLease(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.August, 22, 0, 0, 0, 0, time.UTC)
+	data := `[
+  {"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"2026-08-22T00:01:00Z"}
+]`
+	p := newTestParser(t, data)
+	p.now = func() time.Time { return now }
+	if _, err := p.LookupByMAC("aa:bb:cc:dd:ee:ff"); err != nil {
+		t.Fatalf("active entry should be returned: %v", err)
+	}
+	now = now.Add(2 * time.Minute)
+	if _, err := p.LookupByMAC("aa:bb:cc:dd:ee:ff"); !errors.Is(err, ErrNoLease) {
+		t.Fatalf("cached expired entry should be skipped, got err %v", err)
 	}
 }
 
