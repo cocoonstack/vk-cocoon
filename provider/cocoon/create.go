@@ -643,16 +643,16 @@ func forkSnapshotName(sourceVMName string) string {
 	return "fork-" + sourceVMName
 }
 
-// vmResourceOverrides translates pod resources into cocoon CLI args. vCPU
-// rounds the CPU limit up (requests when unset): the count is a hard cap
-// under cocoon's cgroup scope, so it must bound at the limit.
+// vmResourceOverrides translates pod resources into cocoon CLI args. Guest
+// topology follows limits (requests when unset); requests remain scheduler and
+// contention hints and must not silently shrink guest CPU or memory.
 func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	if len(pod.Spec.Containers) == 0 {
 		return 0, ""
 	}
 	resources := pod.Spec.Containers[0].Resources
 	cpu := selectQuantity(resources.Limits, resources.Requests, corev1.ResourceCPU)
-	memory := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
+	memory := selectQuantity(resources.Limits, resources.Requests, corev1.ResourceMemory)
 	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 

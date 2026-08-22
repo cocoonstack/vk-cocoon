@@ -546,6 +546,10 @@ func TestCreatePodRunMode(t *testing.T) {
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("1500m"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
 				corev1.ResourceMemory: resource.MustParse("4Gi"),
 			},
 		},
@@ -563,7 +567,7 @@ func TestCreatePodRunMode(t *testing.T) {
 		t.Fatalf("Run CPU = %d, want 2", rt.ran.CPU)
 	}
 	if rt.ran.Memory != "4Gi" {
-		t.Fatalf("Run Memory = %q, want 4Gi (vm layer owns the byte conversion)", rt.ran.Memory)
+		t.Fatalf("Run Memory = %q, want the 4Gi limit (vm layer owns the byte conversion)", rt.ran.Memory)
 	}
 	if len(pod.Status.ContainerStatuses) != 1 || !pod.Status.ContainerStatuses[0].Ready {
 		t.Fatalf("pod status was not refreshed to Ready: %#v", pod.Status.ContainerStatuses)

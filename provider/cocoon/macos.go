@@ -480,7 +480,7 @@ func macosCPUs(pod *corev1.Pod) int {
 func macosMemMB(pod *corev1.Pod) int {
 	if len(pod.Spec.Containers) > 0 {
 		resources := pod.Spec.Containers[0].Resources
-		q := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceMemory)
+		q := selectQuantity(resources.Limits, resources.Requests, corev1.ResourceMemory)
 		if mb := q.Value() / (1 << 20); mb > 0 {
 			return int(mb)
 		}
