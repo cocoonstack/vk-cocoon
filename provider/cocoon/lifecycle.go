@@ -53,9 +53,10 @@ func (p *Provider) markReadyPublished(ctx context.Context, pod *corev1.Pod) {
 
 func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, status meta.LifecycleStatus) {
 	p.refreshStatus(ctx, pod)
-	if err := p.publishPodStatus(ctx, pod); err == nil {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	if err := p.publishPodStatus(ctx, pod); err != nil {
+		return
 	}
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
 	p.notify(pod)
 }
 
@@ -167,6 +168,9 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 			if err := p.publishPodStatus(ctx, pod); err != nil {
 				continue
 			}
+			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			p.notify(pod)
+			continue
 		}
 		p.flushLifecycle(ctx, d.ns, d.name, d.status)
 	}

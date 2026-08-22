@@ -181,6 +181,12 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 	p.Clientset = cs
 	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo", IP: "192.0.2.10"})
+	readyNotifications := 0
+	p.notifyHook = func(notified *corev1.Pod) {
+		if ready, _ := conditionStatus(notified.Status.Conditions, corev1.PodReady); ready == corev1.ConditionTrue {
+			readyNotifications++
+		}
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -189,6 +195,9 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
 	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateCreating) {
 		t.Fatalf("lifecycle state = %q after failed status publish, want creating", got)
+	}
+	if readyNotifications != 0 {
+		t.Fatalf("Ready notification published after failed status write: %d", readyNotifications)
 	}
 
 	failStatus = false
@@ -200,6 +209,9 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 	}
 	if !statusPublished {
 		t.Fatal("ready status was not republished before lifecycle reconciliation")
+	}
+	if readyNotifications != 1 {
+		t.Fatalf("Ready notifications after successful reconciliation = %d, want 1", readyNotifications)
 	}
 }
 
