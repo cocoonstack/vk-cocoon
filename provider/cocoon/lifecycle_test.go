@@ -1,6 +1,8 @@
 package cocoon
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/meta"
 
+	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -148,6 +151,55 @@ func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
 	}
 	if got := p.lifecycleFlushed[key]; got != intent.Snapshot() {
 		t.Errorf("flushed snapshot after reconcile = %q, want %q", got, intent.Snapshot())
+	}
+}
+
+func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationLifecycleState: string(meta.LifecycleStateCreating)},
+	}}
+	cs := fake.NewSimpleClientset(pod.DeepCopy())
+	failStatus := true
+	statusPublished := false
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patch := action.(k8stesting.PatchAction)
+		if patch.GetSubresource() == "status" {
+			if failStatus {
+				return true, nil, context.Canceled
+			}
+			statusPublished = true
+			return false, nil, nil
+		}
+		if strings.Contains(string(patch.GetPatch()), string(meta.LifecycleStateReady)) && !statusPublished {
+			t.Fatal("ready lifecycle annotation published before pod status")
+		}
+		return false, nil, nil
+	})
+
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo", IP: "192.0.2.10"})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	p.markReadyPublished(ctx, pod)
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateCreating) {
+		t.Fatalf("lifecycle state = %q after failed status publish, want creating", got)
+	}
+
+	failStatus = false
+	p.reconcileAllLifecycle(t.Context())
+
+	updated, _ = cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateReady) {
+		t.Fatalf("lifecycle state = %q after reconciliation, want ready", got)
+	}
+	if !statusPublished {
+		t.Fatal("ready status was not republished before lifecycle reconciliation")
 	}
 }
 

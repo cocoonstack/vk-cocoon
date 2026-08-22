@@ -13,17 +13,6 @@ import (
 )
 
 func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
-	return p.getPodStatus(ctx, namespace, name, false)
-}
-
-// getPodStatus only exposes probe readiness after the lifecycle controller has
-// finished the create/clone/restore work. A resumed guest can briefly accept
-// connections before post-clone networking and service setup runs; publishing
-// that transient probe result would let consumers start work against a VM that
-// is about to become unavailable again. allowUnpublishedReady is reserved for
-// the final ready publication path, which writes pod status before flushing the
-// lifecycle annotation.
-func (p *Provider) getPodStatus(ctx context.Context, namespace, name string, allowUnpublishedReady bool) (*corev1.PodStatus, error) {
 	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {
 		return nil, err
@@ -40,7 +29,7 @@ func (p *Provider) getPodStatus(ctx context.Context, namespace, name string, all
 
 	ready := corev1.ConditionFalse
 	lifecycleReady := meta.ReadLifecycleState(pod) == meta.LifecycleStateReady
-	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && (lifecycleReady || allowUnpublishedReady) {
+	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && lifecycleReady {
 		ready = corev1.ConditionTrue
 	}
 
@@ -68,9 +57,9 @@ func (p *Provider) getPodStatus(ctx context.Context, namespace, name string, all
 
 // publishPodStatus writes the tracked pod.Status straight to the apiserver;
 // NotifyPods only queues, so a caller's next direct patch could land first.
-func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
+func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error {
 	if p.Clientset == nil {
-		return
+		return nil
 	}
 	logger := log.WithFunc("Provider.publishPodStatus")
 	p.mu.RLock()
@@ -78,7 +67,7 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
 	p.mu.RUnlock()
 	if err != nil {
 		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
-		return
+		return err
 	}
 	err = patchWithRetry(ctx, func() error {
 		_, patchErr := p.Clientset.CoreV1().Pods(pod.Namespace).Patch(
@@ -87,8 +76,9 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
 	})
 	if err != nil {
 		logger.Errorf(ctx, err,
-			"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
+			"status publish failed after retries for %s/%s, lifecycle Ready remains pending", pod.Namespace, pod.Name)
 	}
+	return err
 }
 
 func podStatusMatches(current, expected corev1.PodStatus) bool {

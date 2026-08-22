@@ -311,23 +311,40 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 // markLifecycleStateForWake gates on (pod tracked) ∧ (hibernate not requested) ∧ (VM
 // matches wakeVMID) and writes atomically; callers gate side effects on the return.
 func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
+	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
+	if !applied {
+		return false
+	}
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	return true
+}
+
+func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
 	tracked, ok := p.pods[key]
 	if !ok || bool(meta.ReadHibernateState(tracked)) {
 		p.mu.Unlock()
-		return false
+		return meta.LifecycleStatus{}, false
 	}
 	if cur, ok := p.vmsByPod[key]; !ok || cur.ID != wakeVMID {
 		p.mu.Unlock()
-		return false
+		return meta.LifecycleStatus{}, false
 	}
 	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
 	p.mu.Unlock()
 	if !applied {
+		return status, false
+	}
+	return status, true
+}
+
+func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string) bool {
+	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, meta.LifecycleStateReady, "")
+	if !applied {
 		return false
 	}
-	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	p.publishReadyLifecycle(ctx, pod, status)
 	return true
 }
 
