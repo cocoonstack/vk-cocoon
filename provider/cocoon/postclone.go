@@ -411,15 +411,16 @@ func buildWindowsPostCloneArgv() []string {
 	return []string{"powershell", "-nop", "-c", ps}
 }
 
-// buildLinuxResolverRepairCommand reconnects /etc/resolv.conf to
-// systemd-resolved's uplink-aware file. It is intentionally conditional so
-// distros that do not run systemd-resolved keep their native resolver setup.
+// buildLinuxResolverRepairCommand repairs resolver state copied by a snapshot
+// without replacing a working distro- or user-managed /etc/resolv.conf.
 func buildLinuxResolverRepairCommand() string {
 	return "if command -v systemctl >/dev/null 2>&1 && " +
 		"(systemctl is-active --quiet systemd-resolved || systemctl is-enabled --quiet systemd-resolved); then " +
 		"i=0; while [ $i -lt 30 ] && [ ! -s /run/systemd/resolve/resolv.conf ]; do i=$((i+1)); sleep 1; done; " +
-		"[ -s /run/systemd/resolve/resolv.conf ] && rm -f /etc/resolv.conf && " +
-		"ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf; fi"
+		"if [ -s /run/systemd/resolve/resolv.conf ] && " +
+		"{ [ ! -e /etc/resolv.conf ] || { [ ! -L /etc/resolv.conf ] && " +
+		"grep -Fq 'managed by man:systemd-resolved(8)' /etc/resolv.conf; }; }; then " +
+		"rm -f /etc/resolv.conf && ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf; fi; fi"
 }
 
 // isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).

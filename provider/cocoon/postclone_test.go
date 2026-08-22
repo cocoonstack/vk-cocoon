@@ -228,6 +228,9 @@ func TestBuildLinuxResolverRepairCommand(t *testing.T) {
 		"systemctl is-active --quiet systemd-resolved",
 		"systemctl is-enabled --quiet systemd-resolved",
 		"[ -s /run/systemd/resolve/resolv.conf ]",
+		"[ ! -e /etc/resolv.conf ]",
+		"[ ! -L /etc/resolv.conf ]",
+		"managed by man:systemd-resolved(8)",
 		"rm -f /etc/resolv.conf",
 		"ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf",
 	} {
