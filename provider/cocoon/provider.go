@@ -375,12 +375,9 @@ func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	return p.updateTrackedVM(namespace, name, vmID, func(v *vm.VM) { v.IP = ip }) != nil
 }
 
-// resolveVMIP returns the current cocoon-net lease for a DHCP VM. The tracked
-// IP is only a cache: a guest reboot can renew DHCP to a different IP,
-// especially when a clone initially resumes with the source snapshot's lease.
-// Static NICs keep the address reported by cocoon inspect.
+// resolveVMIP re-reads the lease each call: cocoon-net can rebind a MAC, so the tracked IP is only a cache (#70).
 func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
-	if len(v.NetworkConfigs) > 0 && v.NetworkConfigs[0] != nil && v.NetworkConfigs[0].Network != nil {
+	if len(v.NetworkConfigs) > 0 && isStaticNIC(v.NetworkConfigs[0]) {
 		return v.IP
 	}
 	if v.MAC == "" || p.LeaseParser == nil {
@@ -389,20 +386,14 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	lease, err := p.LeaseParser.LookupByMAC(v.MAC)
 	if err != nil {
 		if errors.Is(err, network.ErrNoLease) {
-			// An expired or removed lease invalidates the cached address. Keeping
-			// it could probe or publish an IP that DHCP has reassigned elsewhere.
 			p.setVMIP(namespace, name, v.ID, "")
 			return ""
 		}
-		// Preserve the last known address across transient lease-file I/O or
-		// decode failures; a later probe will retry the authoritative lookup.
 		return v.IP
 	}
 	if lease.IP == v.IP {
 		return v.IP
 	}
-	// The lease belongs to v's MAC; if a same-name recreate swapped the tracked
-	// VM during the lookup, the IP must not leak onto the successor.
 	if !p.setVMIP(namespace, name, v.ID, lease.IP) {
 		return ""
 	}

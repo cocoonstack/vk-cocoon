@@ -36,7 +36,6 @@ type cocoonNetLease struct {
 // LeaseParser reads cocoon-net leases, caching until mtime changes.
 type LeaseParser struct {
 	Path string
-	now  func() time.Time
 
 	mu    sync.Mutex
 	mtime time.Time
@@ -46,7 +45,7 @@ type LeaseParser struct {
 
 // NewLeaseParser returns a parser; empty path uses the default.
 func NewLeaseParser(path string) *LeaseParser {
-	return &LeaseParser{Path: cmp.Or(path, DefaultLeasesPath), now: time.Now}
+	return &LeaseParser{Path: cmp.Or(path, DefaultLeasesPath)}
 }
 
 // LookupByMAC returns the lease matching mac (case-insensitive).
@@ -56,7 +55,7 @@ func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if lease, ok := p.byMAC[strings.ToLower(mac)]; ok && p.now().Before(lease.expiresAt) {
+	if lease, ok := p.byMAC[strings.ToLower(mac)]; ok && time.Now().Before(lease.expiresAt) {
 		return lease, nil
 	}
 	return nil, ErrNoLease
