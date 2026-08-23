@@ -462,7 +462,9 @@ func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+	releaser := &recordingLeaseReleaser{}
+	p.LeaseReleaser = releaser
+	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning, MAC: "52:54:00:12:34:56"})
 	calls := stubMacosExec(p, func(args []string) (string, error) { return "", nil })
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
@@ -474,6 +476,9 @@ func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	}
 	if p.vmForPod("ns", "demo-0") != nil {
 		t.Fatal("VM still tracked after delete")
+	}
+	if !slices.Equal(releaser.macs, []string{"52:54:00:12:34:56"}) {
+		t.Errorf("released MACs = %v", releaser.macs)
 	}
 }
 

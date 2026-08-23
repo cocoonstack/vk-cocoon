@@ -153,7 +153,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		preCleared = false
 		logger.Errorf(ctx, err, "clear pre-remove annotations %s/%s", pod.Namespace, pod.Name)
 	}
-	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+	if err := p.removeVM(ctx, v); err != nil {
 		metrics.HibernateTotal.WithLabelValues("remove", "failed").Inc()
 		if p.Registry != nil {
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {

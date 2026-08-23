@@ -138,7 +138,10 @@ cannot wedge node registration. Rejected create/update calls count on
    - `main-only`: same, but only for the main agent (role `RoleMain`,
      i.e. slot 0 of its CocoonSet).
    - `never`: skip snapshots entirely.
-3. `Runtime.Remove(vmID)` to destroy the VM.
+3. `Runtime.Remove(vmID)` to destroy the VM, then idempotently release each
+   DHCP-backed NIC lease through cocoon-net's local control socket. Lease
+   cleanup is best-effort after destruction; the normal lease expiry remains
+   the fallback if cocoon-net is temporarily unavailable.
 4. Drop the local snapshot and its fork snapshot, **unless** the pod carries
    `vm.cocoonstack.io/keep-snapshot-on-delete`. The operator sets that flag
    when the delete is a `hibernatePolicy: release` seat release: the VM state

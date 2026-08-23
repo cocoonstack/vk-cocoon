@@ -1,6 +1,8 @@
 package cocoon
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +11,16 @@ import (
 
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+type recordingLeaseReleaser struct {
+	macs []string
+	err  error
+}
+
+func (r *recordingLeaseReleaser) ReleaseByMAC(_ context.Context, mac string) error {
+	r.macs = append(r.macs, mac)
+	return r.err
+}
 
 // TestDeletePodSnapshotRetention locks the delete GC table: a plain delete removes the local snapshots, a seat release keeps them as the warm-wake cache.
 func TestDeletePodSnapshotRetention(t *testing.T) {
@@ -92,5 +104,85 @@ func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
 	}
 	if rt.removedID != "resume-vmid" {
 		t.Errorf("delete should proceed after release, removed %q", rt.removedID)
+	}
+}
+
+func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
+	rt := &fakeRuntime{}
+	releaser := &recordingLeaseReleaser{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.LeaseReleaser = releaser
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	p.trackPod(pod, &vm.VM{
+		ID:   "vmid-del",
+		Name: "vk-ns-demo-0",
+		NetworkConfigs: []*vm.NetworkConfig{
+			{MAC: "AA:BB:CC:DD:EE:02"},
+			{MAC: "aa:bb:cc:dd:ee:01"},
+			{MAC: "aa:bb:cc:dd:ee:01"},
+			{MAC: "aa:bb:cc:dd:ee:03", Network: &vm.NetworkInfo{IP: "10.0.0.3"}},
+		},
+	})
+
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("DeletePod: %v", err)
+	}
+	if rt.removedID != "vmid-del" {
+		t.Fatalf("removed VM = %q, want vmid-del", rt.removedID)
+	}
+	if want := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}; !slices.Equal(releaser.macs, want) {
+		t.Errorf("released MACs = %v, want %v", releaser.macs, want)
+	}
+}
+
+func TestDeletePodLeaseReleaseFailureDoesNotResurrectVM(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.LeaseReleaser = &recordingLeaseReleaser{err: errors.New("cocoon-net unavailable")}
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("lease cleanup after a successful VM remove must be best effort: %v", err)
+	}
+	if p.vmForPod(pod.Namespace, pod.Name) != nil {
+		t.Fatal("VM remains tracked after successful removal")
+	}
+}
+
+func TestDeletePodDoesNotReleaseLeaseWhenVMRemovalFails(t *testing.T) {
+	releaser := &recordingLeaseReleaser{}
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{removeErr: errors.New("still running")}
+	p.LeaseReleaser = releaser
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+
+	if err := p.DeletePod(t.Context(), pod); err == nil {
+		t.Fatal("expected VM removal error")
+	}
+	if len(releaser.macs) != 0 {
+		t.Errorf("released MACs = %v before VM removal succeeded", releaser.macs)
+	}
+}
+
+func TestDHCPMACsUsesLegacyPrimaryMACOnlyWithoutNICDetails(t *testing.T) {
+	v := &vm.VM{MAC: " AA:BB:CC:DD:EE:FF "}
+	if got := dhcpMACs(v); !slices.Equal(got, []string{"AA:BB:CC:DD:EE:FF"}) {
+		t.Errorf("dhcpMACs = %v", got)
+	}
+}
+
+func TestDHCPMACsSkipsStaticNICs(t *testing.T) {
+	v := &vm.VM{
+		MAC: "aa:bb:cc:dd:ee:ff",
+		NetworkConfigs: []*vm.NetworkConfig{
+			{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2"}},
+		},
+	}
+	if got := dhcpMACs(v); len(got) != 0 {
+		t.Errorf("dhcpMACs = %v, want none for static NIC", got)
 	}
 }

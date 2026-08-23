@@ -292,7 +292,7 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 	switch p.OrphanPolicy {
 	case provider.OrphanDestroy:
 		logger.Warnf(ctx, "destroying orphan VM %s (id=%s)", v.Name, v.ID)
-		if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+		if err := p.removeVM(ctx, v); err != nil {
 			logger.Errorf(ctx, err, "remove orphan VM %s", v.ID)
 		}
 	case provider.OrphanKeep:

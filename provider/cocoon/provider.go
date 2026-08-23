@@ -85,18 +85,19 @@ type Provider struct {
 	// MacosBin is the cocoon-macos binary os=macos pods dispatch to;
 	// MacosBridge is the host bridge their tap NICs join. Empty values
 	// fall back to defaultMacosBinary / macosCNIBridge.
-	MacosBin     string
-	MacosBridge  string
-	Puller       *snapshots.Puller
-	Pusher       *snapshots.Pusher
-	PeerRestorer *snapshots.PeerRestorer
-	PeerPort     string
-	Registry     oci.Registry
-	LeaseParser  *network.LeaseParser
-	Pinger       network.Pinger
-	GuestSAC     guest.Dialer
-	Probes       *probes.Manager
-	Recorder     record.EventRecorder
+	MacosBin      string
+	MacosBridge   string
+	Puller        *snapshots.Puller
+	Pusher        *snapshots.Pusher
+	PeerRestorer  *snapshots.PeerRestorer
+	PeerPort      string
+	Registry      oci.Registry
+	LeaseParser   *network.LeaseParser
+	LeaseReleaser network.LeaseReleaser
+	Pinger        network.Pinger
+	GuestSAC      guest.Dialer
+	Probes        *probes.Manager
+	Recorder      record.EventRecorder
 
 	startTime time.Time
 	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
@@ -507,6 +508,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	case errors.Is(err, vm.ErrVMNotFound):
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
+		p.releaseDHCPLeases(ctx, eventVM)
 		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
 
 	case err != nil:
@@ -531,13 +533,13 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.mu.Unlock()
 		if !cooldownElapsed {
 			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
-			p.removeThenEvict(ctx, trackedID, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
+			p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
 			return
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
-			p.removeThenEvict(ctx, trackedID, affectedKey, affectedPod, "RestartFailed", startErr.Error())
+			p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartFailed", startErr.Error())
 			return
 		}
 		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
@@ -557,10 +559,10 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // removeThenEvict removes the VM then evicts the pod. On remove failure the
 // pod is kept for investigation — evicting would orphan the live VM and
 // collide on recreate.
-func (p *Provider) removeThenEvict(ctx context.Context, vmID, key string, pod *corev1.Pod, reason, message string) {
-	if err := p.Runtime.Remove(ctx, vmID); err != nil {
+func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
+	if err := p.removeVM(ctx, v); err != nil {
 		log.WithFunc("Provider.removeThenEvict").
-			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", vmID, reason)
+			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
 	p.evictPod(ctx, key, pod, reason, message)

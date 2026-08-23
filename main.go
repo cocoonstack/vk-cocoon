@@ -84,6 +84,7 @@ func main() {
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
 	ociRegistry := os.Getenv("OCI_REGISTRY")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
+	controlSocket := commonk8s.EnvOrDefault("VK_COCOON_NET_CONTROL_SOCKET", network.DefaultControlSocket)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
 	macosBridge := commonk8s.EnvOrDefault("COCOON_MACOS_BRIDGE", "")
@@ -148,6 +149,7 @@ func main() {
 		snapshotCompatibilityClass: snapshotCompatibilityClass,
 		ociRegistry:                ociRegistry,
 		leasesPath:                 leasesPath,
+		controlSocket:              controlSocket,
 		cocoonBin:                  cocoonBin,
 		macosBin:                   macosBin,
 		macosBridge:                macosBridge,
@@ -255,6 +257,7 @@ type buildOpts struct {
 	snapshotCompatibilityClass string
 	ociRegistry                string
 	leasesPath                 string
+	controlSocket              string
 	cocoonBin                  string
 	macosBin                   string
 	macosBridge                string
@@ -301,6 +304,9 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.PeerPort = opts.peerPort
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
+	if opts.controlSocket != "" {
+		p.LeaseReleaser = network.NewCocoonNetLeaseReleaser(opts.controlSocket)
+	}
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {
 		logger.Warnf(ctx, "icmp pinger disabled (%v); readiness will fall back to ip-resolved heuristic", err)
 		p.Pinger = network.NopPinger{}
