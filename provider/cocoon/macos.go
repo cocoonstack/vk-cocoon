@@ -221,9 +221,7 @@ func (p *Provider) startMacosProbe(pod *corev1.Pod) {
 		p.buildMacosOnUpdate(pod.Namespace, pod.Name))
 }
 
-// buildMacosProbe resolves the guest's cocoon-net IP, then honors probePort
-// when the workload declares an application-level readiness contract. Older
-// macOS pods without probePort keep the SSH fallback for compatibility.
+// buildMacosProbe dials probePort when declared, else sshd: the lease lands minutes before sshd on a cold boot.
 func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 	// Goroutine-confined: the probes.Manager runs one probe at a time per agent.
 	var lastInspect, lastRestart time.Time

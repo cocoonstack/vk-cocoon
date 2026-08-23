@@ -25,11 +25,13 @@ The `probes/` package owns that loop:
       all firewall profiles), and it decouples readiness from specific
       services so the same probe works for Linux and Windows guests alike.
 
-   `os=macos` pods get a different closure: the probe dials the guest's
-   own sshd on `:22`, requiring the `SSH-` banner — a cold macOS boot
-   takes minutes and its DHCP lease appears long before sshd answers —
-   and, on finding the QEMU process dead, restarts the record in place
-   (rate-limited); nothing else can see a crashed QEMU guest.
+   `os=macos` pods get a different closure: when
+   `vm.cocoonstack.io/probe-port` is declared, the probe considers a bare TCP
+   accept on that port ready. Otherwise it falls back to the guest's sshd on
+   `:22` and requires the `SSH-` banner — a cold macOS boot takes minutes and
+   its DHCP lease appears long before sshd answers. On finding the QEMU process
+   dead, it restarts the record in place (rate-limited); nothing else can see a
+   crashed QEMU guest.
 2. The first probe runs **synchronously inside `Start`** so the
    refreshStatus/notify pass that `CreatePod` does before returning
    already reflects the initial reachability decision.

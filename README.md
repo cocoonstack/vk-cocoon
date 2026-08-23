@@ -40,12 +40,13 @@ Pods annotated `cocoonset.cocoonstack.io/os: macos` dispatch to the standalone
 [cocoon-macos](https://github.com/cocoonstack/cocoon-macos) QEMU/KVM backend
 (`VK_COCOON_MACOS_BIN`, default `/usr/local/bin/cocoon-macos`) instead of the
 cocoon CLI. The guest joins the cocoon-net bridge (`COCOON_MACOS_BRIDGE`,
-default `cni0`) for a DHCP'd routed IP; readiness is the guest's sshd
-answering on that IP, and the QEMU VNC framebuffer gets a node-unique
+default `cni0`) for a DHCP'd routed IP. Readiness uses a bare TCP accept on the
+declared `vm.cocoonstack.io/probe-port`, or falls back to requiring the guest
+sshd's `SSH-` banner on `:22`. The QEMU VNC framebuffer gets a node-unique
 display allocated by vk-cocoon, published via `vm.cocoonstack.io/vnc-port`
-(bound to the node's loopback). A vk-cocoon restart adopts a live guest
-instead of relaunching it (two QEMU processes on one overlay corrupt the
-disk). Hibernate/wake, fork, and snapshot push do not apply to macOS guests.
+(bound to the node's loopback). A vk-cocoon restart adopts a live guest instead
+of relaunching it (two QEMU processes on one overlay corrupt the disk).
+Hibernate/wake, fork, and snapshot push do not apply to macOS guests.
 
 ## Quick start
 
