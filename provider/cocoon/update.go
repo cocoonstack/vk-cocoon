@@ -333,10 +333,7 @@ func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod
 	}
 	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
 	p.mu.Unlock()
-	if !applied {
-		return status, false
-	}
-	return status, true
+	return status, applied
 }
 
 func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string) bool {

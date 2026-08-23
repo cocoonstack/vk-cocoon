@@ -776,7 +776,8 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 }
 
 // patchWithRetry runs fn up to lifecyclePatchAttempts times with
-// lifecyclePatchInterval between failures.
+// lifecyclePatchInterval between failures; a canceled ctx returns nil —
+// there is nothing left to log against on shutdown.
 func patchWithRetry(ctx context.Context, fn func() error) error {
 	var lastErr error
 	for range lifecyclePatchAttempts {
@@ -784,7 +785,7 @@ func patchWithRetry(ctx context.Context, fn func() error) error {
 			return nil
 		}
 		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
-			return ctx.Err()
+			return nil
 		}
 	}
 	return lastErr

@@ -40,12 +40,13 @@ func (p *Provider) setLifecycleState(ctx context.Context, pod *corev1.Pod, state
 	return status, applied
 }
 
-// markReadyPublished stages lifecycle-state=ready in memory so status derives
-// Ready=True, then persists status before exposing the ready annotation. If the
-// status write fails, the lifecycle reconciler retries the ordered pair.
+// markReadyPublished stages ready in memory, then status must persist before the annotation is exposed.
 func (p *Provider) markReadyPublished(ctx context.Context, pod *corev1.Pod) {
 	status, applied := p.setLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	if !applied {
+		p.refreshStatus(ctx, pod)
+		_ = p.publishPodStatus(ctx, pod)
+		p.notify(pod)
 		return
 	}
 	p.publishReadyLifecycle(ctx, pod, status)
@@ -164,12 +165,7 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 			if err != nil {
 				continue
 			}
-			p.refreshStatus(ctx, pod)
-			if err := p.publishPodStatus(ctx, pod); err != nil {
-				continue
-			}
-			p.flushLifecycle(ctx, d.ns, d.name, d.status)
-			p.notify(pod)
+			p.publishReadyLifecycle(ctx, pod, d.status)
 			continue
 		}
 		p.flushLifecycle(ctx, d.ns, d.name, d.status)

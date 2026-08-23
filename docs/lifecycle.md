@@ -120,7 +120,9 @@ cannot wedge node registration. Rejected create/update calls count on
    agent's first probe runs synchronously so the initial `notify` push
    already reflects reachability; later probes run on a ticker and call
    back into the provider whenever readiness flips so the async notify
-   hook re-fires.
+   hook re-fires. Kubernetes `Ready=True` requires both a successful probe
+   and `lifecycle-state=ready`, so early reachability cannot expose a clone
+   before its lifecycle work completes.
 
 ## DeletePod
 
