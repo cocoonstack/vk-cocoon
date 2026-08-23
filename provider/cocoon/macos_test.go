@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -152,6 +153,17 @@ func TestMacosProbeUsesDeclaredProbePort(t *testing.T) {
 	}
 	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "tcp probe "+port) {
 		t.Fatalf("closed declared probe port should make macOS unready, got ready=%v msg=%q", ready, msg)
+	}
+}
+
+func TestConfigureMacosLifecycleCommandUsesGracefulCancellation(t *testing.T) {
+	cmd := exec.Command("true")
+	configureMacosLifecycleCommand(cmd)
+	if cmd.Cancel == nil {
+		t.Fatal("launch command has no graceful cancel function")
+	}
+	if cmd.WaitDelay != macosCommandCleanupGrace {
+		t.Fatalf("launch cleanup grace = %v, want %v", cmd.WaitDelay, macosCommandCleanupGrace)
 	}
 }
 

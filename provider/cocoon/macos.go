@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -53,7 +54,8 @@ const (
 
 	// macosLaunchTimeout bounds a detached `vm run`/`vm start`: the CLI
 	// returns once qemu daemonizes, so anything longer is a wedged launch.
-	macosLaunchTimeout = 5 * time.Minute
+	macosLaunchTimeout       = 5 * time.Minute
+	macosCommandCleanupGrace = 90 * time.Second
 
 	// macosInspectRetryEvery rate-limits the probe's record backfill to one
 	// subprocess per interval, not one per tick.
@@ -409,7 +411,9 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 	if p.macosExecFn != nil {
 		return p.macosExecFn(ctx, args...)
 	}
-	if len(args) >= 2 && args[0] == "vm" && (args[1] == "run" || args[1] == "start") {
+	isLaunch := len(args) >= 2 && args[0] == "vm" && (args[1] == "run" || args[1] == "start")
+	isLifecycleMutation := isLaunch || len(args) >= 2 && args[0] == "vm" && args[1] == "rm"
+	if isLaunch {
 		var cancel context.CancelFunc
 		ctx, cancel = detachedLaunchCtx(ctx)
 		defer cancel()
@@ -417,12 +421,31 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 	bin := cmp.Or(p.MacosBin, defaultMacosBinary)
 	log.WithFunc("Provider.macosExec").Debugf(ctx, "%s %s", bin, strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // path comes from operator config, not untrusted input
+	if isLifecycleMutation {
+		configureMacosLifecycleCommand(cmd)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return stdout.String() + stderr.String(), err
 	}
 	return stdout.String(), nil
+}
+
+// configureMacosLifecycleCommand gives cocoon-macos time to unwind its mounts,
+// NBD mappings and VM transaction after cancellation. CommandContext's
+// default immediate SIGKILL skips Go defers and strands those resources.
+func configureMacosLifecycleCommand(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		return nil
+	}
+	cmd.WaitDelay = macosCommandCleanupGrace
 }
 
 func (p *Provider) macosProcessAlive(pid int) bool {
