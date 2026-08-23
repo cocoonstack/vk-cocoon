@@ -27,20 +27,37 @@ func (p *Provider) StartLifecycleReconciler() {
 }
 
 func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
-	p.mu.Lock()
-	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
-	p.mu.Unlock()
+	status, applied := p.setLifecycleState(ctx, pod, state, message)
 	if applied {
 		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
 	}
 }
 
-// markReadyPublished flips lifecycle-state=ready with the pod status already
-// readable on the apiserver: publish precedes the direct patch, notify follows.
+func (p *Provider) setLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
+	p.mu.Lock()
+	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
+	p.mu.Unlock()
+	return status, applied
+}
+
+// markReadyPublished stages ready in memory, then status must persist before the annotation is exposed.
 func (p *Provider) markReadyPublished(ctx context.Context, pod *corev1.Pod) {
+	status, applied := p.setLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	if !applied {
+		p.refreshStatus(ctx, pod)
+		_ = p.publishPodStatus(ctx, pod)
+		p.notify(pod)
+		return
+	}
+	p.publishReadyLifecycle(ctx, pod, status)
+}
+
+func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, status meta.LifecycleStatus) {
 	p.refreshStatus(ctx, pod)
-	p.publishPodStatus(ctx, pod)
-	p.markLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
+	if err := p.publishPodStatus(ctx, pod); err != nil {
+		return
+	}
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
 	p.notify(pod)
 }
 
@@ -143,6 +160,14 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	p.mu.RUnlock()
 
 	for _, d := range drifts {
+		if d.status.State == meta.LifecycleStateReady {
+			pod, err := p.GetPod(ctx, d.ns, d.name)
+			if err != nil {
+				continue
+			}
+			p.publishReadyLifecycle(ctx, pod, d.status)
+			continue
+		}
 		p.flushLifecycle(ctx, d.ns, d.name, d.status)
 	}
 }

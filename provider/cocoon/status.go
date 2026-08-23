@@ -28,7 +28,8 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 	podIP := p.resolveVMIP(namespace, name, v)
 
 	ready := corev1.ConditionFalse
-	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready {
+	lifecycleReady := meta.ReadLifecycleState(pod) == meta.LifecycleStateReady
+	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && lifecycleReady {
 		ready = corev1.ConditionTrue
 	}
 
@@ -56,9 +57,9 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 
 // publishPodStatus writes the tracked pod.Status straight to the apiserver;
 // NotifyPods only queues, so a caller's next direct patch could land first.
-func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
+func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error {
 	if p.Clientset == nil {
-		return
+		return nil
 	}
 	logger := log.WithFunc("Provider.publishPodStatus")
 	p.mu.RLock()
@@ -66,7 +67,7 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
 	p.mu.RUnlock()
 	if err != nil {
 		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
-		return
+		return err
 	}
 	err = patchWithRetry(ctx, func() error {
 		_, patchErr := p.Clientset.CoreV1().Pods(pod.Namespace).Patch(
@@ -75,8 +76,9 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) {
 	})
 	if err != nil {
 		logger.Errorf(ctx, err,
-			"status publish failed after retries for %s/%s, ready may precede podIP", pod.Namespace, pod.Name)
+			"status publish failed after retries for %s/%s, lifecycle Ready remains pending", pod.Namespace, pod.Name)
 	}
+	return err
 }
 
 func podStatusMatches(current, expected corev1.PodStatus) bool {

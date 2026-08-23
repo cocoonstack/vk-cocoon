@@ -15,6 +15,7 @@ import (
 
 func TestReconcilePodStatusesRepublishesReadinessDrift(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Status = runningPodStatus(corev1.ConditionFalse)
 
 	p := newTestProvider(t)
@@ -43,6 +44,7 @@ func TestReconcilePodStatusesRepublishesReadinessDrift(t *testing.T) {
 
 func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Status = runningPodStatus(corev1.ConditionTrue)
 
 	p := newTestProvider(t)
@@ -58,6 +60,26 @@ func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
 
 	if notified {
 		t.Fatal("matching status was republished")
+	}
+}
+
+func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", OS: "windows"})
+	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}.Apply(pod)
+
+	p := newTestProvider(t)
+	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
+
+	status, err := p.GetPodStatus(t.Context(), pod.Namespace, pod.Name)
+	if err != nil {
+		t.Fatalf("GetPodStatus: %v", err)
+	}
+	if ready, _ := conditionStatus(status.Conditions, corev1.PodReady); ready != corev1.ConditionFalse {
+		t.Fatalf("Ready = %s, want False while lifecycle is creating", ready)
+	}
+	if status.ContainerStatuses[0].Ready {
+		t.Fatal("container Ready = true while lifecycle is creating")
 	}
 }
 

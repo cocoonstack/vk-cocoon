@@ -7,6 +7,10 @@ vk-cocoon actively pushes through `notify`, and v-k never polls
 load-bearing — any status change that happens after `CreatePod` returns
 is invisible to the cluster unless vk-cocoon re-fires `notify`.
 
+A successful probe is necessary but not sufficient for `Ready=True`: the pod's
+lifecycle state must also be `ready`. This keeps a reachable VM Not Ready while
+clone setup is still running, after lifecycle failure, or during hibernation.
+
 ## The probe loop
 
 The `probes/` package owns that loop:

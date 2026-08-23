@@ -137,18 +137,12 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.
 		return
 	}
 	if gotIP {
-		p.refreshStatus(ctx, pod)
-		// Must land before the ready patch: vm-service reads podIP on ready.
-		p.publishPodStatus(ctx, pod)
-		if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, "") {
+		if p.markReadyPublishedForWake(ctx, pod, v.ID) {
 			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
 			if wake {
 				metrics.WakeTotal.WithLabelValues("ok").Inc()
 			}
 		}
-		// After the patch: vk blind-writes the notified copy at drain time, and
-		// a pre-patch copy would revert ready to creating.
-		p.notify(pod)
 		return
 	}
 	kind, event := "clone", "PostCloneIPWaitTimeout"
