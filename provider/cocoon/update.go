@@ -406,6 +406,74 @@ func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) err
 	return nil
 }
 
+// peerBaseURL resolves peerNode's InternalIP; every vk serves peers on the same port.
+func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, error) {
+	if p.PeerPort == "" {
+		return "", errors.New("peer port not configured")
+	}
+	node, err := p.Clientset.CoreV1().Nodes().Get(ctx, peerNode, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP {
+			return "http://" + net.JoinHostPort(addr.Address, p.PeerPort), nil
+		}
+	}
+	return "", fmt.Errorf("node %s has no InternalIP address", peerNode)
+}
+
+// verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
+// in the hibernate tag's config blob — equality proves the local copy is
+// byte-identical to the registry artifact; a stale one would roll the user
+// back. The fetched manifest and config are returned for reuse downstream.
+func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) (*manifest.OCIManifest, *manifest.SnapshotConfig, error) {
+	if p.Registry == nil {
+		// Registry-less deployments never push: a local snapshot is current by construction.
+		return nil, nil, nil
+	}
+	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
+	}
+	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
+	if err != nil {
+		return m, nil, fmt.Errorf("fetch snapshot config: %w", err)
+	}
+	if cfg.SnapshotID != local.ID {
+		return m, cfg, fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
+	}
+	return m, cfg, nil
+}
+
+// fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;
+// ok=false is the registry's authoritative no-such-tag (typed 404), and any
+// other error keeps the evidence checks failing closed.
+func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*manifest.OCIManifest, bool, error) {
+	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	switch {
+	case errors.Is(err, commonsnapshot.ErrManifestNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("get hibernate manifest: %w", err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse hibernate manifest: %w", err)
+	}
+	return m, true, nil
+}
+
+// forgetVMOnly clears the VM record but keeps the pod.
+func (p *Provider) forgetVMOnly(namespace, name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
 // wakeSource is a resolved wake clone source: a snapshot addressed by name,
 // or a peer-staged dir for `vm clone --from-dir`. release drops whatever the
 // resolution created.
@@ -526,74 +594,6 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifes
 	metrics.PeerRestoreTotal.WithLabelValues("ok").Inc()
 	logger.Infof(ctx, "peer restore %s from %s in %.1fs", vmName, peerNode, time.Since(start).Seconds())
 	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true
-}
-
-// peerBaseURL resolves peerNode's InternalIP; every vk serves peers on the same port.
-func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, error) {
-	if p.PeerPort == "" {
-		return "", errors.New("peer port not configured")
-	}
-	node, err := p.Clientset.CoreV1().Nodes().Get(ctx, peerNode, metav1.GetOptions{})
-	if err != nil {
-		return "", err
-	}
-	for _, addr := range node.Status.Addresses {
-		if addr.Type == corev1.NodeInternalIP {
-			return "http://" + net.JoinHostPort(addr.Address, p.PeerPort), nil
-		}
-	}
-	return "", fmt.Errorf("node %s has no InternalIP address", peerNode)
-}
-
-// verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
-// in the hibernate tag's config blob — equality proves the local copy is
-// byte-identical to the registry artifact; a stale one would roll the user
-// back. The fetched manifest and config are returned for reuse downstream.
-func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) (*manifest.OCIManifest, *manifest.SnapshotConfig, error) {
-	if p.Registry == nil {
-		// Registry-less deployments never push: a local snapshot is current by construction.
-		return nil, nil, nil
-	}
-	m, ok, err := p.fetchHibernateManifest(ctx, vmName)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !ok {
-		return nil, nil, fmt.Errorf("%w: no hibernate tag in registry", errStaleLocalSnapshot)
-	}
-	cfg, err := commonsnapshot.FetchSnapshotConfig(ctx, p.Registry, vmName, m.Config)
-	if err != nil {
-		return m, nil, fmt.Errorf("fetch snapshot config: %w", err)
-	}
-	if cfg.SnapshotID != local.ID {
-		return m, cfg, fmt.Errorf("%w: registry has %s, local is %s", errStaleLocalSnapshot, cfg.SnapshotID, local.ID)
-	}
-	return m, cfg, nil
-}
-
-// fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;
-// ok=false is the registry's authoritative no-such-tag (typed 404), and any
-// other error keeps the evidence checks failing closed.
-func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*manifest.OCIManifest, bool, error) {
-	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	switch {
-	case errors.Is(err, commonsnapshot.ErrManifestNotFound):
-		return nil, false, nil
-	case err != nil:
-		return nil, false, fmt.Errorf("get hibernate manifest: %w", err)
-	}
-	m, err := manifest.Parse(raw)
-	if err != nil {
-		return nil, false, fmt.Errorf("parse hibernate manifest: %w", err)
-	}
-	return m, true, nil
-}
-
-// forgetVMOnly clears the VM record but keeps the pod.
-func (p *Provider) forgetVMOnly(namespace, name string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.dropVMLocked(meta.PodKey(namespace, name))
 }
 
 // lastNonEmptyLine returns the last non-blank line of s, trimmed. ipconfig
