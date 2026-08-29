@@ -15,8 +15,9 @@ The `probes/` package owns that loop:
    onUpdate)`. The probe closure the provider supplies performs three
    checks in order:
    1. The tracked VM still exists.
-   2. If the in-memory VM record has no IP, re-try the cocoon-net lease
-      file by MAC and write it back via `setVMIP`.
+   2. For DHCP-backed VMs, re-read the cocoon-net lease file by MAC on
+      every tick and write the current address back via `setVMIP`; the
+      tracked IP is only a cache. Static NICs keep their inspected IP.
    3. If the pod carries a `vm.cocoonstack.io/probe-port` annotation, dial
       TCP on that port instead of ICMP. Otherwise fall back to
       `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the
