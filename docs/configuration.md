@@ -11,7 +11,7 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Path to a GCP service-account JSON key with `roles/artifactregistry.writer`, fed to ADC for the snapshot push. Unset falls back to the read-only node instance SA. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
-| `VK_COCOON_NET_CONTROL_SOCKET` | `/run/cocoon-net/control.sock` | Root-only cocoon-net Unix socket used to reclaim DHCP leases after VM destruction. |
+| `VK_COCOON_NET_CONTROL_SOCKET` | `/run/cocoon-net/control.sock` | Root-only cocoon-net Unix socket used to reclaim DHCP leases after VM destruction; set explicitly to empty to disable. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
 | `VK_COCOON_MACOS_BIN` | `/usr/local/bin/cocoon-macos` | cocoon-macos binary `os=macos` pods dispatch to. |
 | `COCOON_MACOS_BRIDGE` | `cni0` | Host bridge macOS guests' tap NICs join for a DHCP'd routed IP. |

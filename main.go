@@ -84,7 +84,10 @@ func main() {
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
 	ociRegistry := os.Getenv("OCI_REGISTRY")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
-	controlSocket := commonk8s.EnvOrDefault("VK_COCOON_NET_CONTROL_SOCKET", network.DefaultControlSocket)
+	controlSocket := network.DefaultControlSocket
+	if configured, ok := os.LookupEnv("VK_COCOON_NET_CONTROL_SOCKET"); ok {
+		controlSocket = configured
+	}
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
 	macosBridge := commonk8s.EnvOrDefault("COCOON_MACOS_BRIDGE", "")

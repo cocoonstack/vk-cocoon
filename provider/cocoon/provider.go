@@ -506,9 +506,14 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):
+		tracked := p.vmForPod(affectedPod.Namespace, affectedPod.Name)
+		if tracked == nil || tracked.ID != trackedID {
+			logger.Infof(ctx, "vm %s tracking changed before eviction, ignoring stale gone event", trackedID)
+			return
+		}
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		p.releaseDHCPLeases(ctx, eventVM)
+		p.releaseDHCPLeases(ctx, tracked)
 		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
 
 	case err != nil:
@@ -561,6 +566,11 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
 	if err := p.removeVM(ctx, v); err != nil {
+		if errors.Is(err, vm.ErrVMNotFound) {
+			p.releaseDHCPLeases(ctx, v)
+			p.evictPod(ctx, key, pod, reason, message)
+			return
+		}
 		log.WithFunc("Provider.removeThenEvict").
 			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
@@ -627,18 +637,23 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		if key == "" || pod == nil {
 			return
 		}
+		tracked := p.vmForPod(pod.Namespace, pod.Name)
+		if tracked == nil || tracked.ID != vmID {
+			return
+		}
 		v, err := p.Runtime.Inspect(ctx, vmID)
 		switch {
 		case errors.Is(err, vm.ErrVMNotFound):
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
+			p.releaseDHCPLeases(ctx, tracked)
 			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
 			return
 		case err != nil:
 			if time.Now().After(deadline) {
-				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, evicting pod %s/%s to avoid stuck state",
+				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, removing before eviction of pod %s/%s",
 					vmID, budget, pod.Namespace, pod.Name)
-				p.evictPod(ctx, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget")
+				p.removeThenEvict(ctx, tracked, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget")
 				return
 			}
 			delay = min(delay*2, maxDelay)

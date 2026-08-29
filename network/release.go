@@ -15,7 +15,6 @@ const (
 	// DefaultControlSocket is cocoon-net's root-only local lifecycle API.
 	DefaultControlSocket  = "/run/cocoon-net/control.sock"
 	controlRequestTimeout = 5 * time.Second
-	maxControlErrorBody   = 4 << 10
 )
 
 // LeaseReleaser frees a cocoon-net DHCP lease by guest MAC address.
@@ -61,7 +60,7 @@ func (r *CocoonNetLeaseReleaser) ReleaseByMAC(ctx context.Context, rawMAC string
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlErrorBody))
+	body, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("release lease for %s: cocoon-net returned %s: %s",
 		mac, resp.Status, strings.TrimSpace(string(body)))
 }

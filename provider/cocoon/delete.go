@@ -3,7 +3,6 @@ package cocoon
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -91,34 +90,6 @@ func (p *Provider) releaseDHCPLeases(ctx context.Context, v *vm.VM) {
 	}
 }
 
-func dhcpMACs(v *vm.VM) []string {
-	if len(v.NetworkConfigs) == 0 {
-		if mac := strings.TrimSpace(v.MAC); mac != "" {
-			return []string{mac}
-		}
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(v.NetworkConfigs))
-	macs := make([]string, 0, len(v.NetworkConfigs))
-	for _, nic := range v.NetworkConfigs {
-		if nic == nil || nic.Network != nil {
-			continue
-		}
-		mac := strings.ToLower(strings.TrimSpace(nic.MAC))
-		if mac == "" {
-			continue
-		}
-		if _, ok := seen[mac]; ok {
-			continue
-		}
-		seen[mac] = struct{}{}
-		macs = append(macs, mac)
-	}
-	slices.Sort(macs)
-	return macs
-}
-
 func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	if vmName == "" {
 		return
@@ -131,4 +102,31 @@ func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 		})
 	}
 	wg.Wait()
+}
+
+func dhcpMACs(v *vm.VM) []string {
+	if len(v.NetworkConfigs) == 0 {
+		if mac := strings.TrimSpace(v.MAC); mac != "" {
+			return []string{mac}
+		}
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(v.NetworkConfigs))
+	macs := make([]string, 0, len(v.NetworkConfigs))
+	for _, nic := range v.NetworkConfigs {
+		if nic == nil || isStaticNIC(nic) {
+			continue
+		}
+		mac := strings.ToLower(strings.TrimSpace(nic.MAC))
+		if mac == "" {
+			continue
+		}
+		if _, ok := seen[mac]; ok {
+			continue
+		}
+		seen[mac] = struct{}{}
+		macs = append(macs, mac)
+	}
+	return macs
 }

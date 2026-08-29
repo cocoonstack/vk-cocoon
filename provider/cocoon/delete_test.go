@@ -12,16 +12,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-type recordingLeaseReleaser struct {
-	macs []string
-	err  error
-}
-
-func (r *recordingLeaseReleaser) ReleaseByMAC(_ context.Context, mac string) error {
-	r.macs = append(r.macs, mac)
-	return r.err
-}
-
 // TestDeletePodSnapshotRetention locks the delete GC table: a plain delete removes the local snapshots, a seat release keeps them as the warm-wake cache.
 func TestDeletePodSnapshotRetention(t *testing.T) {
 	tests := []struct {
@@ -121,6 +111,7 @@ func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 			{MAC: "AA:BB:CC:DD:EE:02"},
 			{MAC: "aa:bb:cc:dd:ee:01"},
 			{MAC: "aa:bb:cc:dd:ee:01"},
+			{MAC: "aa:bb:cc:dd:ee:04", Network: &vm.NetworkInfo{}},
 			{MAC: "aa:bb:cc:dd:ee:03", Network: &vm.NetworkInfo{IP: "10.0.0.3"}},
 		},
 	})
@@ -131,7 +122,8 @@ func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	if rt.removedID != "vmid-del" {
 		t.Fatalf("removed VM = %q, want vmid-del", rt.removedID)
 	}
-	if want := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}; !slices.Equal(releaser.macs, want) {
+	got := slices.Sorted(slices.Values(releaser.macs))
+	if want := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02", "aa:bb:cc:dd:ee:04"}; !slices.Equal(got, want) {
 		t.Errorf("released MACs = %v, want %v", releaser.macs, want)
 	}
 }
@@ -185,4 +177,14 @@ func TestDHCPMACsSkipsStaticNICs(t *testing.T) {
 	if got := dhcpMACs(v); len(got) != 0 {
 		t.Errorf("dhcpMACs = %v, want none for static NIC", got)
 	}
+}
+
+type recordingLeaseReleaser struct {
+	macs []string
+	err  error
+}
+
+func (r *recordingLeaseReleaser) ReleaseByMAC(_ context.Context, mac string) error {
+	r.macs = append(r.macs, mac)
+	return r.err
 }

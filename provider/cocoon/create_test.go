@@ -1550,6 +1550,25 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleVMGoneReleasesTrackedLeaseForSparseEvent(t *testing.T) {
+	releaser := &recordingLeaseReleaser{}
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{inspectErr: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.LeaseReleaser = releaser
+	p.trackPod(pod, &vm.VM{ID: "vmid-g", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-g"})
+
+	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:ff"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Fatalf("gone VM should be evicted, still tracked as %#v", got)
+	}
+}
+
 func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
@@ -1610,9 +1629,11 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
+	releaser := &recordingLeaseReleaser{}
+	p.LeaseReleaser = releaser
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:01"})
 	p.inlineInspectBaseDelay = 1 * time.Millisecond
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 20 * time.Millisecond
@@ -1637,6 +1658,9 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
 	}
+	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:01"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	}
 }
 
 func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
@@ -1645,9 +1669,11 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)
 	p.Runtime = rt
+	releaser := &recordingLeaseReleaser{}
+	p.LeaseReleaser = releaser
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:02"})
 	p.inlineInspectBaseDelay = 1 * time.Millisecond
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 10 * time.Millisecond
@@ -1677,6 +1703,37 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("budget-timeout eviction did not fire within 2s")
+	}
+	if rt.removedID != "vmid-b" {
+		t.Fatalf("timeout must remove VM before eviction, removed %q", rt.removedID)
+	}
+	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:02"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	}
+}
+
+func TestHandleVMGoneDeferredTimeoutKeepsLeaseWhenRemovalFails(t *testing.T) {
+	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe"), removeErr: errors.New("still running")}
+	releaser := &recordingLeaseReleaser{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.LeaseReleaser = releaser
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-safe", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:03"})
+	p.inlineInspectBaseDelay = time.Millisecond
+	p.deferredRecheckInitialDelay = time.Millisecond
+	p.deferredRecheckMaxDelay = 2 * time.Millisecond
+	p.deferredRecheckBudget = 5 * time.Millisecond
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-safe"})
+	p.recheckWG.Wait()
+
+	if got := p.vmForPod("ns", "demo-0"); got == nil {
+		t.Fatal("pod tracking was evicted even though VM removal failed")
+	}
+	if len(releaser.macs) != 0 {
+		t.Fatalf("released MACs = %v while VM state remained uncertain", releaser.macs)
 	}
 }
 
