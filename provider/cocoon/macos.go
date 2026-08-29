@@ -412,7 +412,7 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 		return p.macosExecFn(ctx, args...)
 	}
 	isLaunch := len(args) >= 2 && args[0] == "vm" && (args[1] == "run" || args[1] == "start")
-	isLifecycleMutation := isLaunch || len(args) >= 2 && args[0] == "vm" && args[1] == "rm"
+	isLifecycleMutation := isLaunch || (len(args) >= 2 && args[0] == "vm" && args[1] == "rm")
 	if isLaunch {
 		var cancel context.CancelFunc
 		ctx, cancel = detachedLaunchCtx(ctx)
@@ -432,22 +432,6 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 	return stdout.String(), nil
 }
 
-// configureMacosLifecycleCommand gives cocoon-macos time to unwind its mounts,
-// NBD mappings and VM transaction after cancellation. CommandContext's
-// default immediate SIGKILL skips Go defers and strands those resources.
-func configureMacosLifecycleCommand(cmd *exec.Cmd) {
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return err
-		}
-		return nil
-	}
-	cmd.WaitDelay = macosCommandCleanupGrace
-}
-
 func (p *Provider) macosProcessAlive(pid int) bool {
 	if p.macosProcessAliveFn != nil {
 		return p.macosProcessAliveFn(pid)
@@ -460,6 +444,20 @@ func (p *Provider) macosProcessAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// configureMacosLifecycleCommand swaps CommandContext's SIGKILL for SIGTERM + a bounded wait: cocoon-macos traps SIGTERM and unwinds mounts/NBD/VM state.
+func configureMacosLifecycleCommand(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		return nil
+	}
+	cmd.WaitDelay = macosCommandCleanupGrace
 }
 
 // macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for
