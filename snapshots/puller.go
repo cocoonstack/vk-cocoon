@@ -60,8 +60,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 	return finishImport(importer, wait, err, "stream snapshot")
 }
 
-// EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`.
-// Caller MUST have classified raw as KindCloudImage.
+// EnsureCloudImageFromRaw streams raw into `cocoon image import <localName>`; caller MUST have classified raw as KindCloudImage.
 func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName string, raw []byte, force bool) error {
 	localName = cmp.Or(localName, name)
 	if !force {
@@ -82,8 +81,7 @@ func (p *Puller) EnsureCloudImageFromRaw(ctx context.Context, name, localName st
 	return finishImport(importer, wait, cloudimg.Stream(ctx, raw, adapter, importer), "stream cloud image")
 }
 
-// finishImport settles an import pipe: close-then-wait always runs, and a
-// stream error takes precedence over the drain results.
+// finishImport settles an import pipe: close-then-wait always runs; a stream error takes precedence over drain results.
 func finishImport(importer io.WriteCloser, wait func() error, streamErr error, streamOp string) error {
 	if streamErr != nil {
 		_ = importer.Close()

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -125,7 +127,6 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	if got.Annotations[meta.AnnotationVNCPort] != "5900" {
 		t.Errorf("VNC port annotation = %q, want 5900", got.Annotations[meta.AnnotationVNCPort])
 	}
-	// Ready is deferred to the configured guest probe, so lifecycle must still be creating.
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateCreating {
 		t.Errorf("lifecycle state = %q, want creating", state)
 	}
@@ -177,11 +178,27 @@ func TestFormatMacosArgsForLogRedactsPassword(t *testing.T) {
 	}
 }
 
-func TestAppendMacosVNCArgsRequiresPassword(t *testing.T) {
+func TestMacosVNCOffWithoutPassword(t *testing.T) {
 	p := newTestProvider(t)
 	p.MacosVNCPassword = ""
-	if _, err := p.appendMacosVNCArgs([]string{"vm", "start"}, 5900); err == nil {
-		t.Fatal("expected missing VNC password to be rejected")
+	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, 5900)
+	if err != nil {
+		t.Fatalf("unset password must disable VNC, not fail: %v", err)
+	}
+	if slices.Contains(args, "--vnc") || slices.Contains(args, "--vnc-password") {
+		t.Fatalf("unset password must drop VNC args, got %v", args)
+	}
+	if port := p.claimMacosVNCPort("ns/demo-0", 0); port != 0 {
+		t.Fatalf("claimMacosVNCPort = %d without a password, want 0", port)
+	}
+}
+
+func TestValidateMacosVNCPasswordRejectsControlChars(t *testing.T) {
+	if err := ValidateMacosVNCPassword("pw\n"); err == nil {
+		t.Fatal("control characters must be rejected")
+	}
+	if err := ValidateMacosVNCPassword(""); err != nil {
+		t.Fatalf("empty means VNC off, got %v", err)
 	}
 }
 
@@ -190,6 +207,62 @@ func TestAppendMacosVNCArgsRejectsLongPassword(t *testing.T) {
 	p.MacosVNCPassword = "123456789"
 	if _, err := p.appendMacosVNCArgs([]string{"vm", "start"}, 5900); err == nil {
 		t.Fatal("expected VNC password longer than 8 bytes to be rejected")
+	}
+}
+
+func TestDeleteMacosPodStopsProbeBeforeRemove(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	stubMacosExec(p, freshCreateHandler)
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if p.Probes.Get(key).LastSeen.IsZero() {
+		t.Fatal("probe agent was not armed by CreatePod")
+	}
+
+	p.macosExecFn = func(_ context.Context, args ...string) (string, error) {
+		if len(args) >= 2 && args[0] == "vm" && args[1] == "rm" {
+			return "", errors.New("rm interrupted")
+		}
+		return freshCreateHandler(args)
+	}
+	if err := p.DeletePod(t.Context(), pod); err == nil {
+		t.Fatal("DeletePod must surface the rm failure")
+	}
+	if !p.Probes.Get(key).LastSeen.IsZero() {
+		t.Fatal("probe agent survived a failed rm; its crash recovery would vm start the guest mid-teardown")
+	}
+}
+
+func TestReconcileMacosPodPublishesReadiness(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	p := newTestProvider(t)
+	spec := macosSpec()
+	spec.ProbePort = strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	pod := newPodWithSpec(spec)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.LeaseParser = newLeaseParser(t, "52:54:00:12:34:56", "127.0.0.1")
+	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
+	stubMacosExec(p, inspectOnlyHandler)
+	p.trackPod(pod, nil)
+
+	p.reconcileMacosPod(t.Context(), pod, spec)
+
+	got, err := p.GetPod(t.Context(), pod.Namespace, pod.Name)
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateReady {
+		t.Fatalf("adopted reachable macOS pod stuck at lifecycle %q, want ready", state)
 	}
 }
 
@@ -238,7 +311,6 @@ func TestCreateMacosPodAdoptsLiveVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
-	// The live guest's own display (record vnc=7) wins over fresh allocation.
 	if got.Annotations[meta.AnnotationVNCPort] != "5907" {
 		t.Errorf("VNC port annotation = %q, want adopted 5907", got.Annotations[meta.AnnotationVNCPort])
 	}
@@ -266,9 +338,6 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	if len(starts) != 1 {
 		t.Fatalf("dead record must dispatch `vm start`, got %v", all)
 	}
-	// VNC is launch-scoped in cocoon-macos: a bare `vm start` disables it while
-	// the vnc-port annotation still advertises the display. Create-time storage
-	// and reboot policy are persisted in the VM record and must not be repeated.
 	if joined := strings.Join(starts[0], " "); !strings.Contains(joined, "--vnc 0 --vnc-password testpass") {
 		t.Errorf("`vm start` must re-assert protected VNC, got: %s", joined)
 	} else if strings.Contains(joined, "--exit-on-reboot") || strings.Contains(joined, "--storage") {
@@ -340,12 +409,61 @@ func TestMacosProbeRestartsDeadQemu(t *testing.T) {
 	if v := p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4243 {
 		t.Fatalf("record not refreshed after restart: %+v", v)
 	}
-	// Alive again: the next tick moves on to lease resolution, no second start.
 	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "lease") {
 		t.Fatalf("restarted guest should wait for its lease, got ready=%v msg=%q", ready, msg)
 	}
 	if starts := macosCallsWithPrefix(calls(), "vm", "start"); len(starts) != 1 {
 		t.Fatalf("live guest must not be restarted again, got %v", starts)
+	}
+}
+
+func TestMacosRecoverClearsDisabledVNC(t *testing.T) {
+	p := newTestProvider(t)
+	p.MacosVNCPassword = ""
+	pod := newPodWithSpec(macosSpec())
+	pod.Annotations[meta.AnnotationVNCPort] = "5907"
+	p.Clientset = fake.NewSimpleClientset(pod)
+	started := false
+	p.macosProcessAliveFn = func(pid int) bool { return started && pid == 4243 }
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		switch {
+		case macosCallIs(args, "vm", "start"):
+			started = true
+			return "macos-demo (pid 4243)\n", nil
+		case macosCallIs(args, "vm", "inspect"):
+			if started {
+				return strings.NewReplacer("4242", "4243", `"vnc": 7`, `"vnc": -1`).Replace(macosInspectJSON), nil
+			}
+			return macosInspectJSON, nil
+		default:
+			return "", nil
+		}
+	})
+	p.trackPod(pod, &vm.VM{
+		ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor,
+		State: vm.StateRunning, PID: 4242, MAC: "52:54:00:12:34:56",
+	})
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	p.macosVNC[key] = 5907
+	p.mu.Unlock()
+
+	if msg := p.recoverMacosVM(t.Context(), pod.Namespace, pod.Name, p.vmForPod(pod.Namespace, pod.Name)); !strings.Contains(msg, "restarted") {
+		t.Fatalf("recoverMacosVM = %q, want restarted", msg)
+	}
+	if port := p.macosVNCPortFor(key); port != 0 {
+		t.Fatalf("VNC reservation = %d, want released", port)
+	}
+	got, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(t.Context(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if port := got.Annotations[meta.AnnotationVNCPort]; port != "" {
+		t.Fatalf("VNC annotation = %q, want cleared", port)
+	}
+	starts := macosCallsWithPrefix(calls(), "vm", "start")
+	if len(starts) != 1 || slices.Contains(starts[0], "--vnc") {
+		t.Fatalf("VNC-off recovery must start without a display, got %v", starts)
 	}
 }
 
@@ -418,8 +536,6 @@ func TestCreateMacosPodRunFailureKeepsSameNameVM(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "vm run") {
 		t.Fatalf("expected vm run failure, got %v", err)
 	}
-	// The inspect failure is indistinguishable from a missing record, so the
-	// collision is not proof this call created the VM: never clean up with rm.
 	if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != 0 {
 		t.Fatalf("ambiguous failed run removed a same-name VM: %v", rms)
 	}
@@ -506,7 +622,7 @@ func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	if p.vmForPod("ns", "demo-0") != nil {
 		t.Fatal("VM still tracked after delete")
 	}
-	if !slices.Equal(releaser.macs, []string{"52:54:00:12:34:56"}) {
+	if got := releaser.released(); !slices.Equal(got, []string{"52:54:00:12:34:56"}) {
 		t.Errorf("released MACs = %v", releaser.macs)
 	}
 }
@@ -574,6 +690,33 @@ func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	}
 }
 
+func TestMacosCPUsRoundsOddUpToEven(t *testing.T) {
+	tests := []struct {
+		name string
+		cpu  string
+		want int
+	}{
+		{"one rounds to two", "1", 2},
+		{"fractional rounds through one to two", "500m", 2},
+		{"even passes through", "2", 2},
+		{"odd rounds up", "3", 4},
+		{"unset uses the even default", "", macosDefaultCPUs},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newPodWithSpec(macosSpec())
+			if tc.cpu != "" {
+				pod.Spec.Containers = []corev1.Container{{Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(tc.cpu)},
+				}}}
+			}
+			if got := macosCPUs(pod); got != tc.want {
+				t.Errorf("macosCPUs(cpu=%q) = %d, want %d", tc.cpu, got, tc.want)
+			}
+		})
+	}
+}
+
 func macosSpec() meta.VMSpec {
 	return meta.VMSpec{
 		VMName:    "macos-demo",
@@ -584,7 +727,6 @@ func macosSpec() meta.VMSpec {
 	}
 }
 
-// stubMacosExec records every cocoon-macos dispatch and answers via handler.
 func stubMacosExec(p *Provider, handler func(args []string) (string, error)) func() [][]string {
 	var mu sync.Mutex
 	var calls [][]string
@@ -601,8 +743,6 @@ func stubMacosExec(p *Provider, handler func(args []string) (string, error)) fun
 	}
 }
 
-// freshCreateHandler answers no record, image present, launch OK — the
-// fresh `vm run` path.
 func freshCreateHandler(args []string) (string, error) {
 	switch {
 	case macosCallIs(args, "vm", "inspect"):

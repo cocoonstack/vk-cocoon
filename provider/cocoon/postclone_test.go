@@ -220,7 +220,7 @@ func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	p.Close() // drain bgWG so the SAC goroutine completes
+	p.Close()
 
 	if got := pod.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateFailed) {
 		t.Errorf("lifecycle-state = %q, want %q (SAC Failed must not be clobbered by !cloned Ready)",
@@ -236,7 +236,6 @@ func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 	p := newTestProvider(t)
 
-	// Build enough errors that errors.Join's body comfortably exceeds 4 KiB.
 	errs := make([]error, 0, 80)
 	for i := range 80 {
 		errs = append(errs, fmt.Errorf("attempt %d: %s", i, strings.Repeat("x", 100)))
@@ -281,7 +280,6 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 }
 
 func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
-	// execErr=context.Canceled simulates Exec canceled after lifecycleCtx fires; the pre-canceled request ctx makes loopCtx exit after one iteration.
 	rt := &fakeRuntime{execErr: context.Canceled}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -353,7 +351,6 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	}
 }
 
-// TestCreatePodWindowsClonedRunsSACAfterPostCloneExec locks exec-before-SAC ordering; it waits on dedicated signals because p.Close() would cancel the goroutine's context and race its exec/dial calls.
 func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 	var mu sync.Mutex
 	var order []string

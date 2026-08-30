@@ -31,7 +31,7 @@ On every restart vk-cocoon:
 4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
    the VMID against the runtime list.
 5. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
-   - `destroy` (default): remove the VM so pod-less VMs don't accumulate
+   - `destroy` (default): remove the VM and release its DHCP leases so pod-less VMs don't accumulate
      after restart or pod chaos.
    - `alert`: log + bump `cocoon_vk_orphan_vm_total`, leave the VM alone.
    - `keep`: no log, no metric.
@@ -58,6 +58,13 @@ class (see
 [Snapshot CPU compatibility](lifecycle.md#snapshot-cpu-compatibility)); a
 mismatch fails startup reconcile, and vk-cocoon refuses to register the
 node rather than resume snapshots on an incompatible host.
+
+## Periodic convergence
+
+Every 30 seconds, the status reconciler re-resolves each tracked VM's DHCP
+lease and repairs drifted pod status. The same pass idempotently reconciles the
+published IP and macOS VNC-port annotations, removing an endpoint when the
+runtime no longer serves it; failed patches are retried on the next pass.
 
 ## VM event watcher
 

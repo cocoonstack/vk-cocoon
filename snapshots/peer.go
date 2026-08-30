@@ -27,11 +27,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// Peer transfer: a wake landing off the hibernating node fetches the raw
-// snapshot files straight from that node's vk into a staging dir for
-// `vm clone --from-dir`. The registry stays the trust anchor: plans must
-// match its snapshot ID, and any failure falls back to the registry pull.
-
 const (
 	planPath  = "/v1/snapshot-plan"
 	slicePath = "/v1/snapshot-slice"
@@ -44,36 +39,30 @@ const (
 	// restoreBufBytes batches stream reads into one write syscall.
 	restoreBufBytes = 4 << 20
 
-	// Fragmented qcow2s scan into thousands of sub-MB extents; holes up to
-	// this size ride along as zeros instead of costing a ~40ms round trip each.
+	// holes up to this size ride along as zeros instead of costing a ~40ms round trip each.
 	coalesceGapBytes = 4 << 20
 
 	// 32 concurrent streams saturate the NIC on the measured node classes.
 	defaultPeerConcurrency = 32
 
-	// Contiguous per-stream file regions: interleaved writers on one inode
-	// measured 1.6 GB/s, disjoint sequential regions 2.7 GB/s on the same pair.
+	// interleaved writers on one inode measured 1.6 GB/s vs 2.7 GB/s for disjoint sequential regions.
 	streamsPerFile = 8
 
-	// io.CopyBuffer scratch on both ends; the 32KB default profiled at
-	// 12-17% syscall time.
+	// io.CopyBuffer scratch on both ends; the 32KB default profiled at 12-17% syscall time.
 	copyBufBytes = 1 << 20
 
-	// Zero-elision granularity: 4K skipping measured half the throughput;
-	// 1 MiB keeps writes big while still eliding holes and zeroed memory.
+	// zero-elision granularity: 4K skipping measured half the throughput of 1 MiB.
 	zeroSkipBytes = 1 << 20
 )
 
 var (
-	// Hardware CRC; sha256 burned 78-81% of transfer CPU (no SHA-NI on the
-	// fleet). Guards transport only — the registry stays the identity anchor.
+	// hardware CRC: sha256 burned 78-81% of transfer CPU (no SHA-NI on the fleet); guards transport only.
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
 	peerRestoreGate = semaphore.NewWeighted(2)
 
-	// One shared transport for connection reuse. Dead peers fail fast into
-	// the registry fallback; body reads are governed by the caller's ctx.
+	// one shared transport for connection reuse; dead peers fail fast into the registry fallback.
 	peerClient = &http.Client{Transport: &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 		ResponseHeaderTimeout: 10 * time.Second,
@@ -109,9 +98,7 @@ type snapshotResolver interface {
 	Snapshot(ctx context.Context, name string) (*vm.Snapshot, error)
 }
 
-// PeerServer serves local snapshot files to waking peers. StoreDir is
-// cocoon's localfile store root — a deliberate sidecar read of cocoon's
-// on-disk layout; if that changes, plans fail and wakes fall back to the registry.
+// PeerServer serves local snapshot files to waking peers; StoreDir is cocoon's localfile store root.
 type PeerServer struct {
 	Snapshots snapshotResolver
 	StoreDir  string
@@ -266,8 +253,7 @@ func splitExtents(extents []extent, max int64) []peerSlice {
 	return out
 }
 
-// groupSlices splits an ordered slice list into up to n contiguous runs so
-// each fetcher writes one disjoint region of the file sequentially.
+// groupSlices splits an ordered slice list into up to n contiguous runs so each fetcher writes one disjoint region.
 func groupSlices(sl []peerSlice, n int) iter.Seq[[]peerSlice] {
 	return slices.Chunk(sl, max(1, (len(sl)+n-1)/n))
 }
@@ -283,17 +269,12 @@ type RestoredSnapshot struct {
 	Snapshot *vm.Snapshot
 }
 
-// PeerRestorer fetches raw snapshot files from a peer's vk into a staging
-// dir. Writes stay buffered and unsynced: the clone re-reads them
-// page-cache-hot (measured ~7s faster than O_DIRECT), and staged data is
-// re-pullable from the registry.
+// PeerRestorer fetches raw snapshot files from a peer's vk into a staging dir, buffered and unsynced (~7s faster than O_DIRECT on clone re-read).
 type PeerRestorer struct {
 	StagingRoot string
 }
 
-// Restore fetches name's snapshot files from the peer at baseURL. cfg is
-// the trust anchor: the peer's plan must present cfg's snapshot ID, and the
-// envelope is synthesized from cfg, never from peer-supplied metadata.
+// Restore fetches name's snapshot files from the peer at baseURL; cfg is the trust anchor, never peer-supplied metadata.
 func (p *PeerRestorer) Restore(ctx context.Context, baseURL, name string, cfg *manifest.SnapshotConfig) (_ *RestoredSnapshot, cleanup func(), err error) {
 	if acqErr := peerRestoreGate.Acquire(ctx, 1); acqErr != nil {
 		return nil, nil, acqErr
@@ -456,8 +437,7 @@ func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID strin
 	return nil
 }
 
-// sectionWriter batches one slice's stream into restoreBufBytes writes at its
-// file offset, so zero elision and write syscalls see big chunks.
+// sectionWriter batches one slice's stream into restoreBufBytes writes at its file offset.
 type sectionWriter struct {
 	f   *os.File
 	off int64
@@ -497,8 +477,7 @@ func (s *sectionWriter) Flush() error {
 	return nil
 }
 
-// writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular
-// all-zero chunks — skipped regions of the truncate-created files stay sparse.
+// writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular all-zero chunks so skipped regions stay sparse.
 func writeSkippingZeros(f *os.File, data []byte, off int64) error {
 	for start := 0; start < len(data); {
 		end := min(start+zeroSkipBytes, len(data))

@@ -232,6 +232,16 @@ var (
 		[]string{"phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
 	)
 
+	LeaseReleaseTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "lease_release_total",
+			Help:      "Cocoon-net DHCP lease releases after VM destruction, by result.",
+		},
+		[]string{"result"},
+	)
+
 	WakeTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -309,6 +319,7 @@ func Register(reg prometheus.Registerer) {
 		PeerRestoreDuration,
 		ProbeDuration,
 		HibernateTotal,
+		LeaseReleaseTotal,
 		WakeTotal,
 		WakeIPWaitTotal,
 		WakeRenewNudgeTotal,

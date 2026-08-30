@@ -9,8 +9,7 @@ import (
 // CollectFunc returns the live VM and node stats for a single scrape.
 type CollectFunc func() ([]provider.VMStats, provider.NodeStats)
 
-// VMCollector is a prometheus.Collector that reads live VM and node
-// stats from a provider callback on each scrape.
+// VMCollector is a prometheus.Collector that reads live VM and node stats from a provider callback on each scrape.
 type VMCollector struct {
 	collectFn CollectFunc
 

@@ -4,8 +4,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
-// CollectVMStats returns per-VM and node-level stats for the Prometheus
-// collector. Called on every scrape from the metrics endpoint.
+// CollectVMStats returns per-VM and node-level stats for the Prometheus collector; called on every scrape.
 func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 	samples, node := p.sampleStats()
 	out := make([]provider.VMStats, 0, len(samples))

@@ -63,6 +63,43 @@ func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
 	}
 }
 
+func TestReconcilePodStatusesRepairsIPAnnotationWithoutReadinessTransition(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
+	pod.Annotations[meta.AnnotationIP] = "172.20.0.42"
+	pod.Status = runningPodStatus(corev1.ConditionTrue)
+	pod.Status.PodIP = "172.20.0.88"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(pod)
+	p.Clientset = client
+	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
+	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
+	p.trackPod(pod, &vm.VM{
+		ID: "vmid", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff", IP: "172.20.0.42",
+	})
+
+	p.reconcilePodStatuses(t.Context())
+	p.reconcilePodStatuses(t.Context())
+
+	got, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(t.Context(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if ip := got.Annotations[meta.AnnotationIP]; ip != "172.20.0.88" {
+		t.Fatalf("IP annotation = %q, want rebound 172.20.0.88", ip)
+	}
+	patches := 0
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "patch" {
+			patches++
+		}
+	}
+	if patches != 1 {
+		t.Fatalf("annotation patches = %d after repeated reconciliation, want 1", patches)
+	}
+}
+
 func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", OS: "windows"})
 	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}.Apply(pod)

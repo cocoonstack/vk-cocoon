@@ -56,7 +56,6 @@ func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-zero exit to surface as error")
 	}
-	// vk's RemoteCommand handler makes the same assertion to map child exit codes onto the kubectl wire protocol.
 	var exitErr utilexec.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("expected utilexec.ExitError, got %T: %v", err, err)

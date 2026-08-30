@@ -58,8 +58,6 @@ func TestResolveWakeSourceStaleLocalDiscardsAndPulls(t *testing.T) {
 	p.Registry = newWakeVerifyRegistry(t, "SNAP-NEW")
 
 	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
-	// Puller is nil, so reaching the pull path surfaces as this exact error —
-	// proof the stale local was rejected rather than used.
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to pull path", err)
 	}
@@ -103,8 +101,6 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	}
 }
 
-// The no-local-snapshot wake: peer raw files land in a staging dir, clone
-// receives --from-dir, and the staging dir is gone once the clone returns.
 func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
 
@@ -137,12 +133,8 @@ func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	}
 }
 
-// A peer holding a different snapshot than the registry tag is rejected and
-// resolution falls through to the registry pull (surfaced here by nil Puller).
 func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	// The registry moved on: same from-node stamp, newer snapshot ID; the
-	// peer's copy no longer matches and must be rejected.
 	reg := newWakeVerifyRegistry(t, "SNAP-NEWER")
 	reg.manifestRaw = withManifestAnnotation(t, reg.manifestRaw, snapshots.AnnotationFromNode, "node-src")
 	p.Registry = reg
@@ -153,10 +145,9 @@ func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	}
 }
 
-// A dead peer never fails the wake outright.
 func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	p.PeerPort = "1" // nothing listens there
+	p.PeerPort = "1"
 
 	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
@@ -164,12 +155,9 @@ func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	}
 }
 
-// A from-node stamp naming this very node means the local tier already
-// missed; fetching from ourselves would mask that, so it must be skipped
-// (the fixture's live peer server would otherwise serve the snapshot).
 func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
-	p.NodeName = "node-src" // the annotation now names this node itself
+	p.NodeName = "node-src"
 
 	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
@@ -177,8 +165,6 @@ func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
 	}
 }
 
-// wakeVerifyRegistry serves one hibernate-tag artifact (manifest + config
-// blob) so resolveWakeSource's local-cache verification can run against it.
 type wakeVerifyRegistry struct {
 	fakeRegistry
 	tagExists   bool
@@ -216,8 +202,6 @@ func (r wakeVerifyRegistry) GetBlob(_ context.Context, _, digest string) (io.Rea
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
-// withManifestAnnotation returns raw with one manifest annotation added, the
-// way a push with PushOptions.Annotations stamps from-node.
 func withManifestAnnotation(t *testing.T, raw []byte, key, value string) []byte {
 	t.Helper()
 	var m map[string]any
@@ -237,8 +221,6 @@ func withManifestAnnotation(t *testing.T, raw []byte, key, value string) []byte 
 	return out
 }
 
-// hibernateArtifact builds the registry view of a pushed snapshot whose
-// export came from the local snapshot with the given ID.
 func hibernateArtifact(t *testing.T, snapshotID, baseImage string) ([]byte, map[string][]byte) {
 	t.Helper()
 	cfg := manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: snapshotID}
@@ -275,8 +257,6 @@ func hibernateArtifact(t *testing.T, snapshotID, baseImage string) ([]byte, map[
 	return raw, map[string][]byte{digest: cfgBytes, memDigest: memBytes}
 }
 
-// newPeerWakeFixture stands up a source node's peer server (store dir with
-// one snapshot) plus a waking provider pointed at it via a fake k8s Node.
 func newPeerWakeFixture(t *testing.T, snapshotID string) (*Provider, *fakeRuntime) {
 	t.Helper()
 

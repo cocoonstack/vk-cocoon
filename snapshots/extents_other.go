@@ -4,8 +4,7 @@ package snapshots
 
 import "os"
 
-// scanExtents without SEEK_DATA support: one dense extent. Holes transfer as
-// zeros; correctness is identical, only wire bytes differ.
+// scanExtents without SEEK_DATA support: one dense extent; holes transfer as zeros.
 func scanExtents(f *os.File) (int64, []extent, error) {
 	fi, err := f.Stat()
 	if err != nil {

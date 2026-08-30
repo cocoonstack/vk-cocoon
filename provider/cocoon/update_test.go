@@ -228,7 +228,7 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	if src.snapshot == nil || src.snapshot.Name != "vk-ns-demo-0" {
 		t.Errorf("snapshot metadata = %+v, want the local snapshot", src.snapshot)
 	}
-	src.release() // tier-1 release is a no-op; must not panic or remove anything
+	src.release()
 	if len(rt.snapshotRemoveCalls) != 0 {
 		t.Errorf("local hit must keep the local snapshot; got removes %v", rt.snapshotRemoveCalls)
 	}
@@ -266,14 +266,11 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
 		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateReady)
 	}
-	// Ready bump must coincide with the fresh IP on pod.Status — the original bug.
 	if got := pod.Status.PodIP; got != "172.20.1.228" {
 		t.Fatalf("pod.Status.PodIP = %q, want 172.20.1.228 (must be published before Ready)", got)
 	}
 }
 
-// vm-service reads pod.status.podIP the moment it sees lifecycle-state=ready,
-// so the podIP must reach the apiserver before the ready patch.
 func TestFinalizeDropNICWakePublishesIPBeforeReady(t *testing.T) {
 	p, pod, v, client := newWakeClientsetFixture(t)
 
@@ -514,7 +511,7 @@ func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 
 	ctx, cancel := context.WithCancel(t.Context())
-	rt.onExec = func() { cancel() } // the request dies while the release is in flight
+	rt.onExec = func() { cancel() }
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  "vk-ns-demo-0",
@@ -598,7 +595,7 @@ func TestWaitForFreshIPRenewNudgeWhenLeaseMissing(t *testing.T) {
 func TestWaitForFreshIPNoRenewWhenIPPresent(t *testing.T) {
 	p, pod, v := newDropNICWakeFixture(t, 200*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
-	p.wakeRenewNudgeDelay = time.Nanosecond // even an instant nudge window must not fire
+	p.wakeRenewNudgeDelay = time.Nanosecond
 	v.IP = "10.0.0.9"
 
 	if !p.waitForFreshIP(t.Context(), pod, "vmid-wake") {
@@ -638,7 +635,7 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 	p.wakeRenewNudgeDelay = 20 * time.Millisecond
 
 	rt.onExec = func() {
-		time.Sleep(150 * time.Millisecond) // block past the 100ms deadline
+		time.Sleep(150 * time.Millisecond)
 		p.setVMIP("ns", "demo-0", "vmid-wake", "10.0.0.9")
 	}
 

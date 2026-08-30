@@ -22,14 +22,12 @@ import (
 
 const statsSampleTTL = 2 * time.Second
 
-// cgroupParent must match cocoon's cgroup_parent config; override via
-// COCOON_CGROUP_PARENT when cocoon's does.
+// cgroupParent must match cocoon's cgroup_parent config; override via COCOON_CGROUP_PARENT when cocoon's does.
 var cgroupParent = sync.OnceValue(func() string {
 	return commonk8s.EnvOrDefault("COCOON_CGROUP_PARENT", vm.DefaultCgroupParent)
 })
 
-// vmSnapshot is a minimal copy of VM state taken under lock so /proc
-// reads happen outside the critical section.
+// vmSnapshot is a minimal copy of VM state taken under lock so /proc reads happen outside the critical section.
 type vmSnapshot struct {
 	ID         string
 	PID        int
@@ -144,8 +142,7 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	return families, nil
 }
 
-// sampleStats returns the shared short-TTL scrape sample: three consumers
-// (stats summary, metrics resource, Prometheus) land independently on it.
+// sampleStats returns the shared short-TTL scrape sample: three consumers (stats summary, metrics, Prometheus) land independently on it.
 func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
@@ -164,8 +161,7 @@ func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 			sample.diskCOW = fileSize(s.DiskPath)
 		} else {
 			sample.memBytes = readProcRSS(s.PID)
-			// CPU from the cgroup scope, not /proc: the VMM's utime/stime never
-			// sees the virtio and io_uring kernel workers the scope contains.
+			// CPU from the cgroup scope, not /proc: the VMM's utime/stime never sees the virtio and io_uring kernel workers.
 			sample.cpuSeconds, sample.throttledSeconds, sample.nrThrottled = vm.ScopeCPUStat(cgroupParent(), s.ID)
 			sample.diskCOW = vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
 		}
@@ -183,8 +179,7 @@ func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
 	return vms, node
 }
 
-// snapshotTrackedVMs copies the minimal VM data needed for stats under
-// RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
+// snapshotTrackedVMs copies the minimal VM data under RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
 func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -251,8 +246,7 @@ func readNodeMemoryWorkingSet() int64 {
 	return (fields["MemTotal"] - fields["MemAvailable"]) * 1024
 }
 
-// cpuMemStats packs raw CPU seconds and working-set bytes into the
-// kubelet stats types, clamping memory to non-negative.
+// cpuMemStats packs raw CPU seconds and working-set bytes into the kubelet stats types, clamping memory to non-negative.
 func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
 	cpuNano := uint64(cpuSeconds * 1e9) //nolint:gosec // cpu seconds read from /proc are always non-negative
 	mem := uint64(max(memBytes, 0))     //nolint:gosec // clamped to non-negative via max
@@ -272,8 +266,7 @@ func readProcStat(pid int) string {
 	return string(data)
 }
 
-// procStatFields splits a /proc/<pid>/stat line after the parenthesized comm
-// (which may contain spaces); proc(5) field N lands at index N-3.
+// procStatFields splits a /proc/<pid>/stat line after the parenthesized comm; proc(5) field N lands at index N-3.
 func procStatFields(s string) []string {
 	idx := strings.LastIndex(s, ")")
 	if idx < 0 || idx+2 >= len(s) {

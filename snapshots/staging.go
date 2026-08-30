@@ -14,8 +14,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/snapshot"
 )
 
-// SweepStaging removes every entry under root at startup — leftovers are
-// crashed restores, re-pullable by construction.
+// SweepStaging removes every entry under root at startup; leftovers are crashed restores, re-pullable by construction.
 func SweepStaging(ctx context.Context, root string) {
 	logger := log.WithFunc("snapshots.SweepStaging")
 	entries, err := os.ReadDir(root)
@@ -35,9 +34,7 @@ func SweepStaging(ctx context.Context, root string) {
 	}
 }
 
-// newStagingDir creates a fresh dir under root. root MUST share a filesystem
-// with cocoon's data dir: clone hardlinks memory files, and the cross-device
-// fallback is a symlink the staging delete would break.
+// newStagingDir creates a fresh dir under root; root MUST share a filesystem with cocoon's data dir since clone hardlinks memory files.
 func newStagingDir(root, localName string) (string, error) {
 	if root == "" {
 		return "", errors.New("staging root is not configured")
@@ -63,8 +60,7 @@ func sanitizeStagingPrefix(name string) string {
 	}, name)
 }
 
-// writeEnvelope synthesizes snapshot.json from the registry config blob, so
-// the registry stays the identity anchor for peer-fetched bytes.
+// writeEnvelope synthesizes snapshot.json from the registry config blob, so the registry stays the identity anchor.
 func writeEnvelope(dir string, cfg *manifest.SnapshotConfig, localName string) error {
 	data, err := snapshot.MarshalEnvelope(cfg, localName)
 	if err != nil {

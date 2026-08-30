@@ -121,13 +121,15 @@ cannot wedge node registration. Rejected create/update calls count on
    already reflects reachability; later probes run on a ticker and call
    back into the provider whenever readiness flips so the async notify
    hook re-fires. Kubernetes `Ready=True` requires both a successful probe
-   and `lifecycle-state=ready`, so early reachability cannot expose a clone
-   before its lifecycle work completes.
+   and vk's lifecycle intent reaching `ready`, so early reachability cannot
+   expose a clone; on the apiserver the status patch lands before the
+   `lifecycle-state=ready` annotation patch.
 
 ## DeletePod
 
 1. Decode `meta.VMSpec`. `os=macos` pods tear down via
-   `cocoon-macos vm rm` and skip the snapshot logic below.
+   `cocoon-macos vm rm`, release their DHCP leases (step 3), and skip the
+   snapshot logic below.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via
@@ -162,7 +164,7 @@ save/restore.
 
 | Transition | Behavior |
 |---|---|
-| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove (rollback on failure). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
+| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure runs before any release). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by

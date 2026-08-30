@@ -1,10 +1,7 @@
 package cocoon
 
-// os=macos pods dispatch to the standalone cocoon-macos QEMU binary; no
-// cloud-hypervisor machinery applies (offline disk snapshots — no hibernate,
-// wake, or fork). CNI networking gives the guest a routed IP and exposes password-protected
-// per-VM QEMU VNC ports on the node. A replay adopts or `vm start`s an existing
-// record, never `vm run`s it — two QEMU processes on one overlay corrupt the disk.
+// os=macos pods dispatch to the standalone cocoon-macos QEMU binary, not cloud-hypervisor.
+// A replay adopts or `vm start`s an existing record, never `vm run`s it: two processes corrupt the disk.
 
 import (
 	"bytes"
@@ -21,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -38,8 +36,7 @@ const (
 	defaultMacosBinary  = "/usr/local/bin/cocoon-macos"
 	maxVNCPasswordBytes = 8
 
-	// macosHypervisor tags macOS VMs in the shared tables; the CH event and
-	// resume paths key off it to skip them.
+	// macosHypervisor tags macOS VMs in the shared tables; the CH event and resume paths key off it to skip them.
 	macosHypervisor = "qemu"
 	macosVMIDPrefix = macosHypervisor + "-"
 
@@ -51,19 +48,19 @@ const (
 
 	macosGuestSSHPort = "22"
 
-	// macosLaunchTimeout bounds a detached `vm run`/`vm start`: the CLI
-	// returns once qemu daemonizes, so anything longer is a wedged launch.
+	// macosLaunchTimeout bounds a detached `vm run`/`vm start`: the CLI returns once qemu daemonizes.
 	macosLaunchTimeout       = 5 * time.Minute
 	macosCommandCleanupGrace = 90 * time.Second
 
-	// macosInspectRetryEvery rate-limits the probe's record backfill to one
-	// subprocess per interval, not one per tick.
+	// macosInspectRetryEvery rate-limits the probe's record backfill to one subprocess per interval, not one per tick.
 	macosInspectRetryEvery = 10 * time.Second
 )
 
-// claimMacosVNCPort reserves a node-unique VNC host port for key, preferring
-// a previously published port while it is still free; 0 means exhausted (VNC off).
+// claimMacosVNCPort reserves a node-unique VNC port for key, preferring a previously published one; 0 means exhausted.
 func (p *Provider) claimMacosVNCPort(key string, preferred int) int {
+	if p.MacosVNCPassword == "" {
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if port, ok := p.macosVNC[key]; ok {
@@ -105,8 +102,7 @@ func (p *Provider) macosVNCPortFor(key string) int {
 	return p.macosVNC[key]
 }
 
-// createMacosPod launches (or re-adopts) the QEMU guest for a pod. CreatePod
-// has already claimed the key and marked lifecycle-state=creating.
+// createMacosPod launches (or re-adopts) the QEMU guest; CreatePod already claimed the key and marked it creating.
 func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
 	logger := log.WithFunc("Provider.createMacosPod")
 	key := meta.PodKey(pod.Namespace, pod.Name)
@@ -118,8 +114,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 
 	if p.macosAlreadyTracked(key, spec.VMName) {
 		logger.Infof(ctx, "%s: macOS VM %s already tracked; adopting duplicate CreatePod", key, spec.VMName)
-		// Keep a live probe agent (a restart discards its state); re-assert
-		// Ready because the CreatePod prologue just downgraded it to creating.
+		// keep a live probe agent (a restart discards its state); re-assert Ready since the CreatePod prologue downgraded it.
 		if p.Probes == nil || p.Probes.Get(key).LastSeen.IsZero() {
 			p.startMacosProbe(pod)
 		}
@@ -161,9 +156,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		}
 		args = append(args, "--exit-on-reboot", "--random-smbios", "--net", "cni", spec.Image)
 		if out, err := p.macosExec(ctx, args...); err != nil {
-			// A failed inspect above is indistinguishable from a missing record,
-			// so this `vm run` may have merely collided with a live same-name
-			// guest — never turn the ambiguous error into `vm rm`.
+			// a failed inspect is indistinguishable from a missing record, so never turn this ambiguous error into `vm rm`.
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm run %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
@@ -177,9 +170,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	now := metav1.Now()
 	pod.Status.StartTime = &now
 	p.mu.Unlock()
-	// Ready defers to the configured readiness probe (a cold macOS boot takes minutes); the
-	// first probe already ran in registerMacosVM and onUpdate only fires on
-	// transitions, so an already-reachable adoption needs this explicit publish.
+	// ready defers to the probe; onUpdate only fires on transitions, so a reachable adoption needs this explicit publish.
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
@@ -209,13 +200,15 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
 	if rt.IP == "" {
-		// No lease yet (restart adoption): keep the pre-restart address; the
-		// probe republishes the live one on its next Ready flip.
+		// no lease yet (restart adoption): keep the pre-restart address until the probe or status reconciler resolves it.
 		p.mu.RLock()
 		rt.IP = pod.Annotations[meta.AnnotationIP]
 		p.mu.RUnlock()
 	}
 	p.applyVMRuntime(ctx, pod, rt)
+	if current, err := p.GetPod(ctx, pod.Namespace, pod.Name); err == nil {
+		p.reconcileRuntimeEndpoints(ctx, current, rt.IP)
+	}
 	p.startMacosProbe(pod)
 }
 
@@ -235,8 +228,7 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 			return false, "vm gone"
 		}
 		if v.MAC == "" {
-			// Self-heal a record registered while `vm inspect` was failing:
-			// without the MAC the guest's lease can never resolve.
+			// self-heal a record registered while `vm inspect` was failing: without the MAC the guest's lease can never resolve.
 			if time.Since(lastInspect) >= macosInspectRetryEvery {
 				lastInspect = time.Now()
 				if rec := p.macosInspect(ctx, v.Name); rec != nil && rec.MAC != "" {
@@ -248,8 +240,7 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 			}
 		}
 		if v.PID > 0 && !p.macosProcessAlive(v.PID) {
-			// The CH event stream and orphan scan cannot see QEMU guests, so a
-			// crash is repaired here or never.
+			// the CH event stream and orphan scan cannot see QEMU guests, so a crash is repaired here or never.
 			if time.Since(lastRestart) < macosInspectRetryEvery {
 				return false, "qemu process dead"
 			}
@@ -267,22 +258,32 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 	}
 }
 
-// recoverMacosVM adopts a live record or `vm start`s a dead one, detached from
-// the probe deadline — a slow start outlives it and would strand a stale PID.
+// recoverMacosVM adopts a live record or `vm start`s a dead one, detached from the probe deadline to avoid a stale PID.
 func (p *Provider) recoverMacosVM(ctx context.Context, namespace, name string, v *vm.VM) string {
 	ctx, cancel := detachedLaunchCtx(ctx)
 	defer cancel()
 	if rec := p.macosInspect(ctx, v.Name); rec != nil && p.macosProcessAlive(rec.PID) {
-		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
 		return "adopted running qemu"
 	}
 	if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
 		return "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
 	}
 	if rec := p.macosInspect(ctx, v.Name); rec != nil {
-		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
 	}
 	return "qemu restarted"
+}
+
+func (p *Provider) updateRecoveredMacosVM(ctx context.Context, namespace, name, vmID string, rec *macosVMRecord) {
+	v := p.updateTrackedVM(namespace, name, vmID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+	if v == nil {
+		return
+	}
+	p.adoptMacosVNCPort(meta.PodKey(namespace, name), rec)
+	if pod, err := p.GetPod(ctx, namespace, name); err == nil {
+		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
+	}
 }
 
 func (p *Provider) buildMacosOnUpdate(namespace, name string) probes.OnUpdate {
@@ -291,8 +292,7 @@ func (p *Provider) buildMacosOnUpdate(namespace, name string) probes.OnUpdate {
 	}
 }
 
-// publishMacosReadiness flips lifecycle-state=ready on a green macOS probe; the
-// generic buildOnUpdate only refreshes status, leaving the annotation at creating.
+// publishMacosReadiness flips lifecycle-state=ready on a green probe; buildOnUpdate alone only refreshes status.
 func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name string) {
 	pod, err := p.GetPod(ctx, namespace, name)
 	if err != nil {
@@ -302,20 +302,17 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 	}
 	ready := p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready
 	if !ready || p.lifecycleAlreadyFailed(pod) {
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		p.refreshAndNotify(ctx, pod)
 		return
 	}
-	// The lease usually resolves after the create-time patch: re-publish the
-	// IP the probe just dialed before flipping Ready.
-	if v := p.vmForPod(namespace, name); v != nil && v.IP != "" && pod.Annotations[meta.AnnotationIP] != v.IP {
-		p.applyRuntime(ctx, pod, v)
+	// reconcile runtime endpoints before flipping Ready; the lease usually resolves post-patch.
+	if v := p.vmForPod(namespace, name); v != nil {
+		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
 	}
 	p.markReadyPublished(ctx, pod)
 }
 
-// deleteMacosPod tears down the QEMU guest (`vm rm` also terminates the
-// process) and drops the pod from the tables; snapshot-on-delete cannot apply.
+// deleteMacosPod tears down the QEMU guest (`vm rm` also terminates the process); snapshot-on-delete cannot apply.
 func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
 	logger := log.WithFunc("Provider.deleteMacosPod")
 	vmName := spec.VMName
@@ -329,10 +326,11 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		return nil
 	}
 	if v == nil {
-		if rec := p.macosInspect(ctx, vmName); rec != nil {
-			v = &vm.VM{ID: macosVMID(vmName), Name: vmName, Hypervisor: macosHypervisor}
-			applyMacosRecord(v, rec)
-		}
+		v = &vm.VM{ID: macosVMID(vmName)}
+		applyMacosRecord(v, p.macosInspect(ctx, vmName))
+	}
+	if p.Probes != nil {
+		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
 	}
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
@@ -347,9 +345,7 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	return nil
 }
 
-// reconcileMacosPod re-adopts a live QEMU guest after a vk-cocoon restart
-// (macOS VMs never appear in Runtime.List, so the generic adopt machinery
-// cannot see them); a dead or missing record is left for the CreatePod replay.
+// reconcileMacosPod re-adopts a live QEMU guest after a restart (invisible to Runtime.List); CreatePod handles a dead record.
 func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) {
 	logger := log.WithFunc("Provider.reconcileMacosPod")
 	if spec.VMName == "" {
@@ -363,17 +359,16 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	}
 	logger.Infof(ctx, "adopting live macOS VM %s (pid %d) for pod %s/%s",
 		spec.VMName, rec.PID, pod.Namespace, pod.Name)
-	// Seed before the probe's first run: it may flip Ready, and a later seed
-	// would overwrite that with the pod's pre-restart annotation.
+	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
 	p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec))
+	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 }
 
 // ensureMacosImage materializes the image in the node-local cocoon-macos store.
 func (p *Provider) ensureMacosImage(ctx context.Context, image string) error {
 	ch := p.macosImageSF.DoChan(image, func() (any, error) {
-		// Detached like the other import flights: one caller's abort must not
-		// fail the flight for its remaining waiters.
+		// detached like the other import flights: one caller's abort must not fail the flight for its remaining waiters.
 		shared, cancel := p.detachedImportContext()
 		defer cancel()
 		if p.macosImagePresent(shared, image) {
@@ -397,21 +392,7 @@ func (p *Provider) macosImagePresent(ctx context.Context, image string) bool {
 	return err == nil
 }
 
-func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMRecord {
-	out, err := p.macosExec(ctx, "vm", "inspect", vmName)
-	if err != nil {
-		return nil
-	}
-	rec := macosVMRecord{VNC: -1}
-	if json.Unmarshal([]byte(out), &rec) != nil || strings.TrimSpace(rec.Name) == "" {
-		return nil
-	}
-	return &rec
-}
-
-// startMacosVM boots a dead record, re-asserting the VNC display (launch-scoped
-// in cocoon-macos, a bare `vm start` disables it); persisted create-time policy,
-// including exit-on-reboot, is restored from the record. Port 0 leaves VNC off.
+// startMacosVM boots a dead record, re-asserting the VNC display (a bare `vm start` disables it).
 func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (string, error) {
 	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, port)
 	if err != nil {
@@ -420,9 +401,7 @@ func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (s
 	return p.macosExec(ctx, append(args, vmName)...)
 }
 
-// macosExec runs a cocoon-macos subcommand. `vm run`/`vm start` detach from
-// the caller's cancellation (an aborted CreatePod must not kill the CLI
-// mid-launch, or the guest leaks outside its record); the rest stay cancellable.
+// macosExec runs a cocoon-macos subcommand; `vm run`/`vm start` detach so an abort can't kill it mid-launch.
 func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error) {
 	if p.macosExecFn != nil {
 		return p.macosExecFn(ctx, args...)
@@ -449,20 +428,14 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 }
 
 func (p *Provider) appendMacosVNCArgs(args []string, port int) ([]string, error) {
-	if port != 0 {
-		if p.MacosVNCPassword == "" {
-			return nil, errors.New("COCOON_MACOS_VNC_PASSWORD must be set when macOS VNC is enabled")
-		}
-		if len([]byte(p.MacosVNCPassword)) > maxVNCPasswordBytes {
-			return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD must be at most %d bytes", maxVNCPasswordBytes)
-		}
-		// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
-		args = append(args,
-			"--vnc", strconv.Itoa(port-macosVNCPortBase),
-			"--vnc-password", p.MacosVNCPassword,
-		)
+	if port == 0 || p.MacosVNCPassword == "" {
+		return args, nil
 	}
-	return args, nil
+	if err := ValidateMacosVNCPassword(p.MacosVNCPassword); err != nil {
+		return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD %w", err)
+	}
+	// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
+	return append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase), "--vnc-password", p.MacosVNCPassword), nil
 }
 
 func (p *Provider) macosProcessAlive(pid int) bool {
@@ -479,22 +452,7 @@ func (p *Provider) macosProcessAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-// configureMacosLifecycleCommand swaps CommandContext's SIGKILL for SIGTERM + a bounded wait: cocoon-macos traps SIGTERM and unwinds mounts/NBD/VM state.
-func configureMacosLifecycleCommand(cmd *exec.Cmd) {
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return err
-		}
-		return nil
-	}
-	cmd.WaitDelay = macosCommandCleanupGrace
-}
-
-// macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for
-// adopt-vs-restart decisions and lease resolution.
+// macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for adopt-vs-restart and lease resolution.
 type macosVMRecord struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
@@ -503,6 +461,29 @@ type macosVMRecord struct {
 	Tap   string `json:"tap"`
 	Disk  string `json:"disk"`
 	VNC   int    `json:"vnc"` // display number; -1 = off
+}
+
+func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMRecord {
+	out, err := p.macosExec(ctx, "vm", "inspect", vmName)
+	if err != nil {
+		return nil
+	}
+	rec := macosVMRecord{VNC: -1}
+	if json.Unmarshal([]byte(out), &rec) != nil || strings.TrimSpace(rec.Name) == "" {
+		return nil
+	}
+	return &rec
+}
+
+// ValidateMacosVNCPassword rejects a set password QEMU cannot accept; empty means VNC off.
+func ValidateMacosVNCPassword(pw string) error {
+	if pw == "" {
+		return nil
+	}
+	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, unicode.IsControl) {
+		return fmt.Errorf("must be at most %d bytes with no control characters", maxVNCPasswordBytes)
+	}
+	return nil
 }
 
 func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
@@ -524,14 +505,14 @@ func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
 func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
 
 func macosCPUs(pod *corev1.Pod) int {
-	if cpus, _ := vmResourceOverrides(pod); cpus > 0 {
-		return cpus
+	cpus := macosDefaultCPUs
+	if o, _ := vmResourceOverrides(pod); o > 0 {
+		cpus = o
 	}
-	return macosDefaultCPUs
+	return cpus + cpus%2
 }
 
-// macosMemMB returns whole MiB because cocoon-macos' --memory flag is MiB,
-// unlike cocoon's byte-normalized size args.
+// macosMemMB returns whole MiB because cocoon-macos' --memory flag is MiB, unlike cocoon's byte-normalized size args.
 func macosMemMB(pod *corev1.Pod) int {
 	if len(pod.Spec.Containers) > 0 {
 		resources := pod.Spec.Containers[0].Resources
@@ -541,6 +522,20 @@ func macosMemMB(pod *corev1.Pod) int {
 		}
 	}
 	return macosDefaultMemMB
+}
+
+// configureMacosLifecycleCommand swaps CommandContext's SIGKILL for SIGTERM + a bounded wait: cocoon-macos's ctx-aware teardown settles and releases its locks instead of dying mid-write.
+func configureMacosLifecycleCommand(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		return nil
+	}
+	cmd.WaitDelay = macosCommandCleanupGrace
 }
 
 func formatMacosArgsForLog(args []string) string {
@@ -558,8 +553,7 @@ func detachedLaunchCtx(ctx context.Context) (context.Context, context.CancelFunc
 	return context.WithTimeout(context.WithoutCancel(ctx), macosLaunchTimeout)
 }
 
-// macosSSHReady dials addr and requires the "SSH-" banner: a bare TCP accept
-// is not proof of life while the guest is still booting.
+// macosSSHReady dials addr and requires the "SSH-" banner: a bare TCP accept is not proof of life.
 func macosSSHReady(ctx context.Context, addr string) (bool, string) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
@@ -578,8 +572,7 @@ func macosSSHReady(ctx context.Context, addr string) (bool, string) {
 	return false, "no ssh banner at " + addr
 }
 
-// macosVMMissing matches cocoon-macos' missing-VM output. A missing binary
-// produces no output at all (the error comes from exec), so it cannot match.
+// macosVMMissing matches cocoon-macos' missing-VM output; a missing binary produces no output, so it cannot match.
 func macosVMMissing(out string) bool {
 	s := strings.ToLower(out)
 	return strings.Contains(s, "not found") || strings.Contains(s, "no such")

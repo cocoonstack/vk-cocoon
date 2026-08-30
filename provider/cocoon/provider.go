@@ -55,14 +55,11 @@ const (
 	// a single CLI hiccup the deferred recheck takes over.
 	inlineInspectAttempts = 2
 
-	// startupFanOut bounds the boot-gating fan-outs (stale creates, first
-	// probe starts); statusReconcileFanOut bounds the steady-state status
-	// drift loop against the apiserver. Equal today, tuned separately.
+	// startupFanOut and statusReconcileFanOut bound separate fan-outs; equal today, tuned separately.
 	startupFanOut         = 8
 	statusReconcileFanOut = 8
 
-	// Default tunables for the recheck path. Overridable via Provider
-	// fields so tests can shrink them without racing on package globals.
+	// Overridable via Provider fields so tests can shrink them without racing on package globals.
 	defaultInlineInspectBaseDelay      = 200 * time.Millisecond
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
@@ -124,6 +121,7 @@ type Provider struct {
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
 	lifecycleFlushed map[string]string
+	deleting         map[string]struct{}
 
 	// Shared scrape sample; see sampleStats.
 	statsMu   sync.Mutex
@@ -131,9 +129,7 @@ type Provider struct {
 	statsVMs  []vmSample
 	statsNode provider.NodeStats
 
-	// Recheck tunables. Zero values fall back to the defaultXxx
-	// constants, so production code never sets them; tests shrink them
-	// before exercising handleVMGone.
+	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
 	inlineInspectBaseDelay      time.Duration
 	deferredRecheckInitialDelay time.Duration
 	deferredRecheckMaxDelay     time.Duration
@@ -166,6 +162,7 @@ func NewProvider(ctx context.Context) *Provider {
 		resumedOps:       map[string]struct{}{},
 		lifecycleIntent:  map[string]meta.LifecycleStatus{},
 		lifecycleFlushed: map[string]string{},
+		deleting:         map[string]struct{}{},
 	}
 }
 
@@ -199,11 +196,8 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return slices.Collect(maps.Values(p.pods)), nil
 }
 
-// NotifyPods stores the kubelet's pod-status callback and schedules a
-// deferred initial push so adopted pods (post-restart) leave Pending.
-// virtual-kubelet calls NotifyPods before WaitForCacheSync; pushing
-// synchronously hits enqueuePodStatusUpdate's empty knownPods and is
-// dropped after a ~3s poll budget. The reconciler waits past that window.
+// NotifyPods stores the kubelet's pod-status callback and schedules a deferred
+// initial push, since a synchronous push before WaitForCacheSync hits an empty knownPods and is dropped.
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -231,8 +225,8 @@ func (p *Provider) goBackground(f func()) {
 	p.bgWG.Go(f)
 }
 
-// runStatusReconciler repairs status notifications dropped during startup or
-// an apiserver outage without touching the VM lifecycle.
+// runStatusReconciler repairs endpoint annotations and status notifications
+// dropped during startup or an apiserver outage without touching the VM lifecycle.
 func (p *Provider) runStatusReconciler(ctx context.Context) {
 	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
 		return
@@ -261,6 +255,7 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
 			return
 		}
+		p.reconcileRuntimeEndpoints(ctx, current, status.PodIP)
 		if podStatusMatches(current.Status, *status) {
 			return
 		}
@@ -341,6 +336,7 @@ func (p *Provider) untrackPod(key string) {
 	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
 	delete(p.lifecycleFlushed, key)
+	delete(p.deleting, key)
 	p.mu.Unlock()
 	if p.Probes != nil {
 		p.Probes.Forget(key)
@@ -383,21 +379,20 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	if v.MAC == "" || p.LeaseParser == nil {
 		return v.IP
 	}
-	lease, err := p.LeaseParser.LookupByMAC(v.MAC)
-	if err != nil {
-		if errors.Is(err, network.ErrNoLease) {
-			p.setVMIP(namespace, name, v.ID, "")
-			return ""
-		}
+	ip := ""
+	switch lease, err := p.LeaseParser.LookupByMAC(v.MAC); {
+	case err == nil:
+		ip = lease.IP
+	case !errors.Is(err, network.ErrNoLease):
 		return v.IP
 	}
-	if lease.IP == v.IP {
+	if ip == v.IP {
 		return v.IP
 	}
-	if !p.setVMIP(namespace, name, v.ID, lease.IP) {
+	if !p.setVMIP(namespace, name, v.ID, ip) {
 		return ""
 	}
-	return lease.IP
+	return ip
 }
 
 // buildProbe returns a probe closure that resolves the VM's IP and pings it.
@@ -490,14 +485,24 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	logger := log.WithFunc("Provider.handleVMGone")
 
-	affectedKey, affectedPod, trackedID := p.podForVMMatch(eventVM.ID, eventVM.Name)
+	affectedKey, affectedPod, trackedVM := p.podForVMMatch(eventVM.ID, eventVM.Name)
 	if affectedKey == "" || affectedPod == nil {
 		return
 	}
+	trackedID := trackedVM.ID
 
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {
 		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, skipping VM-gone handler",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
+		return
+	}
+
+	p.mu.RLock()
+	_, midDelete := p.deleting[affectedKey]
+	p.mu.RUnlock()
+	if midDelete {
+		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		return
 	}
@@ -512,8 +517,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		}
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		p.releaseDHCPLeases(ctx, tracked)
 		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
+		p.releaseDHCPLeases(ctx, tracked)
 
 	case err != nil:
 		// Still transient after inline retries. Spawn a deferred recheck so
@@ -564,17 +569,13 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // pod is kept for investigation — evicting would orphan the live VM and
 // collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
-	if err := p.removeVM(ctx, v); err != nil {
-		if errors.Is(err, vm.ErrVMNotFound) {
-			p.releaseDHCPLeases(ctx, v)
-			p.evictPod(ctx, key, pod, reason, message)
-			return
-		}
+	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
 		log.WithFunc("Provider.removeThenEvict").
 			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
 	p.evictPod(ctx, key, pod, reason, message)
+	p.releaseDHCPLeases(ctx, v)
 }
 
 // inspectWithRetry calls Runtime.Inspect up to inlineInspectAttempts
@@ -632,12 +633,8 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		if !commonk8s.SleepCtx(ctx, delay) {
 			return
 		}
-		key, pod, _ := p.podForVMMatch(vmID, "")
+		key, pod, tracked := p.podForVMMatch(vmID, "")
 		if key == "" || pod == nil {
-			return
-		}
-		tracked := p.vmForPod(pod.Namespace, pod.Name)
-		if tracked == nil || tracked.ID != vmID {
 			return
 		}
 		v, err := p.Runtime.Inspect(ctx, vmID)
@@ -645,8 +642,8 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		case errors.Is(err, vm.ErrVMNotFound):
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
-			p.releaseDHCPLeases(ctx, tracked)
 			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
+			p.releaseDHCPLeases(ctx, tracked)
 			return
 		case err != nil:
 			if time.Now().After(deadline) {
@@ -680,7 +677,7 @@ func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
 // the given id or (optionally) name. name may be empty to restrict the
 // match to id only. Used by handleVMGone (match on id OR name from a
 // potentially sparse event) and by runDeferredRecheck (id only).
-func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) {
+func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
@@ -690,10 +687,10 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 			continue
 		}
 		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
-			return key, p.pods[key], tracked.ID
+			return key, p.pods[key].DeepCopy(), tracked
 		}
 	}
-	return "", nil, ""
+	return "", nil, nil
 }
 
 // evictPod deletes the pod from the API server first and clears the
@@ -704,8 +701,6 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 	logger := log.WithFunc("Provider.evictPod")
 
 	if err := p.deletePodWithRetry(ctx, pod); err != nil {
-		// Leave in-memory state intact so the next VM event re-enters
-		// evictPod instead of stranding the pod half-detached.
 		logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
 			pod.Namespace, pod.Name)
 		metrics.PodEvictFailureTotal.Inc()
@@ -792,8 +787,10 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		if v := p.vmForPod(namespace, name); v != nil {
+			p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
+		}
+		p.refreshAndNotify(ctx, pod)
 	}
 }
 

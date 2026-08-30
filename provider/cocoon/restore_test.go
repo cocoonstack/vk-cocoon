@@ -16,7 +16,7 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 	cases := []struct {
 		name     string
 		os       string
-		wantNICs bool // CH+Windows hibernate snapshots are NIC-less → clone hot-adds one
+		wantNICs bool
 	}{
 		{"windows+ch hot-adds a NIC", string(cocoonv1.OSWindows), true},
 		{"linux inherits the snapshot NIC", string(cocoonv1.OSLinux), false},
@@ -69,7 +69,7 @@ func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
 		snapshots: map[string]*vm.Snapshot{
 			vmName: {
 				Name:  vmName,
-				Image: "simular/win11:25h2-20260705-1", // bare OCI ref: cocoon's --pull refuses these
+				Image: "simular/win11:25h2-20260705-1",
 			},
 		},
 	}
@@ -108,7 +108,7 @@ func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
 				ImageDigest: "sha256:142ab794",
 			},
 		},
-		imagesPresent: map[string]bool{"sha256:142ab794": true}, // same bytes under another name
+		imagesPresent: map[string]bool{"sha256:142ab794": true},
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -171,15 +171,12 @@ func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
 }
 
 func TestCreatePodDerivesRestoreFromLocalEvidence(t *testing.T) {
-	// Registry-less: a same-name local hibernate snapshot is the evidence.
 	const vmName = "vk-ns-demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "snapshot-repo:latest", Mode: "clone"})
-	// Hammer the tracked pod's DeepCopy path: the derived marker is written
-	// after trackPod, so it must take p.mu or -race flags this.
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
 	readers.Go(func() {
@@ -260,8 +257,6 @@ func TestCreatePodEvidenceMatchingImageRestores(t *testing.T) {
 }
 
 func TestCreatePodEvidenceLegacyManifestRestores(t *testing.T) {
-	// Hibernate artifacts pushed before the image annotation existed must
-	// still veto the fresh boot.
 	const vmName = "vk-ns-demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)

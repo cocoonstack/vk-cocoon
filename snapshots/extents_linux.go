@@ -10,9 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// scanExtents enumerates data runs via SEEK_DATA/SEEK_HOLE so holes in sparse
-// snapshot files (memory ranges, overlays) never cross the wire. Filesystems
-// without hole support degrade to one dense extent.
+// scanExtents enumerates data runs via SEEK_DATA/SEEK_HOLE so holes in sparse snapshot files never cross the wire.
 func scanExtents(f *os.File) (int64, []extent, error) {
 	fi, err := f.Stat()
 	if err != nil {

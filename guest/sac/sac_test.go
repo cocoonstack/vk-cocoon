@@ -137,10 +137,9 @@ func TestNetHasIP(t *testing.T) {
 	}
 }
 
-// fakeSAC simulates a Windows SAC console over a Unix socket.
 type fakeSAC struct {
 	listener net.Listener
-	ips      map[int]string // net# → current IP
+	ips      map[int]string
 }
 
 func newFakeSAC(t *testing.T, socketPath string, netNums []int) *fakeSAC {

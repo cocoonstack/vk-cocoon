@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -28,6 +31,49 @@ func TestResolveVMIPReplacesStaleCachedIP(t *testing.T) {
 	}
 	if got := p.vmForPod("ns", "demo-0").IP; got != "172.20.0.88" {
 		t.Fatalf("tracked VM IP = %q, want renewed lease 172.20.0.88", got)
+	}
+}
+
+func TestPodForVMMatchReturnsACopy(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0"})
+
+	_, matched, _ := p.podForVMMatch("vmid", "")
+	if matched == nil {
+		t.Fatal("podForVMMatch found nothing")
+	}
+	matched.Annotations["mutated"] = "yes"
+
+	tracked, err := p.GetPod(t.Context(), "ns", "demo-0")
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if _, leaked := tracked.Annotations["mutated"]; leaked {
+		t.Fatal("podForVMMatch handed out the live tracked pod; unlocked callers race the annotation map")
+	}
+}
+
+func TestOnUpdateRepublishesRenewedIPAnnotation(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod.Annotations[meta.AnnotationIP] = "172.20.0.42"
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.trackPod(pod, &vm.VM{
+		ID:   "vmid",
+		Name: "vk-ns-demo-0",
+		MAC:  "aa:bb:cc:dd:ee:ff",
+		IP:   "172.20.0.88",
+	})
+
+	p.buildOnUpdate("ns", "demo-0")(t.Context())
+
+	got, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("apiserver Get: %v", err)
+	}
+	if ip := got.Annotations[meta.AnnotationIP]; ip != "172.20.0.88" {
+		t.Fatalf("apiserver ip annotation = %q after probe update, want the renewed 172.20.0.88", ip)
 	}
 }
 

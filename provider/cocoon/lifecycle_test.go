@@ -238,6 +238,24 @@ func TestReadyPublicationNotifiesWhenLifecycleTransitionIsRejected(t *testing.T)
 	}
 }
 
+func TestReconcileDropsReadyIntentForDeletedPod(t *testing.T) {
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset()
+	key := meta.PodKey("ns", "gone-0")
+	p.mu.Lock()
+	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.mu.Unlock()
+
+	p.reconcileAllLifecycle(t.Context())
+
+	p.mu.RLock()
+	_, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if ok {
+		t.Fatal("ready intent for a deleted, untracked pod must be dropped, not retried forever")
+	}
+}
+
 func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 	t.Parallel()
 
@@ -271,7 +289,6 @@ func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 func TestMarkLifecycleStateUsesLatestTrackedGen(t *testing.T) {
 	t.Parallel()
 
-	// Async paths close over a stale pod pointer; tracked pod's gen is fresher.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
@@ -297,7 +314,6 @@ func TestMarkLifecycleStateUsesLatestTrackedGen(t *testing.T) {
 func TestUpdatePodNoopRepublishesOnGenerationBump(t *testing.T) {
 	t.Parallel()
 
-	// Bare gen-stamp UpdatePod must echo new gen into observed-generation.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
 	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "1"
 	cs := fake.NewSimpleClientset(pod)
@@ -324,7 +340,6 @@ func TestUpdatePodNoopRepublishesOnGenerationBump(t *testing.T) {
 func TestUpdatePodNoopSkipsRepublishWhenGenUnchanged(t *testing.T) {
 	t.Parallel()
 
-	// Same gen must not patch — would echo into operator's reconcile loop.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
 	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "1"
 	cs := fake.NewSimpleClientset(pod)
@@ -407,7 +422,6 @@ func TestRecordLifecycleFlushedSkipsAdvancedIntent(t *testing.T) {
 func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 	t.Parallel()
 
-	// Intent advances mid-retry; flushLifecycle must not patch the stale snapshot.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
@@ -431,7 +445,6 @@ func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 	t.Parallel()
 
-	// Pod deletion → patch returns NotFound → drop intent so reconciler stops retrying.
 	cs := fake.NewSimpleClientset()
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -454,7 +467,6 @@ func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 func TestMarkLifecycleStateUpdatesTrackedPodAnnotations(t *testing.T) {
 	t.Parallel()
 
-	// Async paths call markLifecycleState with a stale pod pointer; tracked pod's annotations must still get the new state so GetPod stays consistent.
 	tracked := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
 	tracked.Annotations[meta.AnnotationCocoonSetGeneration] = "5"
 	cs := fake.NewSimpleClientset(tracked)
@@ -477,7 +489,6 @@ func TestMarkLifecycleStateUpdatesTrackedPodAnnotations(t *testing.T) {
 func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
 	t.Parallel()
 
-	// Simulates startup: pod carries lifecycle annotations from before restart.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{
@@ -520,7 +531,6 @@ func TestSeedLifecycleIntentFromPodSkipsUnannotatedPod(t *testing.T) {
 func TestRepublishAfterRestartWithSeed(t *testing.T) {
 	t.Parallel()
 
-	// Post-restart: seed reconstructs intent, then a gen-stamp UpdatePod must republish.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "demo", Mode: "run"})
 	pod.Annotations[meta.AnnotationCocoonSetGeneration] = "3"
 	pod.Annotations[meta.AnnotationLifecycleState] = "ready"
@@ -556,7 +566,6 @@ func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.
 	p.trackPod(podA, nil)
 	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateReady, "")
 
-	// podB shares podA's key but is a different incarnation (recreate under the same name).
 	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
 	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateFailed, "stale goroutine")
 
@@ -636,7 +645,6 @@ func TestForgetPodDropsLifecycleState(t *testing.T) {
 	}
 }
 
-// Regression: trackPod must re-assert the authoritative intent, else the framework syncs a stale creating annotation back to the apiserver and strands a healthy VM.
 func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 	t.Parallel()
 

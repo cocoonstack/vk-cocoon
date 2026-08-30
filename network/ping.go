@@ -26,14 +26,13 @@ type ICMPPinger struct {
 	id int // ICMP identifier, fixed per process
 }
 
-// NewICMPPinger probes for CAP_NET_RAW and returns a Pinger, or an error
-// indicating the caller should fall back to NopPinger.
+// NewICMPPinger probes for CAP_NET_RAW and returns a Pinger, or an error indicating the caller should fall back to NopPinger.
 func NewICMPPinger() (*ICMPPinger, error) {
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
 		return nil, fmt.Errorf("open icmp socket: %w", err)
 	}
-	// Capability-check only; fresh socket per Ping.
+	// capability-check only; fresh socket per Ping.
 	if closeErr := conn.Close(); closeErr != nil {
 		return nil, fmt.Errorf("close probe socket: %w", closeErr)
 	}
@@ -91,7 +90,7 @@ func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 		if parsed.Type != ipv4.ICMPTypeEchoReply {
 			continue
 		}
-		// Also match on peer address to avoid cross-socket reply stealing.
+		// also match on peer address to avoid cross-socket reply stealing.
 		echo, ok := parsed.Body.(*icmp.Echo)
 		if !ok || echo.ID != p.id {
 			continue

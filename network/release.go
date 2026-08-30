@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -17,7 +16,7 @@ const (
 	controlRequestTimeout = 5 * time.Second
 )
 
-// LeaseReleaser frees a cocoon-net DHCP lease by guest MAC address.
+// LeaseReleaser frees a cocoon-net DHCP lease by guest MAC; implementations bound their own request time.
 type LeaseReleaser interface {
 	ReleaseByMAC(context.Context, string) error
 }
@@ -40,27 +39,33 @@ func NewCocoonNetLeaseReleaser(socketPath string) *CocoonNetLeaseReleaser {
 	}
 }
 
-// ReleaseByMAC idempotently releases a lease. cocoon-net returns 204 whether
-// the lease existed or had already been reclaimed.
+// ReleaseByMAC idempotently releases a lease; cocoon-net returns 204 whether the lease existed or had already been reclaimed.
 func (r *CocoonNetLeaseReleaser) ReleaseByMAC(ctx context.Context, rawMAC string) error {
 	mac, err := net.ParseMAC(rawMAC)
 	if err != nil {
 		return fmt.Errorf("parse MAC %q: %w", rawMAC, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-		"http://cocoon-net/v1/leases/"+url.PathEscape(mac.String()), nil)
+		"http://cocoon-net/v1/leases/"+mac.String(), nil)
 	if err != nil {
 		return fmt.Errorf("build lease release request: %w", err)
 	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("release lease for %s: %w", mac, err)
+	var lastErr error
+	for attempt := range 2 {
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("release lease for %s: %w", mac, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusNoContent {
+			return nil
+		}
+		lastErr = fmt.Errorf("release lease for %s: cocoon-net returned %s: %s",
+			mac, resp.Status, strings.TrimSpace(string(body)))
+		if resp.StatusCode != http.StatusInternalServerError || attempt > 0 {
+			return lastErr
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNoContent {
-		return nil
-	}
-	body, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("release lease for %s: cocoon-net returned %s: %s",
-		mac, resp.Status, strings.TrimSpace(string(body)))
+	return lastErr
 }

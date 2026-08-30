@@ -10,9 +10,7 @@ import (
 // DefaultCgroupParent mirrors cocoon's cgroup_parent default.
 const DefaultCgroupParent = "cocoon.slice"
 
-// ScopeCPUStat reads a VM's cpu.stat from its cocoon cgroup scope under
-// parent (cocoon's cgroup_parent slice); zeros when the scope is gone
-// (VM dying) or the parent mismatches.
+// ScopeCPUStat reads a VM's cpu.stat under parent; zeros when the scope is gone or the parent mismatches.
 func ScopeCPUStat(parent, vmID string) (usageSeconds, throttledSeconds float64, nrThrottled int64) {
 	data, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", parent, "vm-"+vmID+".scope", "cpu.stat")) //nolint:gosec // path derives from operator config + tracked VM ID
 	if err != nil {
