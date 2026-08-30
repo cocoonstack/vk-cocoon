@@ -123,6 +123,13 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 }
 
 func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
+	defer func() {
+		m.mu.Lock()
+		if _, ok := m.agents[key]; !ok {
+			delete(m.results, key)
+		}
+		m.mu.Unlock()
+	}()
 	interval := defaultInitialInterval
 	if lastReady {
 		interval = defaultSteadyInterval

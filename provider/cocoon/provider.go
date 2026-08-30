@@ -504,8 +504,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		}
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		p.releaseDHCPLeases(ctx, tracked)
 		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
+		p.releaseDHCPLeases(ctx, tracked)
 
 	case err != nil:
 		// Still transient after inline retries. Spawn a deferred recheck so
@@ -561,8 +561,8 @@ func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, po
 			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
-	p.releaseDHCPLeases(ctx, v)
 	p.evictPod(ctx, key, pod, reason, message)
+	p.releaseDHCPLeases(ctx, v)
 }
 
 // inspectWithRetry calls Runtime.Inspect up to inlineInspectAttempts
@@ -629,8 +629,8 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		case errors.Is(err, vm.ErrVMNotFound):
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
-			p.releaseDHCPLeases(ctx, tracked)
 			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
+			p.releaseDHCPLeases(ctx, tracked)
 			return
 		case err != nil:
 			if time.Now().After(deadline) {
@@ -674,7 +674,7 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) 
 			continue
 		}
 		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
-			return key, p.pods[key], tracked
+			return key, p.pods[key].DeepCopy(), tracked
 		}
 	}
 	return "", nil, nil

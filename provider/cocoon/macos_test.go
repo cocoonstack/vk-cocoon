@@ -570,7 +570,7 @@ func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	if p.vmForPod("ns", "demo-0") != nil {
 		t.Fatal("VM still tracked after delete")
 	}
-	if !slices.Equal(releaser.macs, []string{"52:54:00:12:34:56"}) {
+	if got := releaser.released(); !slices.Equal(got, []string{"52:54:00:12:34:56"}) {
 		t.Errorf("released MACs = %v", releaser.macs)
 	}
 }

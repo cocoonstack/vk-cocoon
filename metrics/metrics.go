@@ -237,7 +237,7 @@ var (
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "lease_release_total",
-			Help:      "cocoon-net DHCP lease releases after VM destruction, by result.",
+			Help:      "Cocoon-net DHCP lease releases after VM destruction, by result.",
 		},
 		[]string{"result"},
 	)

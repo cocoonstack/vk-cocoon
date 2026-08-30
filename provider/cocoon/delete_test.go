@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 
@@ -120,9 +122,9 @@ func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	if rt.removedID != "vmid-del" {
 		t.Fatalf("removed VM = %q, want vmid-del", rt.removedID)
 	}
-	got := slices.Sorted(slices.Values(releaser.macs))
+	got := slices.Sorted(slices.Values(releaser.released()))
 	if want := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02", "aa:bb:cc:dd:ee:04"}; !slices.Equal(got, want) {
-		t.Errorf("released MACs = %v, want %v", releaser.macs, want)
+		t.Errorf("released MACs = %v, want %v", got, want)
 	}
 }
 
@@ -153,7 +155,7 @@ func TestDeletePodDoesNotReleaseLeaseWhenVMRemovalFails(t *testing.T) {
 	if err := p.DeletePod(t.Context(), pod); err == nil {
 		t.Fatal("expected VM removal error")
 	}
-	if len(releaser.macs) != 0 {
+	if got := releaser.released(); len(got) != 0 {
 		t.Errorf("released MACs = %v before VM removal succeeded", releaser.macs)
 	}
 }
@@ -178,11 +180,33 @@ func TestDHCPMACsSkipsStaticNICs(t *testing.T) {
 }
 
 type recordingLeaseReleaser struct {
+	mu   sync.Mutex
 	macs []string
 	err  error
 }
 
 func (r *recordingLeaseReleaser) ReleaseByMAC(_ context.Context, mac string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.macs = append(r.macs, mac)
 	return r.err
+}
+
+func (r *recordingLeaseReleaser) released() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.macs)
+}
+
+func (r *recordingLeaseReleaser) awaitReleases(t *testing.T, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := r.released(); len(got) >= want {
+			return got
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("releases = %v, want %d entries within 2s", r.released(), want)
+	return nil
 }

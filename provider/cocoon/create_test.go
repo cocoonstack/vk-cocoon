@@ -1542,8 +1542,8 @@ func TestHandleVMGoneReleasesTrackedLeaseForSparseEvent(t *testing.T) {
 
 	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-g"})
 
-	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:ff"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:ff"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
 	}
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("gone VM should be evicted, still tracked as %#v", got)
@@ -1635,8 +1635,8 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
 	}
-	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:01"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:01"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
 	}
 }
 
@@ -1682,8 +1682,8 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 	if rt.removedID != "vmid-b" {
 		t.Fatalf("timeout must remove VM before eviction, removed %q", rt.removedID)
 	}
-	if !slices.Equal(releaser.macs, []string{"aa:bb:cc:dd:ee:02"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", releaser.macs)
+	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:02"}) {
+		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
 	}
 }
 
@@ -1707,8 +1707,8 @@ func TestHandleVMGoneDeferredTimeoutKeepsLeaseWhenRemovalFails(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got == nil {
 		t.Fatal("pod tracking was evicted even though VM removal failed")
 	}
-	if len(releaser.macs) != 0 {
-		t.Fatalf("released MACs = %v while VM state remained uncertain", releaser.macs)
+	if got := releaser.released(); len(got) != 0 {
+		t.Fatalf("released MACs = %v while VM state remained uncertain", got)
 	}
 }
 

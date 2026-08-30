@@ -34,6 +34,26 @@ func TestResolveVMIPReplacesStaleCachedIP(t *testing.T) {
 	}
 }
 
+func TestPodForVMMatchReturnsACopy(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0"})
+
+	_, matched, _ := p.podForVMMatch("vmid", "")
+	if matched == nil {
+		t.Fatal("podForVMMatch found nothing")
+	}
+	matched.Annotations["mutated"] = "yes"
+
+	tracked, err := p.GetPod(t.Context(), "ns", "demo-0")
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if _, leaked := tracked.Annotations["mutated"]; leaked {
+		t.Fatal("podForVMMatch handed out the live tracked pod; unlocked callers race the annotation map")
+	}
+}
+
 func TestOnUpdateRepublishesRenewedIPAnnotation(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
