@@ -11,10 +11,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// virtual-kubelet's PodController stores the handed pointer (node/pod.go:336),
-// DeepCopies it only at drain time (:222), and blind-writes the copy with
-// ResourceVersion="0" (:251) — a drain between the ready patch and
-// status.Apply would push pre-patch annotations and revert ready to creating.
 func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
 	p, pod, v, client := newWakeClientsetFixture(t)
 	p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")
@@ -46,8 +42,6 @@ func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
 	}
 }
 
-// vk's contract (node/pod.go:268): the pod must be DeepCopy'd before enqueue —
-// the worker copies it from another goroutine. Run under -race.
 func TestWakeNotifyDoesNotShareMutablePod(t *testing.T) {
 	p, pod, v, _ := newWakeClientsetFixture(t)
 	p.setVMIP("ns", "demo-0", v.ID, "172.20.1.228")

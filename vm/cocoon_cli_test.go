@@ -52,7 +52,6 @@ func TestSnapshotNameTakenPhrases(t *testing.T) {
 			want: true,
 		},
 		{
-			// The store's name index also sees the pending record a killed save leaves.
 			name: "name index rejection",
 			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
 			want: true,
@@ -88,7 +87,6 @@ func TestSnapshotNameHolderID(t *testing.T) {
 			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
 		},
 		{
-			// Older cocoon names no holder; the caller falls back to the name.
 			name: "preflight rejection without a holder",
 			out:  `Error: snapshot name "vk-ns-demo-0" already exists`,
 			want: "",
@@ -392,7 +390,6 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 func TestRemoveStaleSnapshotWaitsOutHeldLease(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "cocoon")
-	// Refuses while the lease is held, then succeeds — the orphaned child dying.
 	payload := `#!/bin/sh
 [ -f ` + dir + `/done ] && exit 0
 touch ` + dir + `/done

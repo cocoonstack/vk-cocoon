@@ -12,7 +12,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// TestDeletePodSnapshotRetention locks the delete GC table: a plain delete removes the local snapshots, a seat release keeps them as the warm-wake cache.
 func TestDeletePodSnapshotRetention(t *testing.T) {
 	tests := []struct {
 		name          string

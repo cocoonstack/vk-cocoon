@@ -84,15 +84,11 @@ func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 }
 
 func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
-	// An in-flight clone that survives the restart commits later; the watcher
-	// must index it or the pod's create retries collide on the name forever.
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
 		inspectSeq: []fakeInspectStep{
 			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
-			// created is transitional (registered, VMM not started): must keep
-			// polling, not index a record adoption would mark Ready.
 			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
 			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
 		},
@@ -122,8 +118,6 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 }
 
 func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
-	// The surviving clone ends stopped/error without ever running; indexing it
-	// would let CreatePod adopt a dead record as Ready. OrphanDestroy frees the name.
 	removed := make(chan struct{})
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
@@ -157,8 +151,6 @@ func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
 }
 
 func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
-	// The owner is alive at startup (busy) and dies without committing: the
-	// record stays creating forever, and only re-asking the verb can free the name.
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateSeq: map[string][]vm.StaleCreateOutcome{
@@ -177,7 +169,6 @@ func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	// The startup pass is call 1; the watcher must keep asking past it.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && len(rt.staleCalls()) < 3 {
 		time.Sleep(2 * time.Millisecond)
@@ -185,7 +176,6 @@ func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	if calls := rt.staleCalls(); len(calls) < 3 {
 		t.Fatalf("verb calls = %v, want the watcher to re-invoke until the record resolves", calls)
 	}
-	// collected ends the watch: the count must not keep climbing.
 	time.Sleep(50 * time.Millisecond)
 	p.Close()
 	if calls := rt.staleCalls(); len(calls) != 3 {
@@ -223,8 +213,6 @@ func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 }
 
 func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
-	// vm run drops the create lock at created before start reacquires it, so
-	// not-creating can surface a created record; adoption must wait for running.
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
@@ -258,9 +246,6 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 }
 
 func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
-	// A transient inspect failure right after not-creating must not strand
-	// the committed VM: it emits no further events, so only the watcher can
-	// bring it into the index.
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
@@ -314,8 +299,6 @@ func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
 }
 
 func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
-	// A transient verb failure cannot classify the record; the watcher takes
-	// over, and one that never leaves creating exhausts the budget untouched.
 	rt := &fakeRuntime{
 		listVMs:        []vm.VM{{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
 		staleCreateErr: errors.New("cli hiccup"),
@@ -371,9 +354,6 @@ func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
 }
 
 func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {
-	// The incident's second-restart shape: the previous incarnation already
-	// wrote the skeleton's VMID onto the pod, so adoption would go through
-	// the vmByID match instead of adoptByVMName.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
 	meta.VMRuntime{VMID: "skel-vmid", IP: ""}.Apply(pod)

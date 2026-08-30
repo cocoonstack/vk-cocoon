@@ -53,7 +53,6 @@ func TestPeerRestoreRoundtrip(t *testing.T) {
 }
 
 func TestPeerRestoreLargeFileMultiSlice(t *testing.T) {
-	// splitExtents must produce the pieces fetchFiles consumes.
 	got := splitExtents([]extent{{offset: 0, length: 10 << 20}}, 4<<20)
 	want := []peerSlice{{0, 4 << 20}, {4 << 20, 4 << 20}, {8 << 20, 2 << 20}}
 	if len(got) != len(want) {
@@ -81,7 +80,6 @@ func TestPeerRestoreRejectsIDMismatch(t *testing.T) {
 
 func TestPeerRestoreChecksumMismatchFails(t *testing.T) {
 	srv, r := newPeerFixture(t, "SNAP-1", map[string][]byte{"memory-ranges": randomContent(t, 1<<20)})
-	// A corrupting proxy: flip a byte in every slice body, keep the plan intact.
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		resp, err := http.Get(srv.URL + req.URL.String())
 		if err != nil {
@@ -153,7 +151,7 @@ func TestSweepStaging(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("sweep left %d entries", len(entries))
 	}
-	SweepStaging(t.Context(), filepath.Join(root, "does-not-exist")) // must not panic
+	SweepStaging(t.Context(), filepath.Join(root, "does-not-exist"))
 }
 
 func TestPeerRestoreSparseSourceFile(t *testing.T) {
@@ -162,7 +160,6 @@ func TestPeerRestoreSparseSourceFile(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// Data at [0,64K) and [3M,3M+32K); hole between; apparent size 4M.
 	f, err := os.Create(filepath.Join(dir, "overlay.qcow2"))
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +188,6 @@ func TestPeerRestoreSparseSourceFile(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 	defer cleanup()
-	// Whether extents came from SEEK_DATA or the dense fallback, the restored
-	// bytes must be identical: data in place, hole read back as zeros.
 	got, err := os.ReadFile(filepath.Join(res.Dir, "overlay.qcow2"))
 	if err != nil || len(got) != 4<<20 {
 		t.Fatalf("restored size = %d, err %v", len(got), err)
@@ -209,8 +204,10 @@ func TestPeerRestoreSparseSourceFile(t *testing.T) {
 
 func TestCoalesceExtents(t *testing.T) {
 	got := coalesceExtents([]extent{
-		{0, 100}, {200, 100}, // gap 100 ≤ maxGap → merge
-		{10 << 20, 100}, {20 << 20, 100}, // gap ~10MB > maxGap → keep split
+		{0, 100},
+		{200, 100},
+		{10 << 20, 100},
+		{20 << 20, 100},
 	}, 4<<20)
 	want := []extent{{0, 300}, {10 << 20, 100}, {20 << 20, 100}}
 	if len(got) != len(want) {
@@ -234,8 +231,6 @@ func TestWriteSkippingZerosPreservesContentAndHoles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Chunk layout: [data][zeros][data+partial tail] — zeros must be skipped,
-	// data must land at its offsets.
 	data := make([]byte, 5*zeroSkipBytes+123)
 	copy(data[0:], bytes.Repeat([]byte{0xAA}, zeroSkipBytes))
 	copy(data[3*zeroSkipBytes:], bytes.Repeat([]byte{0xBB}, zeroSkipBytes))
@@ -279,7 +274,6 @@ func randomContent(t *testing.T, n int) []byte {
 	return b
 }
 
-// newPeerFixture builds a source store with one snapshot dir and serves it.
 func newPeerFixture(t *testing.T, snapshotID string, files map[string][]byte) (*httptest.Server, *PeerRestorer) {
 	t.Helper()
 	storeRoot := t.TempDir()

@@ -125,7 +125,6 @@ func TestCreateMacosPodDispatchesRunAndRegisters(t *testing.T) {
 	if got.Annotations[meta.AnnotationVNCPort] != "5900" {
 		t.Errorf("VNC port annotation = %q, want 5900", got.Annotations[meta.AnnotationVNCPort])
 	}
-	// Ready is deferred to the configured guest probe, so lifecycle must still be creating.
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateCreating {
 		t.Errorf("lifecycle state = %q, want creating", state)
 	}
@@ -238,7 +237,6 @@ func TestCreateMacosPodAdoptsLiveVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
-	// The live guest's own display (record vnc=7) wins over fresh allocation.
 	if got.Annotations[meta.AnnotationVNCPort] != "5907" {
 		t.Errorf("VNC port annotation = %q, want adopted 5907", got.Annotations[meta.AnnotationVNCPort])
 	}
@@ -266,9 +264,6 @@ func TestCreateMacosPodStartsDeadRecord(t *testing.T) {
 	if len(starts) != 1 {
 		t.Fatalf("dead record must dispatch `vm start`, got %v", all)
 	}
-	// VNC is launch-scoped in cocoon-macos: a bare `vm start` disables it while
-	// the vnc-port annotation still advertises the display. Create-time storage
-	// and reboot policy are persisted in the VM record and must not be repeated.
 	if joined := strings.Join(starts[0], " "); !strings.Contains(joined, "--vnc 0 --vnc-password testpass") {
 		t.Errorf("`vm start` must re-assert protected VNC, got: %s", joined)
 	} else if strings.Contains(joined, "--exit-on-reboot") || strings.Contains(joined, "--storage") {
@@ -340,7 +335,6 @@ func TestMacosProbeRestartsDeadQemu(t *testing.T) {
 	if v := p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4243 {
 		t.Fatalf("record not refreshed after restart: %+v", v)
 	}
-	// Alive again: the next tick moves on to lease resolution, no second start.
 	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "lease") {
 		t.Fatalf("restarted guest should wait for its lease, got ready=%v msg=%q", ready, msg)
 	}
@@ -418,8 +412,6 @@ func TestCreateMacosPodRunFailureKeepsSameNameVM(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "vm run") {
 		t.Fatalf("expected vm run failure, got %v", err)
 	}
-	// The inspect failure is indistinguishable from a missing record, so the
-	// collision is not proof this call created the VM: never clean up with rm.
 	if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != 0 {
 		t.Fatalf("ambiguous failed run removed a same-name VM: %v", rms)
 	}
@@ -584,7 +576,6 @@ func macosSpec() meta.VMSpec {
 	}
 }
 
-// stubMacosExec records every cocoon-macos dispatch and answers via handler.
 func stubMacosExec(p *Provider, handler func(args []string) (string, error)) func() [][]string {
 	var mu sync.Mutex
 	var calls [][]string
@@ -601,8 +592,6 @@ func stubMacosExec(p *Provider, handler func(args []string) (string, error)) fun
 	}
 }
 
-// freshCreateHandler answers no record, image present, launch OK — the
-// fresh `vm run` path.
 func freshCreateHandler(args []string) (string, error) {
 	switch {
 	case macosCallIs(args, "vm", "inspect"):

@@ -31,7 +31,7 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 	cases := []struct {
 		name      string
 		spec      meta.VMSpec
-		annotate  func(pod *corev1.Pod) // extra annotations beyond spec+VMID
+		annotate  func(pod *corev1.Pod)
 		deleting  bool
 		vms       []vm.VM
 		snapshots map[string]*vm.Snapshot
@@ -39,9 +39,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 		wantLC    meta.LifecycleState
 	}{
 		{
-			// Points 5+6: hibernate interrupted before Remove leaves the VM
-			// alive (NIC-less or already saved) — re-enter and converge. The
-			// stale post-clone marker must not survive into the next incarnation.
 			name: "hibernating with live VM re-enters hibernate",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
@@ -52,9 +49,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateHibernated,
 		},
 		{
-			// A VM that crashed while hibernate was owed boots first, then
-			// hibernates — nothing else re-delivers the op after supervision
-			// restarts it.
 			name: "hibernating with stopped VM starts it then hibernates",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
@@ -64,7 +58,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateHibernated,
 		},
 		{
-			// Point 3: post-clone interrupted mid-run; FC always needs the fixup.
 			name: "creating with post-clone running re-dispatches the fixup",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone", Backend: vm.BackendFirecracker},
 			annotate: func(pod *corev1.Pod) {
@@ -76,8 +69,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC:   meta.LifecycleStateReady,
 		},
 		{
-			// Points 3-tail and 10: post-clone done (or wake finalize lost) —
-			// only the Ready-after-lease wait is owed.
 			name: "creating with post-clone done resumes the ready wait",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
@@ -97,8 +88,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateReady,
 		},
 		{
-			// Drop-NIC spec + no marker + hibernate evidence = interrupted
-			// restore: resume the lease wait, never the PnP fixup.
 			name: "drop-nic restore without marker resumes ready wait",
 			spec: meta.VMSpec{
 				VMName:  vmName,
@@ -114,8 +103,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC:    meta.LifecycleStateReady,
 		},
 		{
-			// Same facts without evidence = a fresh clone caught before its
-			// running marker: the full fixup (PnP exec) must re-run.
 			name: "drop-nic fresh clone without marker re-runs the fixup",
 			spec: meta.VMSpec{
 				VMName:  vmName,
@@ -131,8 +118,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC:   meta.LifecycleStateReady,
 		},
 		{
-			// The Creating patch can be lost to apiserver flakiness while the
-			// post-clone marker landed; the marker alone records owed work.
 			name: "empty lifecycle with running marker still resumes",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone", Backend: vm.BackendFirecracker},
 			annotate: func(pod *corev1.Pod) {
@@ -153,7 +138,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateCreating,
 		},
 		{
-			// Point 4 / Fix D: a pod mid-deletion gets no resumed work.
 			name: "deleting pod gets no dispatch",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
@@ -164,8 +148,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC:   "",
 		},
 		{
-			// Point 7: hibernate finished removing the VM; stale-hibernate
-			// reconcile owns it, dispatch stays out.
 			name: "hibernated without VM gets no dispatch",
 			spec: meta.VMSpec{VMName: vmName, Mode: "clone"},
 			annotate: func(pod *corev1.Pod) {
@@ -197,8 +179,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			if err := p.StartupReconcile(t.Context()); err != nil {
 				t.Fatalf("StartupReconcile: %v", err)
 			}
-			// Positive rows must await the async dispatch before Close cancels
-			// lifecycleCtx; negative rows just drain and assert nothing ran.
 			if tc.wantLC != "" && tc.wantLC != meta.LifecycleStateCreating {
 				awaitLifecycle(t, p, "ns", "demo-0", tc.wantLC)
 			}
@@ -237,8 +217,6 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 }
 
 func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T) {
-	// A SIGKILLed VMM leaves the record reading running: gating Start on the
-	// listed state skips the boot and every hibernate step fails not-running.
 	const (
 		vmName = "vk-ns-demo-0"
 		vmID   = "resume-vmid"
@@ -277,8 +255,6 @@ func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T
 }
 
 func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
-	// post-clone-state=done is written before SAC runs, so done alone must
-	// not skip the SAC pass: a failing dialer proves it was re-attempted.
 	const vmName = "vk-ns-demo-0"
 	staticVM := vm.VM{
 		ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9",
@@ -309,8 +285,6 @@ func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
 }
 
 func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
-	// Guessing restore on a registry error could mark a fresh clone Ready
-	// without its fixup; the classifier must retry until the registry answers.
 	const vmName = "vk-ns-demo-0"
 	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
 	pod := newPodWithSpec(meta.VMSpec{
@@ -343,8 +317,6 @@ func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
 }
 
 func TestStartupDispatchClassifyFailsLoudOnHangingRegistry(t *testing.T) {
-	// A registry that accepts but never answers must not hold the claim and
-	// park the pod in Creating forever; the budget deadline fails it loudly.
 	const vmName = "vk-ns-demo-0"
 	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
 	pod := newPodWithSpec(meta.VMSpec{
@@ -406,8 +378,6 @@ func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
 	}
 }
 
-// awaitLifecycle polls until the tracked pod reaches want; the resumed ops run
-// on lifecycleCtx, so asserting after Close would race its cancellation.
 func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta.LifecycleState) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -422,8 +392,6 @@ func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta
 	t.Fatalf("lifecycle never reached %q (pod: %v, err: %v)", want, pod, err)
 }
 
-// flakyEvidenceRegistry errors the manifest fetch a set number of times,
-// then reports no hibernate tag.
 type flakyEvidenceRegistry struct {
 	fakeRegistry
 	mu    sync.Mutex
@@ -440,8 +408,6 @@ func (r *flakyEvidenceRegistry) GetManifest(context.Context, string, string) ([]
 	return nil, "", fmt.Errorf("get manifest: %w", snapshot.ErrManifestNotFound)
 }
 
-// blockingEvidenceRegistry accepts the lookup and never answers until the
-// caller's context dies.
 type blockingEvidenceRegistry struct{ fakeRegistry }
 
 func (blockingEvidenceRegistry) GetManifest(ctx context.Context, _, _ string) ([]byte, string, error) {

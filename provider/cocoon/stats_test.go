@@ -8,7 +8,6 @@ import (
 )
 
 func TestParseProcStatRSS(t *testing.T) {
-	// comm carries spaces and parens; fields after it: state=R, then 20+ numeric.
 	line := "1234 (cloud (hv) proc) R 1 1 1 0 -1 4194560 100 0 0 0 250 150 0 0 20 0 4 0 12345 999424 512 18446744073709551615"
 	if rss := parseProcStatRSS(line, 4096); rss != 512*4096 {
 		t.Errorf("rss = %d, want %d", rss, 512*4096)

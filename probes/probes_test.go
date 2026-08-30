@@ -32,7 +32,6 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
 
-	// Flip from unready to ready on the second call.
 	var calls atomic.Int32
 	probe := func(_ context.Context) (bool, string) {
 		n := calls.Add(1)
@@ -53,12 +52,10 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 
 	m.Start("ns/demo-0", probe, onUpdate)
 
-	// First probe should be NotReady; no onUpdate yet (no transition).
 	if m.Get("ns/demo-0").Ready {
 		t.Fatalf("first probe should record NotReady")
 	}
 
-	// Wait for the agent to run a second probe (generous timeout for CI).
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
@@ -84,7 +81,6 @@ func TestForgetCancelsAgent(t *testing.T) {
 	m.Start("ns/demo-0", probe, nil)
 	m.Forget("ns/demo-0")
 
-	// Result and agent entry should be gone.
 	if r := m.Get("ns/demo-0"); r.Ready || r.Message != "" || !r.LastSeen.IsZero() {
 		t.Fatalf("Forget should drop the result, got %#v", r)
 	}

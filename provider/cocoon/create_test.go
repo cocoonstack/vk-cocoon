@@ -95,7 +95,7 @@ func TestCreatePodCloneModeEnsuresOCIRefBaseImage(t *testing.T) {
 		snapshots: map[string]*vm.Snapshot{
 			"snapshot-repo": {
 				Name:  "snapshot-repo",
-				Image: "simular/win11:25h2-20260625-1", // bare OCI ref: cocoon's --pull refuses these
+				Image: "simular/win11:25h2-20260625-1",
 			},
 		},
 	}
@@ -128,7 +128,7 @@ func TestCreatePodCloneModeSkipsEnsureWhenDigestPresent(t *testing.T) {
 				ImageDigest: "sha256:7b850cd2",
 			},
 		},
-		imagesPresent: map[string]bool{"sha256:7b850cd2": true}, // same bytes under another name
+		imagesPresent: map[string]bool{"sha256:7b850cd2": true},
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -197,7 +197,7 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 			names[i], errs[i] = p.ensureForkSnapshot(t.Context(), "vk-ns-demo-0")
 		})
 	}
-	<-entered // leader is parked in SnapshotSave; release it and let followers dedup or reuse
+	<-entered
 	close(release)
 	wg.Wait()
 
@@ -215,7 +215,6 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	}
 }
 
-// TestCreatePodInvalidatesForkSnapshot locks the fresh-boot invalidation: a recreated main must drop the old fork so sub-agents pick up current state, not the stale checkpoint.
 func TestCreatePodInvalidatesForkSnapshot(t *testing.T) {
 	tests := []struct {
 		name string
@@ -250,8 +249,6 @@ func TestCreatePodInvalidatesForkSnapshot(t *testing.T) {
 }
 
 func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
-	// A predecessor's worker failing mid-bring-up must not stick the successor
-	// at Failed: the entry-time trackPod makes the UID guard drop it.
 	p := newTestProvider(t)
 
 	podB := newPodWithSpec(meta.VMSpec{
@@ -942,7 +939,7 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 		manifestBody   string
 		imagesPresent  bool
 		wantErr        string
-		wantPullerHit  bool // expect Puller path (Image() probed, no EnsureImage shell-out)
+		wantPullerHit  bool
 		wantEnsureArg  string
 	}{
 		{
@@ -977,8 +974,6 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 			if tc.manifestStatus/100 != 2 {
 				reg.err = errors.New("registry error")
 			}
-			// Cloudimg path imports under the local ref (repo:tag), so the
-			// fake runtime's Image lookup must key on the same form.
 			wantRef := repo + ":latest"
 			rt := &fakeRuntime{}
 			if tc.imagesPresent {
@@ -1007,16 +1002,13 @@ func TestEnsureRunImageDispatch(t *testing.T) {
 				if len(rt.ensuredImages) != 0 {
 					t.Fatalf("Puller path should not shell EnsureImage, got %v", rt.ensuredImages)
 				}
-				// Cloudimg path returns the local ref it imported under.
 				if got != wantRef {
 					t.Fatalf("ensureRunImage returned %q, want %q", got, wantRef)
 				}
-				// Import name must match the returned ref so the subsequent
-				// `cocoon vm run` finds the local image.
 				if len(rt.imageInspectCalls) == 0 || rt.imageInspectCalls[0] != wantRef {
 					t.Fatalf("Puller imported under %v, want first inspect on %q", rt.imageInspectCalls, wantRef)
 				}
-			default: // fallthrough to Runtime.EnsureImage
+			default:
 				if err != nil {
 					t.Fatalf("ensureRunImage: %v", err)
 				}
@@ -1123,11 +1115,11 @@ func TestEnsureSnapshotSharedWorkSurvivesCallerCancel(t *testing.T) {
 		var errLeader, errLive error
 		var liveSnapshot *vm.Snapshot
 		wg.Go(func() { _, errLeader = p.ensureSnapshot(leaderCtx, "ubuntu", "v1", "ubuntu:v1") })
-		synctest.Wait() // leader parked in SnapshotImport
+		synctest.Wait()
 		wg.Go(func() { liveSnapshot, errLive = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1") })
-		synctest.Wait() // live caller parked in the shared flight
+		synctest.Wait()
 		cancelLeader()
-		synctest.Wait() // cancelled caller has abandoned the flight
+		synctest.Wait()
 		close(release)
 		wg.Wait()
 
@@ -1152,7 +1144,7 @@ func TestEnsureSnapshotSharedImportAbortedByClose(t *testing.T) {
 		var wg sync.WaitGroup
 		var err error
 		wg.Go(func() { _, err = p.ensureSnapshot(t.Context(), "ubuntu", "v1", "ubuntu:v1") })
-		synctest.Wait() // caller parked in the shared flight
+		synctest.Wait()
 		p.Close()
 		close(release)
 		wg.Wait()
@@ -1270,7 +1262,7 @@ func TestEnsureRunImageConcurrentForceShareOneImport(t *testing.T) {
 		wg.Go(func() { _, err1 = p.ensureRunImage(t.Context(), "ubuntu", true) })
 		<-entered
 		wg.Go(func() { _, err2 = p.ensureRunImage(t.Context(), "ubuntu", true) })
-		synctest.Wait() // second force caller is parked in the shared flight
+		synctest.Wait()
 		close(release)
 		wg.Wait()
 
@@ -1301,7 +1293,7 @@ func TestEnsureRunImageFallbackDeduped(t *testing.T) {
 		wg.Go(func() { _, err1 = p.ensureRunImage(t.Context(), "ubuntu-22.04", false) })
 		<-entered
 		wg.Go(func() { _, err2 = p.ensureRunImage(t.Context(), "ubuntu-22.04", false) })
-		synctest.Wait() // second caller is parked in the shared flight
+		synctest.Wait()
 		close(release)
 		wg.Wait()
 
@@ -1321,7 +1313,7 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:         "vk-ns-demo-0",
-		SnapshotPolicy: "never", // skip push path — not under test here
+		SnapshotPolicy: "never",
 	})
 	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0"})
 	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
@@ -1338,7 +1330,6 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Errorf("DeletePod should drop the pod from the in-memory table")
 	}
-	// DeletePod removes the two snapshots concurrently; compare order-insensitively.
 	gotSnapRemovals := slices.Sorted(slices.Values(rt.snapshotRemoveCalls))
 	wantSnapRemovals := slices.Sorted(slices.Values([]string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")}))
 	if !slices.Equal(gotSnapRemovals, wantSnapRemovals) {
@@ -1406,15 +1397,13 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 }
 
 func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
-	// R12 regression: pod force-deleted during vk-cocoon restart leaves
-	// the VM live with no pod; the recreated pod must adopt the orphan.
 	rt := &fakeRuntime{
 		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset() // no pods — the force-deleted state
+	p.Clientset = fake.NewSimpleClientset()
 	p.OrphanPolicy = provider.OrphanAlert
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
@@ -1447,8 +1436,6 @@ func TestStartupReconcileOrphanKeepIndexesByName(t *testing.T) {
 }
 
 func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
-	// Simulate the post-crash state: CreatePod succeeded but the runtime
-	// annotation patch failed, so the pod has no VMID yet the VM is live.
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
 
@@ -1459,7 +1446,6 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset(pod)
-	// Under OrphanDestroy, a bug would delete the live VM. The fix must prevent that.
 	p.OrphanPolicy = provider.OrphanDestroy
 
 	if err := p.StartupReconcile(t.Context()); err != nil {
@@ -1471,8 +1457,6 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	if rt.removedID != "" {
 		t.Fatalf("live VM must not be removed as orphan, removedID=%q", rt.removedID)
 	}
-	// Annotation patch is best-effort — verify it was at least attempted via the
-	// patched pod's state when the fake clientset re-reads it.
 	updated, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
@@ -1485,7 +1469,6 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", Managed: true})
 	pod.Spec.NodeName = "cocoon-pool"
-	// Simulate a hibernated pod: hibernate annotation set, no VMID.
 	meta.HibernateState(true).Apply(pod)
 
 	rt := &fakeRuntime{listVMs: nil}
@@ -1497,7 +1480,6 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	// Pod must be tracked so v-k does not call CreatePod.
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
 		t.Errorf("hibernated pod should be tracked: %v", err)
 	}
@@ -1531,7 +1513,6 @@ func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
 
 func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	// Clientset has no pods — deletion returns NotFound, which evictPod must treat as success.
 	cs := fake.NewSimpleClientset()
 
 	p := newTestProvider(t)
@@ -1590,8 +1571,6 @@ func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 }
 
 func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
-	// First inspect fails transiently, second returns a running VM.
-	// Pod must not be evicted; no deferred recheck needed.
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{
 			{err: errors.New("exec: broken pipe")},
@@ -1617,14 +1596,12 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 }
 
 func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
-	// All inline retries transient; deferred recheck eventually sees NotFound.
-	// notifyHook closes a channel once eviction fires — deterministic signal.
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{
-			{err: errors.New("exec: broken pipe")},             // inline 1
-			{err: errors.New("exec: broken pipe")},             // inline 2
-			{err: errors.New("exec: broken pipe")},             // deferred 1 — still transient
-			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}, // deferred 2 — definitive
+			{err: errors.New("exec: broken pipe")},
+			{err: errors.New("exec: broken pipe")},
+			{err: errors.New("exec: broken pipe")},
+			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)},
 		},
 	}
 	p := newTestProvider(t)
@@ -1664,8 +1641,6 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 }
 
 func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
-	// cocoon stays broken forever — budget expiration must evict so the pod
-	// does not sit Running/NotReady indefinitely.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -1738,10 +1713,6 @@ func TestHandleVMGoneDeferredTimeoutKeepsLeaseWhenRemovalFails(t *testing.T) {
 }
 
 func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
-	// Two schedule calls for the same VM should yield a single pending entry.
-	// We keep the first goroutine alive (slow delay) while the second attempts
-	// to schedule, then drop the pod to let the goroutine exit before the test
-	// returns so its view of the Provider fields does not race with cleanup.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -1761,7 +1732,6 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 		t.Fatalf("pendingRecheck should dedup, len=%d", n)
 	}
 
-	// Drop the pod so the goroutine exits on its next iteration, and wait for it.
 	p.forgetPod("ns", "demo-0")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1777,15 +1747,12 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 }
 
 func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
-	// A recheck goroutine running when Close is called must exit so the
-	// provider drains cleanly instead of leaking.
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns-demo-0"})
-	// Long enough that the goroutine is sleeping when we call Close.
 	p.deferredRecheckInitialDelay = 5 * time.Second
 	p.deferredRecheckMaxDelay = 10 * time.Second
 
@@ -1802,7 +1769,6 @@ func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 		t.Fatal("Close did not drain deferred recheck goroutine within 2s")
 	}
 
-	// After Close, further schedule attempts must no-op.
 	p.scheduleDeferredRecheck("vmid-close")
 	p.mu.RLock()
 	n := len(p.pendingRecheck)
@@ -1833,8 +1799,6 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 	}
 }
 
-// Same invariant markReadyAfterIP holds on the wake path: the status must be
-// readable on the apiserver before lifecycle-state=ready is patched.
 func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
@@ -1931,44 +1895,32 @@ type fakeRuntime struct {
 		image string
 		force bool
 	}
-	imagesPresent     map[string]bool // names that Image() reports as cached
+	imagesPresent     map[string]bool
 	imageInspectCalls []string
 
-	netResizeCalls []netResizeCall
-	netResizeErr   error
-	// netResizeNeedsStart fails NetResize until Start ran — a dead VMM whose record still reads running.
+	netResizeCalls      []netResizeCall
+	netResizeErr        error
 	netResizeNeedsStart bool
 
 	startCalls []string
 
-	// mu guards snapshots, imagesPresent, and the call ledgers so
-	// singleflight tests can drive concurrent ensure* callers under -race.
 	mu              sync.Mutex
 	snapshotImports []string
 	imageImports    []string
-	// importHook / ensureImageHook fire at SnapshotImport+ImageImport /
-	// EnsureImage entry so a test can hold a flight in-flight.
 	importHook      func()
 	ensureImageHook func()
 
-	// onRemove, when set, fires at Remove entry — for ordering / failure tests.
 	onRemove func()
 
-	staleCreateOutcomes map[string]vm.StaleCreateOutcome // by vmID; absent → collected
-	// staleCreateSeq is consumed per vmID before staleCreateOutcomes — scripts an owner that exits mid-watch.
-	staleCreateSeq   map[string][]vm.StaleCreateOutcome
-	staleCreateCalls []string
-	staleCreateErr   error
-	// onExec, when set, fires at Exec entry — lets tests block or mutate state mid-exec.
-	onExec          func()
-	removeErr       error
-	snapshotSaveErr error
-	// snapshotSaveHook runs at SnapshotSave entry so a test can hold it in-flight.
-	snapshotSaveHook func()
+	staleCreateOutcomes map[string]vm.StaleCreateOutcome
+	staleCreateSeq      map[string][]vm.StaleCreateOutcome
+	staleCreateCalls    []string
+	staleCreateErr      error
+	onExec              func()
+	removeErr           error
+	snapshotSaveErr     error
+	snapshotSaveHook    func()
 
-	// inspectSeq, when non-empty, is consumed in order by Inspect before
-	// falling back to inspectErr/inspectVM. Lets tests script a sequence
-	// of transient failures followed by a definitive result.
 	inspectMu  sync.Mutex
 	inspectSeq []fakeInspectStep
 	inspectN   int
@@ -2085,8 +2037,6 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
 }
 
-// SnapshotImport mirrors cocoon's contract: the name is registered only when
-// the import completes (wait), and the argv child dies with a canceled ctx.
 func (f *fakeRuntime) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	f.mu.Lock()
 	f.snapshotImports = append(f.snapshotImports, name)
@@ -2133,8 +2083,6 @@ func (f *fakeRuntime) Image(_ context.Context, name string) error {
 	return fmt.Errorf("image %s: %w", name, vm.ErrImageNotFound)
 }
 
-// ImageImport mirrors SnapshotImport's contract minus the rm-first: the name
-// becomes visible to Image() only when the import completes (wait).
 func (f *fakeRuntime) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	f.mu.Lock()
 	f.imageImports = append(f.imageImports, name)
@@ -2244,10 +2192,6 @@ type nopWriteCloser struct{}
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
 
-// newTestProvider builds a Provider and registers Close on cleanup so any
-// goroutines spawned via p.bgWG / p.recheckWG drain before the test exits;
-// without this, a CreatePod-launched goroutine can outlive its test and
-// race with the next test on a recycled pod heap address.
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
 	p := NewProvider(t.Context())
@@ -2276,8 +2220,6 @@ func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
 
 var _ oci.Registry = fakeRegistry{}
 
-// fakeRegistry is a stub oci.Registry serving a canned GetManifest; the other
-// methods are unused by the ensureRunImage classify dispatch.
 type fakeRegistry struct {
 	manifest []byte
 	err      error
@@ -2299,8 +2241,6 @@ func (fakeRegistry) HasManifest(context.Context, string, string) (bool, error) {
 
 func (fakeRegistry) DeleteManifest(context.Context, string, string) error { return nil }
 
-// countingRegistry serves an in-memory artifact (manifest + blobs by digest)
-// and counts manifest fetches, for the singleflight dedup assertions.
 type countingRegistry struct {
 	fakeRegistry
 	blobs     map[string][]byte
@@ -2323,8 +2263,6 @@ func blobDigest(b []byte) string {
 	return "sha256:" + ociutil.SHA256Hex(b)
 }
 
-// snapshotArtifact builds a minimal streamable snapshot manifest: a config
-// blob and zero layers, enough for snapshot.Stream to complete an import.
 func snapshotArtifact() ([]byte, map[string][]byte) {
 	cfg := []byte(`{"schemaVersion":"1","snapshotId":"snap-test"}`)
 	m := fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"artifactType":%q,`+
@@ -2334,8 +2272,6 @@ func snapshotArtifact() ([]byte, map[string][]byte) {
 	return []byte(m), map[string][]byte{blobDigest(cfg): cfg}
 }
 
-// cloudImageArtifact builds a minimal streamable cloud-image manifest with
-// one qcow2 disk layer whose digest matches the served blob bytes.
 func cloudImageArtifact() ([]byte, map[string][]byte) {
 	disk := []byte("qcow2-bytes")
 	m := fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"artifactType":%q,`+
