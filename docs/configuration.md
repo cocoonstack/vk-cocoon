@@ -11,10 +11,10 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Path to a GCP service-account JSON key with `roles/artifactregistry.writer`, fed to ADC for the snapshot push. Unset falls back to the read-only node instance SA. |
 | `VK_LEASES_PATH` | `/var/lib/cocoon/net/leases.json` | cocoon-net JSON lease file. |
-| `VK_COCOON_NET_CONTROL_SOCKET` | `/run/cocoon-net/control.sock` | Root-only cocoon-net Unix socket used to reclaim DHCP leases after VM destruction. |
+| `VK_COCOON_NET_CONTROL_SOCKET` | `/run/cocoon-net/control.sock` | Root-only cocoon-net Unix socket used to reclaim DHCP leases after VM destruction. Needs cocoon-net ≥ v0.2.2 on the node; older daemons have no control socket and every release falls back to lease expiry. |
 | `VK_COCOON_BIN` | `/usr/local/bin/cocoon` | Path to the cocoon CLI binary. |
-| `VK_COCOON_MACOS_BIN` | `/usr/local/bin/cocoon-macos` | cocoon-macos binary `os=macos` pods dispatch to. |
-| `COCOON_MACOS_VNC_PASSWORD` | **required for macOS VNC** | QEMU VNC password (maximum 8 bytes). The password is passed at launch and never persisted in the VM record. |
+| `VK_COCOON_MACOS_BIN` | `/usr/local/bin/cocoon-macos` | cocoon-macos binary `os=macos` pods dispatch to. Needs cocoon-macos ≥ v0.1.8 (`--net cni`, `--storage`, `--exit-on-reboot`); `--storage` must not shrink below the image's virtual size, and cocoon-macos requires an even vCPU count. |
+| `COCOON_MACOS_VNC_PASSWORD` | unset = VNC off | QEMU VNC password: at most 8 bytes, no control characters, validated at startup. When set, each macOS guest's VNC port (5900-5999) listens on **all node interfaces** — firewall the range. Unset leaves macOS guests without VNC. Never persisted in the VM record. |
 | `VK_ORPHAN_POLICY` | `destroy` | `destroy` (auto-clean), `alert`, or `keep`. |
 | `VK_RESTORE_MODE` | `ondemand` | Guest-memory restore mode for Cloud Hypervisor clones: `copy`, `ondemand`, or `mmap`. Windows VMs always use `copy` (lazy restore stalls DHCP boot); Firecracker has no restore mode. `mmap` shares page cache across clones of one snapshot — the fastest fan-out — but requires a Cloud Hypervisor build with mmap restore support (cocoonstack/cloud-hypervisor `dev`); on other CH builds clones fail, so it is opt-in. Invalid values abort startup. |
 | `VK_STAGING_DIR` | `/var/lib/cocoon/vk-staging` | Temporary destination for peer-restored raw snapshot files. Keep it on the Cocoon run-directory filesystem to preserve hardlinks; stale entries are swept at startup. |

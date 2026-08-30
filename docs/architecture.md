@@ -15,7 +15,7 @@ reporting per-VM status back to the kubelet.
 | Provider shared | `provider/` | Orphan policy, VM/node stats types, and node-capacity helpers shared across backends |
 | Cocoon CLI | `vm/` | `Runtime` interface + the default `CocoonCLI` implementation that shells out to `cocoon` (including `WatchEvents` via `cocoon vm status --event --format json`) |
 | Snapshot SDK | `snapshots/` | `Puller` and `Pusher` stream snapshots and cloud images to any OCI registry through `cocoon-common`'s `oci.Registry` backend (`cocoon-common/snapshot` + `cocoon-common/cloudimg`) |
-| Network | `network/` | cocoon-net JSON lease parser used to resolve a freshly cloned VM's IP, plus the ICMPv4 `Pinger` the probe loop uses to check guest reachability |
+| Network | `network/` | cocoon-net JSON lease parser used to resolve VM IPs, the control-socket client that releases leases after VM destruction, plus the ICMPv4 `Pinger` the probe loop uses |
 | Guest console | `guest/` | SAC dialer (Windows static IP). Guest exec / logs go through `cocoon vm exec` and `cocoon vm logs` — see `vm/` |
 | Probes | `probes/` | Per-pod probe agents that run a caller-supplied health check on a ticker, update the in-memory readiness map, and invoke an onUpdate callback so the async provider can push fresh status through v-k's notify hook |
 | Metrics | `metrics/` | Prometheus collectors for pod lifecycle, snapshot pull / push, VM table size, orphans |
@@ -56,4 +56,4 @@ never forks a `cocoon` process.
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry + snapshot/cloud-image packages |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
-| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file |
+| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file and issues `DELETE /v1/leases/{mac}` over its control socket |

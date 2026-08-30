@@ -52,7 +52,7 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_snapshot_peer_restore_total{result}` | Counter | Peer restore outcomes (`result=ok\|failed`); failures fall through to the registry pull |
 | `cocoon_vk_snapshot_verify_total{result}` | Counter | Wake-time verification of the local snapshot against the registry tag (`result=ok\|stale\|error`); `stale` discards the local copy and pulls, `error` fails the wake rather than trust an unverified copy |
 | `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
-| `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`) |
+| `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`; `dhcp_release` is the guest-side `ipconfig /release` on the CH+Windows drop-NIC path — the host-side cocoon-net lease release is counted by `cocoon_vk_lease_release_total`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
 | `cocoon_vk_wake_ip_wait_total{result}` | Counter | Post-clone and wake DHCP-lease-wait outcomes — both the CH+Windows dropNIC wake and every clone's post-clone IP wait (`result=ok\|timeout`) |
 | `cocoon_vk_wake_renew_nudge_total{result}` | Counter | `ipconfig /renew` nudges sent to Windows guests still lease-less mid lease-wait (`result=ok\|failed`; failed means the exec didn't confirm — the in-guest renew may still have taken effect, the lease re-check decides) |

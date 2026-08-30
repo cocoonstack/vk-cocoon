@@ -26,7 +26,7 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
 | Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
 | Cocoon CLI | `vm/` | `Runtime` interface + the `CocoonCLI` that shells out to `cocoon` |
 | Snapshot SDK | `snapshots/` | `Puller` / `Pusher` stream snapshots and cloud images to an OCI registry |
-| Network | `network/` | cocoon-net lease parser + the ICMPv4 `Pinger` the probe loop uses |
+| Network | `network/` | cocoon-net lease parser, the lease-release control-socket client, and the ICMPv4 `Pinger` the probe loop uses |
 | Guest console | `guest/` | SAC dialer for Windows static IP |
 | Probes | `probes/` | Per-pod probe agents that keep the async provider's pushed status live |
 | Metrics | `metrics/` | Prometheus collectors for lifecycle, snapshots, VM table, orphans |
@@ -43,7 +43,9 @@ cocoon CLI. The guest joins the cocoon CNI plane for a DHCP'd routed IP.
 Readiness uses a bare TCP accept on the declared `vm.cocoonstack.io/probe-port`,
 or falls back to requiring the guest sshd's `SSH-` banner on `:22`. The QEMU VNC
 framebuffer gets a node-unique, password-protected host port allocated by
-vk-cocoon and published via `vm.cocoonstack.io/vnc-port`. A vk-cocoon restart
+vk-cocoon, published via `vm.cocoonstack.io/vnc-port` and served on all node
+interfaces (firewall 5900-5999; unset `COCOON_MACOS_VNC_PASSWORD` disables VNC).
+A vk-cocoon restart
 adopts a live guest instead of relaunching it (two QEMU processes on one overlay
 corrupt the disk). Hibernate/wake, fork, and snapshot push do not apply to macOS guests.
 
@@ -92,7 +94,7 @@ make help    # show all targets
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, OCI registry + snapshot/cloud-image packages |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
-| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking; vk-cocoon reads its JSON lease file |
+| [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking; vk-cocoon reads its JSON lease file and releases leases over its control socket (≥ v0.2.2) |
 
 ## License
 
