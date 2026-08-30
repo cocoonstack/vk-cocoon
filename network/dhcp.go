@@ -22,6 +22,8 @@ var ErrNoLease = errors.New("no cocoon-net lease for the requested MAC")
 type Lease struct {
 	MAC string
 	IP  string
+
+	expiresAt time.Time
 }
 
 // cocoonNetLease is the on-disk JSON shape written by cocoon-net, decoded by parse.
@@ -53,7 +55,7 @@ func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if lease, ok := p.byMAC[strings.ToLower(mac)]; ok {
+	if lease, ok := p.byMAC[strings.ToLower(mac)]; ok && time.Now().Before(lease.expiresAt) {
 		return lease, nil
 	}
 	return nil, ErrNoLease
@@ -101,10 +103,11 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
 		// Skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
-		if _, err := time.Parse(time.RFC3339, r.Expiry); err != nil {
+		expiresAt, err := time.Parse(time.RFC3339, r.Expiry)
+		if err != nil {
 			continue
 		}
-		out = append(out, Lease{MAC: r.MAC, IP: r.IP})
+		out = append(out, Lease{MAC: r.MAC, IP: r.IP, expiresAt: expiresAt})
 	}
 	return out, nil
 }

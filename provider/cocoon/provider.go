@@ -375,19 +375,25 @@ func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	return p.updateTrackedVM(namespace, name, vmID, func(v *vm.VM) { v.IP = ip }) != nil
 }
 
-// resolveVMIP returns the VM's IP, falling back to a cocoon-net lease
-// lookup when the IP is unknown but a MAC is available.
+// resolveVMIP re-reads the lease each call: cocoon-net can rebind a MAC, so the tracked IP is only a cache (#70).
 func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
-	ip := v.IP
-	if ip != "" || v.MAC == "" || p.LeaseParser == nil {
-		return ip
+	if len(v.NetworkConfigs) > 0 && isStaticNIC(v.NetworkConfigs[0]) {
+		return v.IP
+	}
+	if v.MAC == "" || p.LeaseParser == nil {
+		return v.IP
 	}
 	lease, err := p.LeaseParser.LookupByMAC(v.MAC)
 	if err != nil {
-		return ""
+		if errors.Is(err, network.ErrNoLease) {
+			p.setVMIP(namespace, name, v.ID, "")
+			return ""
+		}
+		return v.IP
 	}
-	// The lease belongs to v's MAC; if a same-name recreate swapped the tracked
-	// VM during the lookup, the IP must not leak onto the successor.
+	if lease.IP == v.IP {
+		return v.IP
+	}
 	if !p.setVMIP(namespace, name, v.ID, lease.IP) {
 		return ""
 	}

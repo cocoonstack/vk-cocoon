@@ -59,6 +59,21 @@ func TestLeaseParserSkipsMalformedExpiry(t *testing.T) {
 	}
 }
 
+func TestLeaseParserSkipsExpiredLease(t *testing.T) {
+	t.Parallel()
+	data := `[
+  {"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.10","expiry":"2000-01-01T00:00:00Z"},
+  {"mac":"11:22:33:44:55:66","ip":"172.20.0.11","expiry":"2099-01-01T00:00:00Z"}
+]`
+	p := newTestParser(t, data)
+	if _, err := p.LookupByMAC("aa:bb:cc:dd:ee:ff"); !errors.Is(err, ErrNoLease) {
+		t.Fatalf("expired entry should be skipped, got err %v", err)
+	}
+	if _, err := p.LookupByMAC("11:22:33:44:55:66"); err != nil {
+		t.Fatalf("future entry should be returned: %v", err)
+	}
+}
+
 func newTestParser(t *testing.T, data string) *LeaseParser {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "leases.json")
