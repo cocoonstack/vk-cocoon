@@ -192,6 +192,33 @@ func TestAppendMacosVNCArgsRejectsLongPassword(t *testing.T) {
 	}
 }
 
+func TestDeleteMacosPodStopsProbeBeforeRemove(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	stubMacosExec(p, freshCreateHandler)
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if p.Probes.Get(key).LastSeen.IsZero() {
+		t.Fatal("probe agent was not armed by CreatePod")
+	}
+
+	p.macosExecFn = func(_ context.Context, args ...string) (string, error) {
+		if len(args) >= 2 && args[0] == "vm" && args[1] == "rm" {
+			return "", errors.New("rm interrupted")
+		}
+		return freshCreateHandler(args)
+	}
+	if err := p.DeletePod(t.Context(), pod); err == nil {
+		t.Fatal("DeletePod must surface the rm failure")
+	}
+	if !p.Probes.Get(key).LastSeen.IsZero() {
+		t.Fatal("probe agent survived a failed rm; its crash recovery would vm start the guest mid-teardown")
+	}
+}
+
 func TestCreateMacosPodSkipsDuplicateRun(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())

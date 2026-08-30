@@ -311,6 +311,9 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		v = &vm.VM{ID: macosVMID(vmName)}
 		applyMacosRecord(v, p.macosInspect(ctx, vmName))
 	}
+	if p.Probes != nil {
+		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
+	}
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
