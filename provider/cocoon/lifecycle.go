@@ -165,6 +165,8 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 		}
 		if pod, err := p.GetPod(ctx, d.ns, d.name); err == nil {
 			p.publishReadyLifecycle(ctx, pod, d.status)
+		} else {
+			p.flushLifecycle(ctx, d.ns, d.name, d.status)
 		}
 	})
 }

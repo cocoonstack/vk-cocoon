@@ -238,6 +238,24 @@ func TestReadyPublicationNotifiesWhenLifecycleTransitionIsRejected(t *testing.T)
 	}
 }
 
+func TestReconcileDropsReadyIntentForDeletedPod(t *testing.T) {
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset()
+	key := meta.PodKey("ns", "gone-0")
+	p.mu.Lock()
+	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.mu.Unlock()
+
+	p.reconcileAllLifecycle(t.Context())
+
+	p.mu.RLock()
+	_, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if ok {
+		t.Fatal("ready intent for a deleted, untracked pod must be dropped, not retried forever")
+	}
+}
+
 func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 	t.Parallel()
 
