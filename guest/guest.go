@@ -8,9 +8,7 @@ import (
 	"io"
 )
 
-// Session holds a persistent connection to a guest console.
-// Commands are sent sequentially over the same underlying channel,
-// preserving state between calls (e.g. SAC serial port state).
+// Session holds a persistent connection to a guest console, preserving state between calls (e.g. SAC serial port state).
 type Session interface {
 	Run(ctx context.Context, cmd []string, stdout io.Writer) error
 	Close() error

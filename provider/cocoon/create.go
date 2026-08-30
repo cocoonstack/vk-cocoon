@@ -163,10 +163,7 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 	return err
 }
 
-// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: the pod
-// looks freshly creatable, but fresh-booting a name whose guest state sits in
-// a hibernate snapshot lets the next hibernate overwrite it (#54).
-// classifyNICRecovery (resume.go) relies on these gates running pre-bringUpVM.
+// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: fresh-booting a name whose guest state sits in a hibernate snapshot would let the next hibernate overwrite it (#54).
 func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
 	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
 	if err != nil {
@@ -381,18 +378,15 @@ func (p *Provider) detachedImportContext() (context.Context, context.CancelFunc)
 	return context.WithTimeout(p.lifecycleCtx, importDetachTimeout)
 }
 
-// ensureRunImage materializes the base image locally and returns the ref
-// `cocoon vm run` should be invoked with. A cloud-image artifact is imported
-// into the local store and booted from there (repo:tag), not the registry.
-// The flight key carries force so a force caller never coalesces onto a
-// non-force flight that may have been a pure local-store hit; a later force
-// call re-imports because the key is evicted when its flight returns.
+// ensureRunImage materializes the base image locally and returns the ref `cocoon vm run` should be invoked with.
+// A cloud-image artifact is imported into the local store and booted from there (repo:tag), not the registry.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
 	}
 	// Raw ref, not ParseRef-normalized: fallback branches return the leader's
 	// spelling verbatim, so a joiner must share its exact ref.
+	// force keys separately so a force caller never coalesces onto a non-force flight.
 	key := image
 	if force {
 		key = "force " + image

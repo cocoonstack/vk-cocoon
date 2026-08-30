@@ -20,12 +20,7 @@ const (
 	defaultMaxPods        = 256
 )
 
-// NodeResources probes the host for real CPU, memory, hugepages, and
-// storage, then returns Capacity (full host) and Allocatable (capacity
-// minus the reserved fraction). The reserve percentage defaults to 20%
-// and is overridable via VK_RESERVE_PERCENT. Individual resource values
-// can still be force-overridden via VK_NODE_CPU / VK_NODE_MEM /
-// VK_NODE_STORAGE / VK_NODE_HUGEPAGES / VK_NODE_PODS.
+// NodeResources probes the host and returns Capacity (full host) and Allocatable (capacity minus the reserved fraction).
 func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 	reservePct := defaultReservePercent
 	if v := os.Getenv("VK_RESERVE_PERCENT"); v != "" {
@@ -75,8 +70,7 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 		}
 		allocatable[k] = reserveQuantity(v, reservePct)
 	}
-	// Storage allocatable is based on fs-available (excludes base images
-	// and other existing data), not fs-total.
+	// storage allocatable is based on fs-available (excludes base images and other existing data), not fs-total.
 	allocatable[corev1.ResourceEphemeralStorage] = reserveQuantity(storageAvail, reservePct)
 	return capacity, allocatable, nil
 }
@@ -96,8 +90,7 @@ func StorageBytes() (total, available int64) {
 	return statTotalBytes(stat), statAvailBytes(stat)
 }
 
-// ReadKeyedProcFile reads the named "Key: value" fields from path (e.g.
-// /proc/meminfo, /proc/<pid>/status) in a single pass, in native unit (kB).
+// ReadKeyedProcFile reads the named "Key: value" fields from path in a single pass, in native unit (kB).
 func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
 	f, err := os.Open(path) //nolint:gosec // path is a fixed /proc file, never user input
 	if err != nil {
@@ -177,9 +170,7 @@ func detectMemory() (resource.Quantity, error) {
 	return *resource.NewQuantity(fields["MemTotal"]*1024, resource.BinarySI), nil
 }
 
-// detectHugepagesResource reads amount and page size from /proc/meminfo so a
-// non-2Mi default (e.g. 1Gi) is advertised under the right hugepages-<size>
-// key; VK_NODE_HUGEPAGES overrides the amount and assumes 2Mi pages.
+// detectHugepagesResource reads amount and page size from /proc/meminfo so a non-2Mi default advertises under the right hugepages-<size> key.
 func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 	if v := os.Getenv("VK_NODE_HUGEPAGES"); v != "" {
 		q, err := resource.ParseQuantity(v)
@@ -202,9 +193,7 @@ func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 	return qty, corev1.ResourceName(corev1.ResourceHugePagesPrefix + pageSuffix), nil
 }
 
-// detectStorageOrOverride returns filesystem total and available bytes.
-// When VK_NODE_STORAGE is set, both total and available use that value
-// (manual override disables the available-based allocatable logic).
+// detectStorageOrOverride returns filesystem total and available bytes; VK_NODE_STORAGE overrides both to the same value.
 func detectStorageOrOverride() (total, avail resource.Quantity, err error) {
 	if v := os.Getenv("VK_NODE_STORAGE"); v != "" {
 		q, parseErr := resource.ParseQuantity(v)

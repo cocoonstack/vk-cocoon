@@ -39,8 +39,7 @@ func NewCocoonNetLeaseReleaser(socketPath string) *CocoonNetLeaseReleaser {
 	}
 }
 
-// ReleaseByMAC idempotently releases a lease. cocoon-net returns 204 whether
-// the lease existed or had already been reclaimed.
+// ReleaseByMAC idempotently releases a lease; cocoon-net returns 204 whether the lease existed or had already been reclaimed.
 func (r *CocoonNetLeaseReleaser) ReleaseByMAC(ctx context.Context, rawMAC string) error {
 	mac, err := net.ParseMAC(rawMAC)
 	if err != nil {

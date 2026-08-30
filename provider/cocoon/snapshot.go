@@ -11,10 +11,7 @@ import (
 
 const snapshotCleanupTimeout = 10 * time.Second
 
-// removeSnapshotDetached drops a local snapshot under a fresh timed
-// context so caller cancel (vk shutdown, kubelet deadline) can't abort
-// the rm mid-flight. Per-call timeout, so a slow first remove can't
-// starve a follow-up one in the same cleanup pass.
+// removeSnapshotDetached drops a snapshot under a fresh timed context so caller cancel can't abort it, and a slow remove can't starve a follow-up.
 func (p *Provider) removeSnapshotDetached(ctx context.Context, funcLabel, name string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotCleanupTimeout)
 	defer cancel()
@@ -23,9 +20,7 @@ func (p *Provider) removeSnapshotDetached(ctx context.Context, funcLabel, name s
 	}
 }
 
-// saveAndPushSnapshot saves a snapshot and pushes it to the registry, recording
-// timing metrics. Errors are logged and counted but not returned — the
-// delete path treats snapshot failures as non-fatal.
+// saveAndPushSnapshot saves and pushes a snapshot; errors are logged and counted but not returned since the delete path treats them as non-fatal.
 func (p *Provider) saveAndPushSnapshot(ctx context.Context, vmName, vmID, tag, image string) {
 	logger := log.WithFunc("Provider.saveAndPushSnapshot")
 

@@ -47,8 +47,7 @@ const (
 	sacIPSetRetries = 10 // per-NIC retry until SAC `i` reflects the assigned IP
 )
 
-// runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state;
-// on exhaustion it leaves a manual hint annotation for the operator.
+// runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state; exhaustion leaves a manual hint.
 func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wake bool) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
@@ -126,11 +125,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-// markReadyAfterIP defers ready until the clone's DHCP lease lands, because
-// ready promises vm-service an IP resolveVMIP can return; on timeout mark
-// failed, never ready-without-IP. wake=true owns the wake accounting: WakeTotal
-// counts at the outcome, not at dispatch. Metrics and events gate on the wake
-// marker so a VM hibernated/replaced mid-wait counts nothing.
+// markReadyAfterIP defers ready until the clone's DHCP lease lands, because ready promises vm-service a resolvable IP.
 func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM, wake bool) {
 	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
 	if ctx.Err() != nil {
@@ -349,8 +344,7 @@ type postClonePlan struct {
 	hint string
 }
 
-// planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals
-// on both OCI and cloudimg paths; only static-IP, FC, and Windows clones need it.
+// planPostClone returns ok=false when no fixup is needed: CH+DHCP self-heals; only static-IP, FC, and Windows need it.
 func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePlan, bool) {
 	if !postCloneNeeded(spec, v) {
 		return postClonePlan{}, false
@@ -363,8 +357,7 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
-// postCloneNeeded is planPostClone's decision alone — cheap and syscall-free,
-// so lock-holding callers (owedOpFor) can ask without building the plan.
+// postCloneNeeded is planPostClone's decision alone — cheap and syscall-free — so lock-holders can ask directly.
 func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
 	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
 }
@@ -384,8 +377,7 @@ func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
 	return slices.ContainsFunc(networkConfigs, isStaticNIC)
 }
 
-// buildWindowsPostCloneArgv: -PresentOnly is load-bearing — ghost Net PnP
-// entries make Disable-PnpDevice return 0x80041001 before the real adapter.
+// buildWindowsPostCloneArgv: -PresentOnly matters — ghost Net PnP entries make Disable-PnpDevice return 0x80041001 first.
 func buildWindowsPostCloneArgv() []string {
 	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
 		`$x|Disable-PnpDevice -Confirm:$false;` +
@@ -411,8 +403,7 @@ func prefixToSubnet(prefix int) string {
 	return fmt.Sprintf("%d.%d.%d.%d", mask>>24, (mask>>16)&0xFF, (mask>>8)&0xFF, mask&0xFF)
 }
 
-// buildPostCloneCommands renders the in-guest fixup script. cloudimg → cloud-init;
-// OCI → direct systemd-networkd writes.
+// buildPostCloneCommands renders the in-guest fixup script: cloudimg uses cloud-init, OCI writes systemd-networkd.
 func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkConfigs []*vm.NetworkConfig) string {
 	var cmds []string
 

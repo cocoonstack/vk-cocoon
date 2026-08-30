@@ -1,9 +1,5 @@
 // Package vm wraps the cocoon CLI for VM lifecycle operations.
-//
-// This package is the cocoon CLI bridge; subprocess calls are architectural,
-// not tech debt. cocoon is the authoritative VM controller and exposes its
-// contract through the CLI, so vk-cocoon shells out rather than linking
-// against cocoon's internals.
+// Subprocess calls are the deliberate architecture: cocoon is the authoritative VM controller, so vk-cocoon shells out rather than linking against its internals.
 package vm
 
 import (
@@ -32,26 +28,22 @@ import (
 const (
 	defaultCocoonBinary = "/usr/local/bin/cocoon"
 
-	// BackendFirecracker matches cocoonv1.BackendFirecracker. Exported so
-	// provider/cocoon can reuse it without importing CRD types.
+	// BackendFirecracker matches cocoonv1.BackendFirecracker; exported for provider/cocoon to reuse without importing CRD types.
 	BackendFirecracker = "firecracker"
 
 	// maxEventLineBytes bounds one `cocoon vm status --event` JSON line.
 	maxEventLineBytes = 1 << 20
 
-	// staleSnapshotRmBudget / staleSnapshotRmDelay bound the wait for a killed
-	// save's orphaned child to die (seconds) and release the snapshot flock.
+	// staleSnapshotRmBudget / staleSnapshotRmDelay bound the wait for a killed save's orphaned child to release the snapshot flock.
 	staleSnapshotRmBudget = 30 * time.Second
 	staleSnapshotRmDelay  = 500 * time.Millisecond
 )
 
 var (
-	// snapshotNameTaken are cocoon's two same-name rejections: the save preflight
-	// skips pending records, so a killed save surfaces via the store's wording.
+	// snapshotNameTaken are cocoon's two same-name rejection phrases for a killed save's still-held name.
 	snapshotNameTaken = []string{"already exists", "already in use by"}
 
-	// snapshotLeaseHeld is cocoon's rm refusal while the snapshot's flock is held —
-	// an interrupted save's build lease reports the same as active readers.
+	// snapshotLeaseHeld is cocoon's rm refusal while the snapshot's flock is still held.
 	snapshotLeaseHeld = []string{"is in use by an active"}
 )
 
@@ -67,18 +59,13 @@ func NewCocoonCLI(binary string) *CocoonCLI {
 	return &CocoonCLI{binary: cmp.Or(binary, defaultCocoonBinary)}
 }
 
-// Clone runs `cocoon vm clone --output json` and parses the emitted VM
-// record directly, avoiding a second inspect round trip.
+// Clone runs `cocoon vm clone --output json` and parses the emitted VM record, avoiding a second inspect round trip.
 func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.runAndParseVM(ctx, "cocoon vm clone", opts.To, buildCloneArgs(opts))
 }
 
-// Run runs `cocoon vm run --output json`; cocoon re-inspects after start
-// so the emitted JSON reflects the running state (PID, IP). If cocoon's
-// own post-start inspect failed it falls back to the pre-start record
-// (State!="running", PID=0) and only warns on stderr — detect that here
-// and do a single make-up Inspect so callers always see live state.
-// Caller must have ensured the image locally before invoking Run.
+// Run runs `cocoon vm run --output json`; if cocoon's post-start inspect failed
+// (State!="running", PID=0) this does a make-up Inspect so callers always see live state. Caller must have ensured the image locally.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	v, err := c.runAndParseVM(ctx, "cocoon vm run", opts.Name, buildRunArgs(opts))
 	if err != nil {
@@ -90,9 +77,7 @@ func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	return v, nil
 }
 
-// EnsureImage shells `cocoon image pull`; force=true adds --force.
-// Cocoonstack cloud-image artifacts must go through Puller.EnsureCloudImageFromRaw
-// instead — `cocoon image pull` mistakes them for container images.
+// EnsureImage shells `cocoon image pull` (force=true adds --force); cloud-image artifacts must instead go through Puller.EnsureCloudImageFromRaw.
 func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) error {
 	args := []string{"image", "pull"}
 	if force {
@@ -106,8 +91,7 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 	return nil
 }
 
-// Image runs `cocoon image inspect` as a local-presence probe; "not found
-// in any backend" maps to ErrImageNotFound.
+// Image runs `cocoon image inspect` as a local-presence probe; "not found in any backend" maps to ErrImageNotFound.
 func (c *CocoonCLI) Image(ctx context.Context, name string) error {
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {
@@ -119,15 +103,13 @@ func (c *CocoonCLI) Image(ctx context.Context, name string) error {
 	return nil
 }
 
-// ImageImport spawns `cocoon image import <name>` and returns its stdin
-// pipe. Mirrors SnapshotImport; cocoon auto-detects qcow2 vs tar.
+// ImageImport spawns `cocoon image import <name>` and returns its stdin pipe; cocoon auto-detects qcow2 vs tar.
 func (c *CocoonCLI) ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	cmd := c.command(ctx, "image", "import", name)
 	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon image import")
 }
 
-// Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound.
-// Any other error is inconclusive (transient CLI failure, sudo timeout, etc.).
+// Inspect runs `cocoon vm inspect`; cocoon's "not found" maps to ErrVMNotFound, any other error is inconclusive.
 func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	out, err := c.runJSON(ctx, "vm", "inspect", vmID)
 	if err != nil {
@@ -166,9 +148,7 @@ func (c *CocoonCLI) ReconcileStaleCreate(ctx context.Context, vmID string) (Stal
 	return res.Outcome, nil
 }
 
-// Exec runs `cocoon vm exec`. Non-zero child exit → utilexec.CodeExitError
-// (vk's RemoteCommand handler probes that interface for the kubectl status);
-// transport / setup failures bubble up as plain errors.
+// Exec runs `cocoon vm exec`; non-zero child exit maps to utilexec.CodeExitError for vk's RemoteCommand status probe.
 func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if vmID == "" {
 		return errors.New("cocoon vm exec: vmID is empty")
@@ -200,9 +180,7 @@ func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// Logs runs `cocoon vm logs [--tail N] <vmID>` and returns the hypervisor log.
-// stdout and stderr are captured separately so cocoon's diagnostic output
-// is surfaced in errors instead of leaking into the log stream.
+// Logs runs `cocoon vm logs [--tail N] <vmID>`; stdout and stderr are captured separately so diagnostics surface in errors, not the log stream.
 func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadCloser, error) {
 	if vmID == "" {
 		return nil, errors.New("cocoon vm logs: vmID is empty")
@@ -222,9 +200,7 @@ func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadClo
 	return io.NopCloser(&stdout), nil
 }
 
-// SnapshotSave runs `cocoon snapshot save`, dropping a name a crashed hibernate
-// still holds. Removal prefers the holder's ID from the rejection: only ID
-// resolution is guaranteed to reach a pending record.
+// SnapshotSave runs `cocoon snapshot save`, dropping a name a crashed hibernate still holds before retrying.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
 	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
 	if err == nil {
@@ -256,9 +232,7 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 	return parseSnapshotJSON(out)
 }
 
-// SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe.
-// Stale snapshots at the same name are removed up-front for idempotency
-// (same retry-loop reasoning as SnapshotSave).
+// SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe, removing a stale same-name snapshot up front for idempotency.
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	if err := c.SnapshotRemoveIfExists(ctx, name); err != nil {
 		return nil, nil, err
@@ -273,9 +247,7 @@ func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadC
 	return startCmdPipe(ctx, cmd, cmd.StdoutPipe, "cocoon snapshot export")
 }
 
-// SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as
-// success. Exposed so callers can invalidate cached fork snapshots when a
-// main VM is recreated.
+// SnapshotRemoveIfExists drops a snapshot by name, treating "not found" as success.
 func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) error {
 	out, err := c.command(ctx, "snapshot", "rm", name).CombinedOutput()
 	if err == nil {
@@ -306,10 +278,7 @@ func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) erro
 	return nil
 }
 
-// WatchEvents starts `cocoon vm status --event --format json` and streams
-// parsed VMEvent values. The channel closes when ctx is canceled or the
-// subprocess exits. An undecodable line is logged and skipped so one torn
-// write cannot kill the stream and force a subprocess respawn.
+// WatchEvents streams parsed VMEvent values from `cocoon vm status --event --format json`; an undecodable line is logged and skipped rather than killing the stream.
 func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	cmd := c.command(ctx, "vm", "status", "--event", "--format", "json")
 	stdout, err := cmd.StdoutPipe()
@@ -357,8 +326,7 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 	return ch, nil
 }
 
-// removeStaleSnapshot rms the name holder, retrying only the lease-held refusal
-// until the killed save's orphaned child dies; other failures report immediately.
+// removeStaleSnapshot rms the name holder, retrying only the lease-held refusal until the orphaned child dies.
 func (c *CocoonCLI) removeStaleSnapshot(ctx context.Context, ref string) error {
 	deadline := time.Now().Add(staleSnapshotRmBudget)
 	for {
@@ -414,8 +382,7 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
-// NormalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts
-// accepted by cocoon and cocoon-macos CLI size flags.
+// NormalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts accepted by cocoon and cocoon-macos CLI size flags.
 func NormalizeSizeArg(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -502,8 +469,7 @@ func appendCPUPolicyArgs(args []string, policy CPUPolicy) []string {
 	return args
 }
 
-// buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`,
-// sorting env keys for a deterministic argv. -i attaches stdin (opt-in, docker semantics).
+// buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`, sorting env keys for a deterministic argv.
 func buildExecArgs(vmID string, argv []string, env map[string]string, interactive bool) []string {
 	args := make([]string, 0, 5+2*len(env)+len(argv)) //nolint:mnd
 	args = append(args, "vm", "exec")
@@ -518,9 +484,7 @@ func buildExecArgs(vmID string, argv []string, env map[string]string, interactiv
 	return args
 }
 
-// parseVMFromStatusJSON decodes a vm status event using the inspect wire
-// format, since cocoon emits the same shape on both endpoints. Returns a
-// zero VM on decode failure.
+// parseVMFromStatusJSON decodes a vm status event using the inspect wire format; returns a zero VM on decode failure.
 func parseVMFromStatusJSON(data []byte) VM {
 	var d inspectJSON
 	if json.Unmarshal(data, &d) != nil {
@@ -558,10 +522,7 @@ func startCmdPipe[P io.Closer](ctx context.Context, cmd *exec.Cmd, pipe func() (
 	return p, cocoonWait(cmd, op), nil
 }
 
-// isCocoonNotFound detects cocoon's VM-not-found signal inside the
-// stderr-embedded wrapped error produced by runJSON. Restricted to
-// VM-specific phrases so an unrelated binary/config "not found" stderr
-// cannot be promoted to an authoritative VMGone.
+// isCocoonNotFound detects cocoon's VM-not-found signal via VM-specific phrases, so an unrelated "not found" stderr isn't promoted to VMGone.
 func isCocoonNotFound(err error) bool {
 	return errContainsAny(err, "vm not found", "no such vm")
 }
@@ -582,8 +543,7 @@ func containsAny(s string, phrases ...string) bool {
 	return slices.ContainsFunc(phrases, func(p string) bool { return strings.Contains(lowered, p) })
 }
 
-// snapshotNameHolderID pulls the holder's ID out of cocoon's same-name
-// rejection; "" when the message names no holder (older cocoon).
+// snapshotNameHolderID pulls the holder's ID out of cocoon's same-name rejection; "" when the message names no holder.
 func snapshotNameHolderID(out string) string {
 	for _, marker := range []string{"already in use by ", "held by "} {
 		_, after, found := strings.Cut(out, marker)

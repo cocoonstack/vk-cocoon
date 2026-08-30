@@ -1,6 +1,5 @@
 // Package cocoon implements the virtual-kubelet provider for cocoon MicroVMs.
-// It owns pod lifecycle (create / delete / update), exec / logs over the
-// cocoon-agent vsock channel, status reporting, and stats.
+// It owns pod lifecycle, exec/logs over the cocoon-agent vsock channel, status reporting, and stats.
 package cocoon
 
 import (
@@ -25,7 +24,7 @@ func (p *Provider) GetContainerLogs(ctx context.Context, namespace, podName, _ s
 	}
 	tail := opts.Tail
 	if tail <= 0 {
-		// Cap unbounded `kubectl logs` against long-running VMs.
+		// cap unbounded `kubectl logs` against long-running VMs.
 		tail = 200
 	}
 	return p.Runtime.Logs(ctx, v.ID, tail)

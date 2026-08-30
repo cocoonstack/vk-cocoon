@@ -348,9 +348,7 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 	}
 }
 
-// patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with
-// retries to ride out the node-creation window; v-k only patches status after
-// creation, so a re-stamped snapshot CPU class never lands on its own.
+// patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
 func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
 	logger := log.WithFunc("patchNodeLabelsAndEndpoint")
 	// Give v-k time to create the node object.

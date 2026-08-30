@@ -13,8 +13,7 @@ const (
 	StateRunning = "running"
 	// StateCreating is cocoon's placeholder state before a create/clone commits.
 	StateCreating = "creating"
-	// StateCreated is cocoon's registered-but-not-started state between
-	// creating and running on the run path.
+	// StateCreated is cocoon's registered-but-not-started state between creating and running.
 	StateCreated = "created"
 
 	RestoreCopy     RestoreMode = "copy"
@@ -28,15 +27,10 @@ const (
 )
 
 var (
-	// ErrVMNotFound signals the cocoon CLI has authoritatively reported the
-	// VM does not exist. Callers use this to distinguish a gone VM from a
-	// transient CLI failure (sudo hiccup, timeout, parse error) where the
-	// VM may still be alive. Returned wrapped; unwrap with errors.Is.
+	// ErrVMNotFound signals the cocoon CLI has authoritatively reported the VM does not exist (returned wrapped; unwrap with errors.Is).
 	ErrVMNotFound = errors.New("vm not found")
 
-	// ErrImageNotFound signals the cocoon CLI has authoritatively reported
-	// the image is not stored locally. Used by Puller.EnsureCloudImageFromRaw
-	// as the idempotency probe for `cocoon image inspect`.
+	// ErrImageNotFound signals the cocoon CLI has authoritatively reported the image is not stored locally.
 	ErrImageNotFound = errors.New("image not found")
 
 	// ErrSnapshotNotFound is the sibling of ErrVMNotFound for snapshot inspect.
@@ -70,11 +64,7 @@ type VM struct {
 	NetworkConfigs []*NetworkConfig
 }
 
-// Snapshot is the subset of `cocoon snapshot inspect` needed to restore
-// a VM. Image is required for cloudimg-backed snapshots' qcow2 backing chain.
-// Hypervisor records which backend ("cloud-hypervisor" or "firecracker")
-// produced the snapshot, so vk-cocoon can reject backend-mismatched clones
-// before shelling out to cocoon.
+// Snapshot is the subset of `cocoon snapshot inspect` needed to restore a VM.
 type Snapshot struct {
 	ID          string
 	Name        string
@@ -83,8 +73,7 @@ type Snapshot struct {
 	Hypervisor  string
 }
 
-// RestoreMode maps to `cocoon vm clone --restore-mode`: how CH restores guest
-// memory. RestoreMmap needs a CH build with mmap restore support.
+// RestoreMode maps to `cocoon vm clone --restore-mode`; RestoreMmap needs a CH build with mmap restore support.
 type RestoreMode string
 
 // StaleCreateOutcome mirrors `cocoon vm reconcile-stale-create` outcomes.
@@ -101,17 +90,14 @@ func ParseRestoreMode(s string) (RestoreMode, error) {
 	}
 }
 
-// CPUPolicy carries the host-side cgroup CPU knobs cocoon applies to a
-// VM. Cocoon never inherits them from a snapshot, so zero values mean
-// Guaranteed-at-N defaults on run and clone alike.
+// CPUPolicy carries the host-side cgroup CPU knobs cocoon applies to a VM; zero values mean Guaranteed-at-N defaults.
 type CPUPolicy struct {
 	CPUWeight   int
 	CPUQuotaUs  int64
 	CPUPeriodUs int64
 }
 
-// CloneOptions is the input to Runtime.Clone. Resource fields inherit
-// from the snapshot unless overridden — except CPUPolicy (see its doc).
+// CloneOptions is the input to Runtime.Clone; resource fields inherit from the snapshot unless overridden.
 type CloneOptions struct {
 	From        string
 	To          string
@@ -121,9 +107,7 @@ type CloneOptions struct {
 	Pull        bool
 	RestoreMode RestoreMode
 	CPUPolicy
-	// FromDir maps to `cocoon vm clone --from-dir`: when set, From is
-	// ignored and --pull is forced (the dir holds snapshot data, not
-	// base image layers).
+	// FromDir maps to `cocoon vm clone --from-dir`: when set, From is ignored and --pull is forced.
 	FromDir string
 	// NICs overrides the snapshot's NIC count when non-nil.
 	NICs *int
@@ -159,8 +143,7 @@ type Runtime interface {
 	Start(ctx context.Context, vmID string) error
 	Exec(ctx context.Context, vmID string, argv []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) error
 	Logs(ctx context.Context, vmID string, tail int) (io.ReadCloser, error)
-	// ReconcileStaleCreate reclaims an ownerless creating placeholder;
-	// busy means an in-flight operation still owns the VM.
+	// ReconcileStaleCreate reclaims an ownerless creating placeholder; busy means an in-flight operation still owns the VM.
 	ReconcileStaleCreate(ctx context.Context, vmID string) (StaleCreateOutcome, error)
 	SnapshotSave(ctx context.Context, vmName, vmID string) error
 	SnapshotRemoveIfExists(ctx context.Context, name string) error
@@ -168,8 +151,7 @@ type Runtime interface {
 	SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string, force bool) error
-	// Image probes local presence via `cocoon image inspect`;
-	// absence is ErrImageNotFound.
+	// Image probes local presence via `cocoon image inspect`; absence is ErrImageNotFound.
 	Image(ctx context.Context, name string) error
 	ImageImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)

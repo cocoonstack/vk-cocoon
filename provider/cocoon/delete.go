@@ -26,7 +26,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	if isMacosSpec(spec) {
 		return p.deleteMacosPod(ctx, pod, spec)
 	}
-	// A seat release keeps the local snapshot as the same-node warm-wake cache; resolveWakeSource still gates it on the :hibernate tag.
+	// a seat release keeps the local snapshot as the same-node warm-wake cache; resolveWakeSource still gates it on the :hibernate tag.
 	keepSnapshots := meta.ReadKeepSnapshotOnDelete(pod)
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
@@ -78,8 +78,7 @@ func (p *Provider) releaseDHCPLeases(ctx context.Context, v *vm.VM) {
 	releaseCtx := context.WithoutCancel(ctx)
 	for _, mac := range dhcpMACs(v) {
 		if err := p.LeaseReleaser.ReleaseByMAC(releaseCtx, mac); err != nil {
-			// The VM is already gone. Keep deletion progressing and let the lease
-			// expiry fallback handle a temporarily unavailable cocoon-net daemon.
+			// the VM is already gone; keep deletion progressing and let the lease expiry fallback handle a down cocoon-net daemon.
 			logger.Warnf(ctx, "release DHCP lease for VM %s MAC %s: %v", v.ID, mac, err)
 		}
 	}
@@ -89,7 +88,7 @@ func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	if vmName == "" {
 		return
 	}
-	// Synchronous on purpose: an immediate recreate must not race the rm.
+	// synchronous on purpose: an immediate recreate must not race the rm.
 	var wg sync.WaitGroup
 	for _, name := range []string{vmName, forkSnapshotName(vmName)} {
 		wg.Go(func() {

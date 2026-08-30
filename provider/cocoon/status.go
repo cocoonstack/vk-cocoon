@@ -55,8 +55,7 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 	return status, nil
 }
 
-// publishPodStatus writes the tracked pod.Status straight to the apiserver;
-// NotifyPods only queues, so a caller's next direct patch could land first.
+// publishPodStatus writes the tracked pod.Status straight to the apiserver; NotifyPods only queues, so a direct patch could land first.
 func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error {
 	if p.Clientset == nil {
 		return nil

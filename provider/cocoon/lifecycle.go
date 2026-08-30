@@ -61,40 +61,41 @@ func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, s
 
 // applyLifecycleLocked requires p.mu held; the caller flushes the returned status outside the lock when applied.
 func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
+	logger := log.WithFunc("Provider.applyLifecycleLocked")
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
+	// async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if tracked != nil {
-		// A delete-then-recreate reuses the key; drop a write from the old incarnation.
+		// a delete-then-recreate reuses the key; drop a write from the old incarnation.
 		if tracked.UID != pod.UID {
 			return status, false
 		}
 		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
 	}
 	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
-		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
+		logger.Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
 			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
 			cur.State, cur.ObservedGeneration)
 		return status, false
 	}
-	// Same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
+	// same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
 		cur.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateCreating &&
 		state != meta.LifecycleStateHibernating &&
 		status.ObservedGeneration == cur.ObservedGeneration {
-		log.WithFunc("Provider.applyLifecycleLocked").Infof(ctx,
+		logger.Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
 		return status, false
 	}
 	p.lifecycleIntent[key] = status
 	status.Apply(pod)
 	if tracked != nil && tracked != pod {
-		// Keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
+		// keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
 		status.Apply(tracked)
 	}
 	return status, true
@@ -107,7 +108,7 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 	snap := status.Snapshot()
 	var lastErr error
 	for range lifecyclePatchAttempts {
-		// Skip if intent advanced or pod was forgotten — a newer flush owns the write.
+		// skip if intent advanced or pod was forgotten — a newer flush owns the write.
 		p.mu.RLock()
 		cur, ok := p.lifecycleIntent[key]
 		p.mu.RUnlock()
@@ -120,7 +121,7 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 			return
 		}
 		if apierrors.IsNotFound(err) {
-			// Pod deleted on apiserver; drop tracking so reconciler stops retrying.
+			// pod deleted on apiserver; drop tracking so reconciler stops retrying.
 			p.mu.Lock()
 			delete(p.lifecycleIntent, key)
 			delete(p.lifecycleFlushed, key)
@@ -190,7 +191,7 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 		p.mu.Unlock()
 		return
 	}
-	// Read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
+	// read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
 	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
 	p.mu.Unlock()
 	if applied {

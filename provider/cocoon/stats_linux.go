@@ -7,9 +7,7 @@ import (
 	"strings"
 )
 
-// readProcNetDev parses /proc/<pid>/net/dev for a specific interface.
-// The hypervisor process runs inside the VM's netns, so its procfs
-// view contains the namespaced network devices including the TAP.
+// readProcNetDev parses /proc/<pid>/net/dev; the hypervisor runs inside the VM's netns, so its procfs view includes the TAP.
 func readProcNetDev(pid int, iface string) (rxBytes, txBytes uint64) {
 	f, err := os.Open("/proc/" + strconv.Itoa(pid) + "/net/dev")
 	if err != nil {

@@ -61,9 +61,7 @@ func (p *LeaseParser) LookupByMAC(mac string) (*Lease, error) {
 	return nil, ErrNoLease
 }
 
-// refresh re-reads the lease file when mtime or size changed. Parsing happens
-// outside the lock so concurrent lookups aren't serialized behind file I/O; a
-// racing refresh at worst records a stale stamp and re-parses on the next call.
+// refresh re-reads the lease file when mtime or size changed; a racing refresh at worst re-parses on the next call.
 func (p *LeaseParser) refresh() error {
 	info, err := os.Stat(p.Path)
 	if err != nil {
@@ -102,7 +100,7 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	}
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
-		// Skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
+		// skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
 		expiresAt, err := time.Parse(time.RFC3339, r.Expiry)
 		if err != nil {
 			continue

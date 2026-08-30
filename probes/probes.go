@@ -1,6 +1,4 @@
-// Package probes runs per-pod probe loops that push readiness updates
-// through the v-k notify callback. Under the async provider contract
-// this is the only way status changes reach Kubernetes.
+// Package probes runs per-pod probe loops that push readiness updates through the v-k notify callback.
 package probes
 
 import (
@@ -93,8 +91,7 @@ func (m *Manager) Forget(key string) {
 	}
 }
 
-// Start launches (or replaces) a per-pod probe agent. The first probe runs
-// synchronously so CreatePod's initial notify reflects reachability.
+// Start launches (or replaces) a per-pod probe agent; the first probe runs synchronously so CreatePod's initial notify reflects reachability.
 func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	m.mu.Lock()
 	if prev, ok := m.agents[key]; ok {
@@ -108,7 +105,7 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 
 	ready, message := runProbe(ctx, probe)
 
-	// Guard against a racing Forget that canceled us during the sync probe.
+	// guard against a racing Forget that canceled us during the sync probe.
 	m.mu.Lock()
 	if current, ok := m.agents[key]; !ok || current != ag {
 		m.mu.Unlock()
@@ -165,8 +162,7 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 	}
 }
 
-// nextInitialInterval grows the pre-Ready poll interval exponentially until
-// it hits the cap, so slow guests still see a probe roughly once per second.
+// nextInitialInterval grows the pre-Ready poll interval exponentially until it hits the cap.
 func nextInitialInterval(d time.Duration) time.Duration {
 	return min(time.Duration(float64(d)*defaultInitialBackoffStep), defaultInitialBackoffMax)
 }

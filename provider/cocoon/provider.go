@@ -55,14 +55,11 @@ const (
 	// a single CLI hiccup the deferred recheck takes over.
 	inlineInspectAttempts = 2
 
-	// startupFanOut bounds the boot-gating fan-outs (stale creates, first
-	// probe starts); statusReconcileFanOut bounds the steady-state status
-	// drift loop against the apiserver. Equal today, tuned separately.
+	// startupFanOut and statusReconcileFanOut bound separate fan-outs; equal today, tuned separately.
 	startupFanOut         = 8
 	statusReconcileFanOut = 8
 
-	// Default tunables for the recheck path. Overridable via Provider
-	// fields so tests can shrink them without racing on package globals.
+	// Overridable via Provider fields so tests can shrink them without racing on package globals.
 	defaultInlineInspectBaseDelay      = 200 * time.Millisecond
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
@@ -131,9 +128,7 @@ type Provider struct {
 	statsVMs  []vmSample
 	statsNode provider.NodeStats
 
-	// Recheck tunables. Zero values fall back to the defaultXxx
-	// constants, so production code never sets them; tests shrink them
-	// before exercising handleVMGone.
+	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
 	inlineInspectBaseDelay      time.Duration
 	deferredRecheckInitialDelay time.Duration
 	deferredRecheckMaxDelay     time.Duration
@@ -199,11 +194,8 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return slices.Collect(maps.Values(p.pods)), nil
 }
 
-// NotifyPods stores the kubelet's pod-status callback and schedules a
-// deferred initial push so adopted pods (post-restart) leave Pending.
-// virtual-kubelet calls NotifyPods before WaitForCacheSync; pushing
-// synchronously hits enqueuePodStatusUpdate's empty knownPods and is
-// dropped after a ~3s poll budget. The reconciler waits past that window.
+// NotifyPods stores the kubelet's pod-status callback and schedules a deferred
+// initial push, since a synchronous push before WaitForCacheSync hits an empty knownPods and is dropped.
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -696,8 +688,6 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 	logger := log.WithFunc("Provider.evictPod")
 
 	if err := p.deletePodWithRetry(ctx, pod); err != nil {
-		// Leave in-memory state intact so the next VM event re-enters
-		// evictPod instead of stranding the pod half-detached.
 		logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
 			pod.Namespace, pod.Name)
 		metrics.PodEvictFailureTotal.Inc()

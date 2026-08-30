@@ -29,24 +29,21 @@ const (
 	// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
 	hibernateImportSuffix = "-hibernate-import"
 
-	// defaultWakeFreshIPBudget bounds waitForFreshIP; see its doc for why
-	// the budget is generous.
+	// defaultWakeFreshIPBudget bounds waitForFreshIP; the budget is generous.
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
 
-	// defaultWakeRenewNudgeDelay leaves natural DHCP the first 30s of the lease
-	// budget; the one-shot renew after it restarts DORA and lands in ~1s.
+	// defaultWakeRenewNudgeDelay leaves natural DHCP the first 30s before the one-shot renew nudge.
 	defaultWakeRenewNudgeDelay = 30 * time.Second
 
-	// guestIpconfigTimeout bounds the vsock exec for release/renew so a sick
-	// guest (dead agent, stopped DHCP service) cannot stall hibernate or wake.
+	// guestIpconfigTimeout bounds the vsock exec so a sick guest cannot stall hibernate or wake.
 	guestIpconfigTimeout     = 20 * time.Second
 	hibernateRollbackTimeout = 30 * time.Second
 )
 
 var errStaleLocalSnapshot = errors.New("local snapshot does not match registry tag")
 
-// Non-hibernate spec changes stay no-ops: patching the pod re-enters UpdatePod.
+// UpdatePod applies a pod spec update; non-hibernate changes stay no-ops since patching re-enters UpdatePod.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
@@ -64,8 +61,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
-	// os=macos: hibernate cannot apply (offline disk snapshots); every other
-	// update is an annotation echo.
+	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.
 	if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
 		if meta.ReadHibernateState(pod) {
 			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)
@@ -96,19 +92,14 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// noopUpdate republishes lifecycle intent, skipping refresh+notify so the
-// incoming pod is not echoed back.
+// noopUpdate republishes lifecycle intent, skipping refresh+notify so the incoming pod is not echoed back.
 func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
 	p.republishLifecycleOnGenerationBump(ctx, pod)
 	metrics.PodLifecycleTotal.WithLabelValues("update", "skipped", "noop").Inc()
 	return nil
 }
 
-// hibernate runs Save -> Push -> Remove. CH+Windows drops the NIC first
-// so wake can hot-add a fresh device and bypass Windows PnP MAC-swap.
-// VMID clears between Push and Remove so the operator's manifest+VMID
-// race window collapses to one patch RTT; failures before that point
-// keep VMID intact so the pod stays recoverable.
+// hibernate runs Save -> Push -> Remove; CH+Windows drops the NIC first to dodge a Windows PnP MAC-swap.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
 	spec := meta.ParseVMSpec(pod)
@@ -125,7 +116,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
 		metrics.HibernateTotal.WithLabelValues("snapshot", "failed").Inc()
 		p.rollbackHibernateNIC(ctx, v, dropNIC)
-		err = fmt.Errorf("snapshot save %s: %w", v.Name, err)
+		err = fmt.Errorf("save snapshot %s: %w", v.Name, err)
 		p.failOp(ctx, pod, "HibernateSnapshotFailed", "update", err)
 		return err
 	}
@@ -183,9 +174,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) err
 	return nil
 }
 
-// dropNICForHibernate releases the lease then detaches the NIC (VMware Tools'
-// suspend default): the snapshot carries no cached lease, so restored clones
-// DISCOVER instead of drawing a NAK. Best-effort: a sick guest still hibernates.
+// dropNICForHibernate releases the lease and detaches the NIC so restored clones DISCOVER, not NAK; best-effort.
 func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	logger := log.WithFunc("Provider.dropNICForHibernate")
 	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
@@ -196,8 +185,7 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
-		// Renew regardless, detached from ctx: an exec error does not prove the
-		// guest skipped the release, and the drop may have failed because ctx died.
+		// renew regardless, detached from ctx: an exec error doesn't prove the guest skipped the release.
 		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
 			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}
@@ -207,14 +195,12 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
 	return nil
 }
 
-// rollbackHibernateNIC re-adds the NIC dropped pre-snapshot.
 func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
 	if !dropped {
 		return
 	}
 	logger := log.WithFunc("Provider.rollbackHibernateNIC")
-	// Cancel-detached: the failure that triggered the rollback may be ctx dying,
-	// and an online VM must not be left NIC-less.
+	// cancel-detached: the triggering failure may be ctx dying, and an online VM must not be left NIC-less.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hibernateRollbackTimeout)
 	defer cancel()
 	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
@@ -227,16 +213,14 @@ func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped b
 	}
 }
 
-// wake restores the VM from the hibernation snapshot. CH+Windows defers
-// Ready to finalizeDropNICWake; other backends fall through to runPostCloneSetup.
+// wake restores the VM from the hibernation snapshot; dispatchHibernateRestore handles the post-restore step.
 func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	if spec.VMName == "" {
 		return nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
-	// Annotations that survived a failed clear at hibernate must not describe
-	// the incarnation this wake creates.
+	// annotations that survived a failed clear at hibernate must not describe the incarnation this wake creates.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}
@@ -262,9 +246,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// cloneFromHibernate clones the VM from a resolved wake source. CH+Windows
-// hibernate snapshots are captured NIC-less, so the clone hot-adds a fresh
-// NIC that Windows enumerates as new hardware; src is released either way.
+// cloneFromHibernate clones from a resolved wake source; CH+Windows snapshots are NIC-less, so it hot-adds a fresh NIC.
 func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src wakeSource, policy vm.CPUPolicy) (*vm.VM, error) {
 	defer src.release()
 	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
@@ -291,10 +273,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 	return v, nil
 }
 
-// dispatchHibernateRestore schedules the post-restore step. A CH+Windows restore
-// hot-added a fresh NIC, so Ready waits on that NIC's DHCP lease (no PnP rebind);
-// other backends re-derive networking via runPostCloneSetup. The wake accounting
-// rides to the outcome — a restore counts as a wake regardless of trigger.
+// dispatchHibernateRestore schedules post-restore: CH+Windows awaits the NIC's lease, others use runPostCloneSetup.
 func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, op string) {
 	if shouldDropNICBeforeHibernate(spec) {
 		p.goBackground(func() {
@@ -307,8 +286,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 	})
 }
 
-// markLifecycleStateForWake gates on (pod tracked) ∧ (hibernate not requested) ∧ (VM
-// matches wakeVMID) and writes atomically; callers gate side effects on the return.
+// markLifecycleStateForWake gates on (tracked ∧ !hibernate ∧ VM==wakeVMID) and writes atomically.
 func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
 	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
 	if applied {
@@ -342,11 +320,7 @@ func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Po
 	return applied
 }
 
-// waitForFreshIP polls for the DHCP lease a clone acquires on its new
-// NIC/MAC. On-demand clones fault RAM in lazily over UFFD and concurrent
-// resumes contend, so the first lease can land many seconds after resume;
-// a short budget would misread that as lifecycle=failed and trigger an
-// operator rebuild.
+// waitForFreshIP polls for the clone's DHCP lease; UFFD contention under concurrent resumes can delay it many seconds.
 func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, vmID string) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
@@ -387,8 +361,7 @@ func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, vmID str
 	}
 }
 
-// execGuestIpconfig runs `ipconfig /<verb>` in the guest over vsock, so the
-// exec path never depends on the IP it is repairing.
+// execGuestIpconfig runs `ipconfig /<verb>` over vsock, independent of the IP it is repairing.
 func (p *Provider) execGuestIpconfig(ctx context.Context, vmID, verb string) error {
 	ctx, cancel := context.WithTimeout(ctx, guestIpconfigTimeout)
 	defer cancel()
@@ -420,10 +393,7 @@ func (p *Provider) peerBaseURL(ctx context.Context, peerNode string) (string, er
 	return "", fmt.Errorf("node %s has no InternalIP address", peerNode)
 }
 
-// verifyLocalSnapshot compares the local snapshot's ID against the SnapshotID
-// in the hibernate tag's config blob — equality proves the local copy is
-// byte-identical to the registry artifact; a stale one would roll the user
-// back. The fetched manifest and config are returned for reuse downstream.
+// verifyLocalSnapshot compares the local and registry hibernate-tag SnapshotIDs; a mismatch means stale.
 func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local *vm.Snapshot) (*manifest.OCIManifest, *manifest.SnapshotConfig, error) {
 	if p.Registry == nil {
 		// Registry-less deployments never push: a local snapshot is current by construction.
@@ -446,9 +416,7 @@ func (p *Provider) verifyLocalSnapshot(ctx context.Context, vmName string, local
 	return m, cfg, nil
 }
 
-// fetchHibernateManifest returns vmName's parsed hibernate-tag manifest;
-// ok=false is the registry's authoritative no-such-tag (typed 404), and any
-// other error keeps the evidence checks failing closed.
+// fetchHibernateManifest returns vmName's parsed hibernate-tag manifest; ok=false means no such tag (typed 404).
 func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*manifest.OCIManifest, bool, error) {
 	raw, _, err := p.Registry.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
 	switch {
@@ -464,16 +432,13 @@ func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*
 	return m, true, nil
 }
 
-// forgetVMOnly clears the VM record but keeps the pod.
 func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
 }
 
-// wakeSource is a resolved wake clone source: a snapshot addressed by name,
-// or a peer-staged dir for `vm clone --from-dir`. release drops whatever the
-// resolution created.
+// wakeSource is a resolved wake clone source: a named snapshot, or a peer-staged dir for `vm clone --from-dir`.
 type wakeSource struct {
 	localName string
 	dir       string
@@ -484,9 +449,7 @@ type wakeSource struct {
 
 func (s wakeSource) label() string { return cmp.Or(s.localName, s.origin) }
 
-// resolveWakeSource picks the clone source in preference order: the
-// registry-verified local snapshot, a raw-file transfer from the node that
-// pushed the hibernate snapshot, and finally the registry pull.
+// resolveWakeSource picks the source in order: verified local snapshot, peer raw-file transfer, then registry pull.
 func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
 	var (
 		m         *manifest.OCIManifest
@@ -546,9 +509,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 	}, nil
 }
 
-// tryPeerRestore stages raw files from the manifest's from-node peer; m and
-// cfg are reused when local-snapshot verification already fetched them.
-// Best-effort: every failure logs, counts, and falls through to the registry pull.
+// tryPeerRestore stages raw files from the manifest's peer node; best-effort, falls back to registry pull.
 func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
 	if p.PeerRestorer == nil {
 		return wakeSource{}, false
@@ -593,8 +554,7 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifes
 	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true
 }
 
-// lastNonEmptyLine returns the last non-blank line of s, trimmed. ipconfig
-// prints a banner first and the actual error last, so the tail is the signal.
+// lastNonEmptyLine returns the last non-blank line of s, trimmed; ipconfig prints its actual error last.
 func lastNonEmptyLine(s string) string {
 	last := ""
 	for line := range strings.SplitSeq(s, "\n") {
@@ -605,8 +565,7 @@ func lastNonEmptyLine(s string) string {
 	return last
 }
 
-// shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same
-// PCI slot, and only CH implements `vm net --nics`.
+// shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same slot; only CH implements `vm net --nics`.
 func shouldDropNICBeforeHibernate(spec meta.VMSpec) bool {
 	return spec.Backend == string(cocoonv1.BackendCloudHypervisor) &&
 		spec.OS == string(cocoonv1.OSWindows)

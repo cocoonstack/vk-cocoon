@@ -20,9 +20,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-// StartupReconcile rebuilds the in-memory tables from K8s pods and
-// cocoon VMs so restarts don't leak VMs or lose pod associations.
-// Unmatched VMs are handled per OrphanPolicy.
+// StartupReconcile rebuilds the in-memory tables from K8s pods and cocoon VMs; unmatched VMs are handled per OrphanPolicy.
 func (p *Provider) StartupReconcile(ctx context.Context) error {
 	logger := log.WithFunc("Provider.StartupReconcile")
 
@@ -94,7 +92,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		v, ok := vmByID[runtime.VMID]
 		if !ok {
-			// The VM was removed during hibernate but the annotation patch failed.
+			// the VM was removed during hibernate but the annotation patch failed.
 			if meta.ReadHibernateState(pod) {
 				p.reconcileStaleHibernate(ctx, pod)
 				continue
@@ -108,9 +106,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
-	// First probes run synchronously (3s worst case each) and this path gates
-	// node registration — start them bounded-parallel; the two fan-outs touch
-	// disjoint state, so overlap them too.
+	// first probes run synchronously (3s worst case) and gate node registration; the two fan-outs touch disjoint state, so overlap them too.
 	var wg sync.WaitGroup
 	wg.Go(func() { fanOut(startupFanOut, probePods, p.startProbeIfEnabled) })
 	wg.Go(func() {
@@ -132,8 +128,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 	return nil
 }
 
-// reconcileStaleCreates strips creating placeholders from the startup VM list —
-// adopting one deadlocks its pod (#54). Bounded fan-out: this gates node registration.
+// reconcileStaleCreates strips creating placeholders from the startup VM list — adopting one deadlocks its pod (#54).
 func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.VM {
 	logger := log.WithFunc("Provider.reconcileStaleCreates")
 	keep := make([]*vm.VM, len(vms))
@@ -177,9 +172,7 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 	return kept
 }
 
-// watchBusyCreate re-invokes the reclaim verb on an unclassified creating
-// record: only the verb tells a live owner from one that died holding the
-// name, and nothing else re-delivers either outcome.
+// watchBusyCreate re-invokes the reclaim verb on an unclassified creating record: only the verb tells a live owner from one that died holding the name.
 func (p *Provider) watchBusyCreate(vmID string) {
 	p.goBackground(func() {
 		ctx := p.lifecycleCtx
@@ -198,7 +191,7 @@ func (p *Provider) watchBusyCreate(vmID string) {
 				logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
 				return
 			}
-			// A failing verb must not strand a clone that did commit.
+			// a failing verb must not strand a clone that did commit.
 			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
 				if fresh != nil {
 					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)
@@ -215,9 +208,7 @@ func (p *Provider) watchBusyCreate(vmID string) {
 	})
 }
 
-// classifySettledCreate resolves a record past the verb: (vm, true) committed
-// and adoptable, (nil, true) settled with nothing to adopt, (nil, false) still
-// transitional — ask again.
+// classifySettledCreate resolves a record past the verb: (vm, true) adoptable, (nil, true) settled, (nil, false) still transitional.
 func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.VM, bool) {
 	logger := log.WithFunc("Provider.classifySettledCreate")
 	fresh, err := p.Runtime.Inspect(ctx, vmID)
@@ -238,8 +229,7 @@ func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.
 	}
 }
 
-// reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose
-// VM is already gone, so wake can start clean.
+// reconcileStaleHibernate clears stale VMID/IP from a hibernated pod whose VM is already gone, so wake can start clean.
 func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod) {
 	logger := log.WithFunc("Provider.reconcileStaleHibernate")
 	logger.Infof(ctx, "pod %s/%s is hibernated with stale VMID, clearing annotations", pod.Namespace, pod.Name)
@@ -250,9 +240,7 @@ func (p *Provider) reconcileStaleHibernate(ctx context.Context, pod *corev1.Pod)
 	p.seedLifecycleIntentFromPod(pod)
 }
 
-// adoptByVMName re-adopts a live VM whose matching pod has no VMID
-// annotation, re-runs the runtime-annotation write, and starts probes —
-// the same sequence CreatePod runs on its adopt branch.
+// adoptByVMName re-adopts a live VM by matching pod, the same sequence CreatePod runs on its adopt branch.
 func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[string]*vm.VM) *vm.VM {
 	logger := log.WithFunc("Provider.adoptByVMName")
 	spec := meta.ParseVMSpec(pod)
@@ -272,8 +260,7 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	return v
 }
 
-// reconcileNoVMID handles a pod with no VMID during startup reconcile.
-// Hibernated pods are tracked without a VM; others are skipped.
+// reconcileNoVMID handles a pod with no VMID during startup reconcile; hibernated pods are tracked without a VM, others skipped.
 func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 	if !meta.ReadHibernateState(pod) {
 		return
@@ -284,9 +271,7 @@ func (p *Provider) reconcileNoVMID(ctx context.Context, pod *corev1.Pod) {
 		Infof(ctx, "pod %s/%s hibernated, tracking without VM", pod.Namespace, pod.Name)
 }
 
-// handleOrphan applies OrphanPolicy to an unmatched VM. Non-destroy
-// policies index the VM by name so a recreated pod adopts it instead
-// of cloning into a name collision.
+// handleOrphan applies OrphanPolicy to an unmatched VM; non-destroy policies index it by name so a recreated pod adopts it.
 func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 	logger := log.WithFunc("Provider.handleOrphan")
 	switch p.OrphanPolicy {
@@ -305,8 +290,7 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 	}
 }
 
-// indexOrphanByName exposes an orphan VM to vmByName so the next
-// CreatePod for its pod takes the adopt branch.
+// indexOrphanByName exposes an orphan VM to vmByName so the next CreatePod for its pod takes the adopt branch.
 func (p *Provider) indexOrphanByName(v *vm.VM) {
 	if v.Name == "" {
 		return

@@ -61,8 +61,7 @@ func (d *Dialer) waitReady() time.Duration {
 
 var _ guest.Session = (*Session)(nil)
 
-// Session is a persistent SAC console connection. Commands are sent
-// sequentially over the same serial socket.
+// Session is a persistent SAC console connection, commands sent sequentially over the same serial socket.
 type Session struct {
 	conn net.Conn
 }
@@ -82,9 +81,7 @@ func (s *Session) Close() error {
 	return s.conn.Close()
 }
 
-// ParseNetEntries extracts deduplicated net numbers from SAC "i"
-// command output, preserving enumeration order. SAC lists both IPv4
-// and IPv6 lines for each NIC; this function deduplicates by number.
+// ParseNetEntries extracts deduplicated net numbers from SAC "i" command output, preserving enumeration order.
 func ParseNetEntries(output string) []int {
 	var nums []int
 	seen := map[int]bool{}
@@ -99,8 +96,7 @@ func ParseNetEntries(output string) []int {
 	return nums
 }
 
-// NetHasIP reports whether the SAC "i" output contains the given IP
-// for the specified net number.
+// NetHasIP reports whether the SAC "i" output contains the given IP for the specified net number.
 func NetHasIP(output string, netNum int, ip string) bool {
 	return slices.ContainsFunc(netLineRe.FindAllStringSubmatch(output, -1), func(match []string) bool {
 		num, _ := strconv.Atoi(match[1])
