@@ -50,15 +50,22 @@ func (r *CocoonNetLeaseReleaser) ReleaseByMAC(ctx context.Context, rawMAC string
 	if err != nil {
 		return fmt.Errorf("build lease release request: %w", err)
 	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("release lease for %s: %w", mac, err)
+	var lastErr error
+	for attempt := range 2 {
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("release lease for %s: %w", mac, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusNoContent {
+			return nil
+		}
+		lastErr = fmt.Errorf("release lease for %s: cocoon-net returned %s: %s",
+			mac, resp.Status, strings.TrimSpace(string(body)))
+		if resp.StatusCode != http.StatusInternalServerError || attempt > 0 {
+			return lastErr
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNoContent {
-		return nil
-	}
-	body, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("release lease for %s: cocoon-net returned %s: %s",
-		mac, resp.Status, strings.TrimSpace(string(body)))
+	return lastErr
 }

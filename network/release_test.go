@@ -34,6 +34,37 @@ func TestCocoonNetLeaseReleaser(t *testing.T) {
 	}
 }
 
+func TestCocoonNetLeaseReleaserRetriesA500Once(t *testing.T) {
+	socketPath := shortSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	hits := make(chan struct{}, 4)
+	first := true
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits <- struct{}{}
+		if first {
+			first = false
+			http.Error(w, "persist failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+
+	releaser := NewCocoonNetLeaseReleaser(socketPath)
+	if err := releaser.ReleaseByMAC(t.Context(), "aa:bb:cc:dd:ee:ff"); err != nil {
+		t.Fatalf("a single 500 must be retried to success: %v", err)
+	}
+	if got := len(hits); got != 2 {
+		t.Fatalf("requests = %d, want 2 (original + one retry)", got)
+	}
+}
+
 func TestCocoonNetLeaseReleaserErrors(t *testing.T) {
 	t.Run("invalid mac", func(t *testing.T) {
 		releaser := NewCocoonNetLeaseReleaser(shortSocketPath(t))

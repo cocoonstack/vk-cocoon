@@ -80,7 +80,10 @@ func (p *Provider) releaseDHCPLeases(ctx context.Context, v *vm.VM) {
 		if err := p.LeaseReleaser.ReleaseByMAC(releaseCtx, mac); err != nil {
 			// the VM is already gone; keep deletion progressing and let the lease expiry fallback handle a down cocoon-net daemon.
 			logger.Warnf(ctx, "release DHCP lease for VM %s MAC %s: %v", v.ID, mac, err)
+			metrics.LeaseReleaseTotal.WithLabelValues("failed").Inc()
+			continue
 		}
+		metrics.LeaseReleaseTotal.WithLabelValues("ok").Inc()
 	}
 }
 
