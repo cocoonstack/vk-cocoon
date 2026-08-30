@@ -172,7 +172,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	now := metav1.Now()
 	pod.Status.StartTime = &now
 	p.mu.Unlock()
-	// Ready defers to the SSH probe (a cold macOS boot takes minutes); the
+	// Ready defers to the configured readiness probe (a cold macOS boot takes minutes); the
 	// first probe already ran in registerMacosVM and onUpdate only fires on
 	// transitions, so an already-reachable adoption needs this explicit publish.
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
@@ -187,8 +187,7 @@ func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 	return isMacosVM(v) && v.Name == vmName
 }
 
-// registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and
-// starts the SSH readiness probe.
+// registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and starts the macOS readiness probe.
 func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) {
 	v := &vm.VM{
 		ID:         macosVMID(spec.VMName),
@@ -221,8 +220,7 @@ func (p *Provider) startMacosProbe(pod *corev1.Pod) {
 		p.buildMacosOnUpdate(pod.Namespace, pod.Name))
 }
 
-// buildMacosProbe probes the guest's sshd on its cocoon-net IP; the lease
-// appears minutes before sshd on a cold boot, so the two waits stay distinct.
+// buildMacosProbe dials probePort when declared, else sshd: the lease lands minutes before sshd on a cold boot.
 func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 	// Goroutine-confined: the probes.Manager runs one probe at a time per agent.
 	var lastInspect, lastRestart time.Time
@@ -257,6 +255,9 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 		if ip == "" {
 			return false, "waiting for guest dhcp lease"
 		}
+		if port := p.probePort(namespace, name); port != "" {
+			return p.probeTCP(ctx, ip, port)
+		}
 		return macosSSHReady(ctx, net.JoinHostPort(ip, macosGuestSSHPort))
 	}
 }
@@ -285,7 +286,7 @@ func (p *Provider) buildMacosOnUpdate(namespace, name string) probes.OnUpdate {
 	}
 }
 
-// publishMacosReadiness flips lifecycle-state=ready on a green SSH probe; the
+// publishMacosReadiness flips lifecycle-state=ready on a green macOS probe; the
 // generic buildOnUpdate only refreshes status, leaving the annotation at creating.
 func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name string) {
 	pod, err := p.GetPod(ctx, namespace, name)
