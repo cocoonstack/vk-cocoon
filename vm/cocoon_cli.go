@@ -414,6 +414,23 @@ func (c *CocoonCLI) runJSON(ctx context.Context, args ...string) ([]byte, error)
 	return stdout.Bytes(), nil
 }
 
+// NormalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts
+// accepted by cocoon and cocoon-macos CLI size flags.
+func NormalizeSizeArg(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	q, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return raw
+	}
+	if n := q.Value(); n > 0 {
+		return strconv.FormatInt(n, 10)
+	}
+	return raw
+}
+
 func buildCloneArgs(opts CloneOptions) []string {
 	args := []string{"vm", "clone", "--output", "json"}
 	if opts.To != "" {
@@ -450,10 +467,10 @@ func buildRunArgs(opts RunOptions) []string {
 		args = append(args, "--cpu", strconv.Itoa(opts.CPU))
 	}
 	args = appendCPUPolicyArgs(args, opts.CPUPolicy)
-	if memory := normalizeSizeArg(opts.Memory); memory != "" {
+	if memory := NormalizeSizeArg(opts.Memory); memory != "" {
 		args = append(args, "--memory", memory)
 	}
-	if storage := normalizeSizeArg(opts.Storage); storage != "" {
+	if storage := NormalizeSizeArg(opts.Storage); storage != "" {
 		args = append(args, "--storage", storage)
 	}
 	if opts.Network != "" {
@@ -582,20 +599,4 @@ func snapshotNameHolderID(out string) string {
 		}
 	}
 	return ""
-}
-
-// normalizeSizeArg converts K8s quantities (e.g. "20Gi") to plain byte counts.
-func normalizeSizeArg(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	q, err := resource.ParseQuantity(raw)
-	if err != nil {
-		return raw
-	}
-	if n := q.Value(); n > 0 {
-		return strconv.FormatInt(n, 10)
-	}
-	return raw
 }
