@@ -774,6 +774,9 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
+		if v := p.vmForPod(namespace, name); v != nil && v.IP != "" && pod.Annotations[meta.AnnotationIP] != v.IP {
+			p.applyRuntime(ctx, pod, v)
+		}
 		p.refreshAndNotify(ctx, pod)
 	}
 }
