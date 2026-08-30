@@ -1570,6 +1570,28 @@ func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 	}
 }
 
+func TestHandleVMGoneSkippedWhenPodDeleting(t *testing.T) {
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0", State: "stopped"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset()
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	p.mu.Lock()
+	p.deleting[meta.PodKey("ns", "demo-0")] = struct{}{}
+	p.mu.Unlock()
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+
+	if len(rt.startCalls) != 0 {
+		t.Errorf("restart must not run for a pod mid-delete, got %v", rt.startCalls)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil {
+		t.Errorf("mid-delete pod's VM tracking must be preserved for DeletePod's removeVM")
+	}
+}
+
 func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{

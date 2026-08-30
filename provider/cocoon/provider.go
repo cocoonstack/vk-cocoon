@@ -121,6 +121,7 @@ type Provider struct {
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent  map[string]meta.LifecycleStatus
 	lifecycleFlushed map[string]string
+	deleting         map[string]struct{}
 
 	// Shared scrape sample; see sampleStats.
 	statsMu   sync.Mutex
@@ -161,6 +162,7 @@ func NewProvider(ctx context.Context) *Provider {
 		resumedOps:       map[string]struct{}{},
 		lifecycleIntent:  map[string]meta.LifecycleStatus{},
 		lifecycleFlushed: map[string]string{},
+		deleting:         map[string]struct{}{},
 	}
 }
 
@@ -333,6 +335,7 @@ func (p *Provider) untrackPod(key string) {
 	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
 	delete(p.lifecycleFlushed, key)
+	delete(p.deleting, key)
 	p.mu.Unlock()
 	if p.Probes != nil {
 		p.Probes.Forget(key)
@@ -490,6 +493,15 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {
 		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, skipping VM-gone handler",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
+		return
+	}
+
+	p.mu.RLock()
+	_, midDelete := p.deleting[affectedKey]
+	p.mu.RUnlock()
+	if midDelete {
+		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		return
 	}
