@@ -107,8 +107,7 @@ func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 		ID:   "vmid-del",
 		Name: "vk-ns-demo-0",
 		NetworkConfigs: []*vm.NetworkConfig{
-			{MAC: "AA:BB:CC:DD:EE:02"},
-			{MAC: "aa:bb:cc:dd:ee:01"},
+			{MAC: "aa:bb:cc:dd:ee:02"},
 			{MAC: "aa:bb:cc:dd:ee:01"},
 			{MAC: "aa:bb:cc:dd:ee:04", Network: &vm.NetworkInfo{}},
 			{MAC: "aa:bb:cc:dd:ee:03", Network: &vm.NetworkInfo{IP: "10.0.0.3"}},

@@ -383,21 +383,20 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	if v.MAC == "" || p.LeaseParser == nil {
 		return v.IP
 	}
-	lease, err := p.LeaseParser.LookupByMAC(v.MAC)
-	if err != nil {
-		if errors.Is(err, network.ErrNoLease) {
-			p.setVMIP(namespace, name, v.ID, "")
-			return ""
-		}
+	ip := ""
+	switch lease, err := p.LeaseParser.LookupByMAC(v.MAC); {
+	case err == nil:
+		ip = lease.IP
+	case !errors.Is(err, network.ErrNoLease):
 		return v.IP
 	}
-	if lease.IP == v.IP {
+	if ip == v.IP {
 		return v.IP
 	}
-	if !p.setVMIP(namespace, name, v.ID, lease.IP) {
+	if !p.setVMIP(namespace, name, v.ID, ip) {
 		return ""
 	}
-	return lease.IP
+	return ip
 }
 
 // buildProbe returns a probe closure that resolves the VM's IP and pings it.
@@ -490,10 +489,11 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	logger := log.WithFunc("Provider.handleVMGone")
 
-	affectedKey, affectedPod, trackedID := p.podForVMMatch(eventVM.ID, eventVM.Name)
+	affectedKey, affectedPod, trackedVM := p.podForVMMatch(eventVM.ID, eventVM.Name)
 	if affectedKey == "" || affectedPod == nil {
 		return
 	}
+	trackedID := trackedVM.ID
 
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {
@@ -564,16 +564,12 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // pod is kept for investigation — evicting would orphan the live VM and
 // collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
-	if err := p.removeVM(ctx, v); err != nil {
-		if errors.Is(err, vm.ErrVMNotFound) {
-			p.releaseDHCPLeases(ctx, v)
-			p.evictPod(ctx, key, pod, reason, message)
-			return
-		}
+	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
 		log.WithFunc("Provider.removeThenEvict").
 			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
+	p.releaseDHCPLeases(ctx, v)
 	p.evictPod(ctx, key, pod, reason, message)
 }
 
@@ -632,12 +628,8 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		if !commonk8s.SleepCtx(ctx, delay) {
 			return
 		}
-		key, pod, _ := p.podForVMMatch(vmID, "")
+		key, pod, tracked := p.podForVMMatch(vmID, "")
 		if key == "" || pod == nil {
-			return
-		}
-		tracked := p.vmForPod(pod.Namespace, pod.Name)
-		if tracked == nil || tracked.ID != vmID {
 			return
 		}
 		v, err := p.Runtime.Inspect(ctx, vmID)
@@ -680,7 +672,7 @@ func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
 // the given id or (optionally) name. name may be empty to restrict the
 // match to id only. Used by handleVMGone (match on id OR name from a
 // potentially sparse event) and by runDeferredRecheck (id only).
-func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) {
+func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
@@ -690,10 +682,10 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, string) 
 			continue
 		}
 		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
-			return key, p.pods[key], tracked.ID
+			return key, p.pods[key], tracked
 		}
 	}
-	return "", nil, ""
+	return "", nil, nil
 }
 
 // evictPod deletes the pod from the API server first and clears the
@@ -792,8 +784,7 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		p.refreshAndNotify(ctx, pod)
 	}
 }
 

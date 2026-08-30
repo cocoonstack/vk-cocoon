@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -17,7 +16,7 @@ const (
 	controlRequestTimeout = 5 * time.Second
 )
 
-// LeaseReleaser frees a cocoon-net DHCP lease by guest MAC address.
+// LeaseReleaser frees a cocoon-net DHCP lease by guest MAC; implementations bound their own request time.
 type LeaseReleaser interface {
 	ReleaseByMAC(context.Context, string) error
 }
@@ -48,7 +47,7 @@ func (r *CocoonNetLeaseReleaser) ReleaseByMAC(ctx context.Context, rawMAC string
 		return fmt.Errorf("parse MAC %q: %w", rawMAC, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-		"http://cocoon-net/v1/leases/"+url.PathEscape(mac.String()), nil)
+		"http://cocoon-net/v1/leases/"+mac.String(), nil)
 	if err != nil {
 		return fmt.Errorf("build lease release request: %w", err)
 	}

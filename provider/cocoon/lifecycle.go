@@ -44,9 +44,7 @@ func (p *Provider) setLifecycleState(ctx context.Context, pod *corev1.Pod, state
 func (p *Provider) markReadyPublished(ctx context.Context, pod *corev1.Pod) {
 	status, applied := p.setLifecycleState(ctx, pod, meta.LifecycleStateReady, "")
 	if !applied {
-		p.refreshStatus(ctx, pod)
-		_ = p.publishPodStatus(ctx, pod)
-		p.notify(pod)
+		p.refreshAndNotify(ctx, pod)
 		return
 	}
 	p.publishReadyLifecycle(ctx, pod, status)
@@ -159,17 +157,15 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	}
 	p.mu.RUnlock()
 
-	for _, d := range drifts {
-		if d.status.State == meta.LifecycleStateReady {
-			pod, err := p.GetPod(ctx, d.ns, d.name)
-			if err != nil {
-				continue
-			}
-			p.publishReadyLifecycle(ctx, pod, d.status)
-			continue
+	fanOut(statusReconcileFanOut, drifts, func(d lcDrift) {
+		if d.status.State != meta.LifecycleStateReady {
+			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			return
 		}
-		p.flushLifecycle(ctx, d.ns, d.name, d.status)
-	}
+		if pod, err := p.GetPod(ctx, d.ns, d.name); err == nil {
+			p.publishReadyLifecycle(ctx, pod, d.status)
+		}
+	})
 }
 
 // seedLifecycleIntentFromPod restores intent from the pod's annotations on startup so post-restart gen-stamps still echo.

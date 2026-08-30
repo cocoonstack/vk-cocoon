@@ -75,8 +75,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			if err := p.hibernate(p.lifecycleCtx, pod, v); err != nil {
 				return
 			}
-			p.refreshStatus(p.lifecycleCtx, pod)
-			p.notify(pod)
+			p.refreshAndNotify(p.lifecycleCtx, pod)
 		})
 	case resumeOpPostClone:
 		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false) })

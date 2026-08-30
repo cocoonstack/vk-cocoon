@@ -92,8 +92,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	default:
 		return p.noopUpdate(ctx, pod)
 	}
-	p.refreshStatus(ctx, pod)
-	p.notify(pod)
+	p.refreshAndNotify(ctx, pod)
 	return nil
 }
 
@@ -312,11 +311,10 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 // matches wakeVMID) and writes atomically; callers gate side effects on the return.
 func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
 	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
-	if !applied {
-		return false
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
 	}
-	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
-	return true
+	return applied
 }
 
 func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
@@ -338,11 +336,10 @@ func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod
 
 func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string) bool {
 	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, meta.LifecycleStateReady, "")
-	if !applied {
-		return false
+	if applied {
+		p.publishReadyLifecycle(ctx, pod, status)
 	}
-	p.publishReadyLifecycle(ctx, pod, status)
-	return true
+	return applied
 }
 
 // waitForFreshIP polls for the DHCP lease a clone acquires on its new

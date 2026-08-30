@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -15,8 +14,6 @@ import (
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
-
-const leaseReleaseTimeout = 5 * time.Second
 
 func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.DeletePod")
@@ -78,11 +75,9 @@ func (p *Provider) releaseDHCPLeases(ctx context.Context, v *vm.VM) {
 		return
 	}
 	logger := log.WithFunc("Provider.releaseDHCPLeases")
+	releaseCtx := context.WithoutCancel(ctx)
 	for _, mac := range dhcpMACs(v) {
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
-		err := p.LeaseReleaser.ReleaseByMAC(releaseCtx, mac)
-		cancel()
-		if err != nil {
+		if err := p.LeaseReleaser.ReleaseByMAC(releaseCtx, mac); err != nil {
 			// The VM is already gone. Keep deletion progressing and let the lease
 			// expiry fallback handle a temporarily unavailable cocoon-net daemon.
 			logger.Warnf(ctx, "release DHCP lease for VM %s MAC %s: %v", v.ID, mac, err)
@@ -112,20 +107,12 @@ func dhcpMACs(v *vm.VM) []string {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(v.NetworkConfigs))
 	macs := make([]string, 0, len(v.NetworkConfigs))
 	for _, nic := range v.NetworkConfigs {
-		if nic == nil || isStaticNIC(nic) {
+		mac := strings.TrimSpace(nic.MAC)
+		if mac == "" || isStaticNIC(nic) {
 			continue
 		}
-		mac := strings.ToLower(strings.TrimSpace(nic.MAC))
-		if mac == "" {
-			continue
-		}
-		if _, ok := seen[mac]; ok {
-			continue
-		}
-		seen[mac] = struct{}{}
 		macs = append(macs, mac)
 	}
 	return macs

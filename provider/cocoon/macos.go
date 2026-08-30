@@ -302,8 +302,7 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 	}
 	ready := p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready
 	if !ready || p.lifecycleAlreadyFailed(pod) {
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		p.refreshAndNotify(ctx, pod)
 		return
 	}
 	// The lease usually resolves after the create-time patch: re-publish the
@@ -329,10 +328,8 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		return nil
 	}
 	if v == nil {
-		if rec := p.macosInspect(ctx, vmName); rec != nil {
-			v = &vm.VM{ID: macosVMID(vmName), Name: vmName, Hypervisor: macosHypervisor}
-			applyMacosRecord(v, rec)
-		}
+		v = &vm.VM{ID: macosVMID(vmName)}
+		applyMacosRecord(v, p.macosInspect(ctx, vmName))
 	}
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
@@ -449,20 +446,14 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 }
 
 func (p *Provider) appendMacosVNCArgs(args []string, port int) ([]string, error) {
-	if port != 0 {
-		if p.MacosVNCPassword == "" {
-			return nil, errors.New("COCOON_MACOS_VNC_PASSWORD must be set when macOS VNC is enabled")
-		}
-		if len([]byte(p.MacosVNCPassword)) > maxVNCPasswordBytes {
-			return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD must be at most %d bytes", maxVNCPasswordBytes)
-		}
-		// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
-		args = append(args,
-			"--vnc", strconv.Itoa(port-macosVNCPortBase),
-			"--vnc-password", p.MacosVNCPassword,
-		)
+	if port == 0 {
+		return args, nil
 	}
-	return args, nil
+	if n := len(p.MacosVNCPassword); n == 0 || n > maxVNCPasswordBytes {
+		return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD must be 1-%d bytes, got %d", maxVNCPasswordBytes, n)
+	}
+	// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
+	return append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase), "--vnc-password", p.MacosVNCPassword), nil
 }
 
 func (p *Provider) macosProcessAlive(pid int) bool {

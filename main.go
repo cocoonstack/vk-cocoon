@@ -38,6 +38,7 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
+
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -84,10 +85,7 @@ func main() {
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
 	ociRegistry := os.Getenv("OCI_REGISTRY")
 	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
-	controlSocket := network.DefaultControlSocket
-	if configured, ok := os.LookupEnv("VK_COCOON_NET_CONTROL_SOCKET"); ok {
-		controlSocket = configured
-	}
+	controlSocket := commonk8s.EnvOrDefault("VK_COCOON_NET_CONTROL_SOCKET", network.DefaultControlSocket)
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
 	macosVNCPassword := os.Getenv("COCOON_MACOS_VNC_PASSWORD")
@@ -307,9 +305,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.PeerPort = opts.peerPort
 	p.Registry = registry
 	p.LeaseParser = network.NewLeaseParser(opts.leasesPath)
-	if opts.controlSocket != "" {
-		p.LeaseReleaser = network.NewCocoonNetLeaseReleaser(opts.controlSocket)
-	}
+	p.LeaseReleaser = network.NewCocoonNetLeaseReleaser(opts.controlSocket)
 	if icmpPinger, err := network.NewICMPPinger(); err != nil {
 		logger.Warnf(ctx, "icmp pinger disabled (%v); readiness will fall back to ip-resolved heuristic", err)
 		p.Pinger = network.NopPinger{}

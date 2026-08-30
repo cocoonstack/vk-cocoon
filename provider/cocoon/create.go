@@ -142,8 +142,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markReadyPublished(ctx, pod)
 	} else {
-		p.refreshStatus(ctx, pod)
-		p.notify(pod)
+		p.refreshAndNotify(ctx, pod)
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
@@ -558,6 +557,11 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	p.mu.Lock()
 	pod.Status = *status
 	p.mu.Unlock()
+}
+
+func (p *Provider) refreshAndNotify(ctx context.Context, pod *corev1.Pod) {
+	p.refreshStatus(ctx, pod)
+	p.notify(pod)
 }
 
 // awaitFlight waits on a singleflight result or the caller's cancellation,
