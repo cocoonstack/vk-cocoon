@@ -491,10 +491,11 @@ func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
 func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
 
 func macosCPUs(pod *corev1.Pod) int {
-	if cpus, _ := vmResourceOverrides(pod); cpus > 0 {
-		return cpus
+	cpus := macosDefaultCPUs
+	if o, _ := vmResourceOverrides(pod); o > 0 {
+		cpus = o
 	}
-	return macosDefaultCPUs
+	return cpus + cpus%2
 }
 
 // macosMemMB returns whole MiB because cocoon-macos' --memory flag is MiB, unlike cocoon's byte-normalized size args.

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -635,6 +637,33 @@ func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	}
 	if p.Probes.Get(meta.PodKey("ns", "demo-0")).LastSeen.IsZero() {
 		t.Fatal("readiness probe not started for the adopted macOS pod")
+	}
+}
+
+func TestMacosCPUsRoundsOddUpToEven(t *testing.T) {
+	tests := []struct {
+		name string
+		cpu  string
+		want int
+	}{
+		{"one rounds to two", "1", 2},
+		{"fractional rounds through one to two", "500m", 2},
+		{"even passes through", "2", 2},
+		{"odd rounds up", "3", 4},
+		{"unset uses the even default", "", macosDefaultCPUs},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newPodWithSpec(macosSpec())
+			if tc.cpu != "" {
+				pod.Spec.Containers = []corev1.Container{{Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(tc.cpu)},
+				}}}
+			}
+			if got := macosCPUs(pod); got != tc.want {
+				t.Errorf("macosCPUs(cpu=%q) = %d, want %d", tc.cpu, got, tc.want)
+			}
+		})
 	}
 }
 
