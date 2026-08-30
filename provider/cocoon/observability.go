@@ -6,6 +6,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -26,15 +27,11 @@ func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op strin
 }
 
 func (p *Provider) emitWarningf(pod *corev1.Pod, reason, format string, args ...any) {
-	if p.Recorder != nil {
-		p.Recorder.Eventf(pod, corev1.EventTypeWarning, reason, format, args...)
-	}
+	commonk8s.Eventf(p.Recorder, pod, corev1.EventTypeWarning, reason, format, args...)
 }
 
 func (p *Provider) emitNormalf(pod *corev1.Pod, reason, format string, args ...any) {
-	if p.Recorder != nil {
-		p.Recorder.Eventf(pod, corev1.EventTypeNormal, reason, format, args...)
-	}
+	commonk8s.Eventf(p.Recorder, pod, corev1.EventTypeNormal, reason, format, args...)
 }
 
 // lifecycleAlreadyFailed gates Ready transitions when another path already failed.

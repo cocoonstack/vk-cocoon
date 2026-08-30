@@ -1,9 +1,6 @@
 package snapshots
 
-import (
-	"os"
-	"strconv"
-)
+import commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 
 // TransferConfig carries the snapshot wire-format knobs; all-zero keeps the v1 writer.
 type TransferConfig struct {
@@ -26,9 +23,5 @@ func TransferConfigFromEnv() TransferConfig {
 }
 
 func envInt(key string) int {
-	v, err := strconv.Atoi(os.Getenv(key))
-	if err != nil || v < 0 {
-		return 0
-	}
-	return v
+	return max(commonk8s.EnvInt(key, 0), 0)
 }
