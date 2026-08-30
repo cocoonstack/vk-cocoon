@@ -219,6 +219,35 @@ func TestDeleteMacosPodStopsProbeBeforeRemove(t *testing.T) {
 	}
 }
 
+func TestReconcileMacosPodPublishesReadiness(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	p := newTestProvider(t)
+	spec := macosSpec()
+	spec.ProbePort = strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	pod := newPodWithSpec(spec)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.LeaseParser = newLeaseParser(t, "52:54:00:12:34:56", "127.0.0.1")
+	p.macosProcessAliveFn = func(pid int) bool { return pid == 4242 }
+	stubMacosExec(p, inspectOnlyHandler)
+	p.trackPod(pod, nil)
+
+	p.reconcileMacosPod(t.Context(), pod, spec)
+
+	got, err := p.GetPod(t.Context(), pod.Namespace, pod.Name)
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateReady {
+		t.Fatalf("adopted reachable macOS pod stuck at lifecycle %q, want ready", state)
+	}
+}
+
 func TestCreateMacosPodSkipsDuplicateRun(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())

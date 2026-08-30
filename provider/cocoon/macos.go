@@ -344,6 +344,7 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
 	p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec))
+	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 }
 
 // ensureMacosImage materializes the image in the node-local cocoon-macos store.
