@@ -526,6 +526,33 @@ func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.
 	}
 }
 
+func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) {
+	annos := map[string]any{}
+	addAnnotationPatch(annos, meta.AnnotationIP, pod.Annotations[meta.AnnotationIP], ip)
+
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	v := p.vmsByPod[key]
+	vncPort := p.macosVNC[key]
+	p.mu.RUnlock()
+	if isMacosVM(v) {
+		vnc := ""
+		if vncPort != 0 {
+			vnc = strconv.Itoa(vncPort)
+		}
+		addAnnotationPatch(annos, meta.AnnotationVNCPort, pod.Annotations[meta.AnnotationVNCPort], vnc)
+	}
+	if len(annos) == 0 {
+		return
+	}
+	if err := patchWithRetry(ctx, func() error {
+		return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, annos)
+	}); err != nil {
+		log.WithFunc("Provider.reconcileRuntimeEndpoints").
+			Errorf(ctx, err, "runtime endpoint annotation reconciliation failed for %s/%s", pod.Namespace, pod.Name)
+	}
+}
+
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {
 	p.startProbe(pod,
 		p.buildProbe(pod.Namespace, pod.Name),
@@ -556,6 +583,16 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 func (p *Provider) refreshAndNotify(ctx context.Context, pod *corev1.Pod) {
 	p.refreshStatus(ctx, pod)
 	p.notify(pod)
+}
+
+func addAnnotationPatch(patch map[string]any, key, current, desired string) {
+	if current == desired {
+		return
+	}
+	patch[key] = desired
+	if desired == "" {
+		patch[key] = nil
+	}
 }
 
 // awaitFlight waits on a singleflight result or the caller's cancellation,

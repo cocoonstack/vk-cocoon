@@ -200,12 +200,15 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
 	if rt.IP == "" {
-		// no lease yet (restart adoption): keep the pre-restart address; the probe republishes it on next Ready flip.
+		// no lease yet (restart adoption): keep the pre-restart address until the probe or status reconciler resolves it.
 		p.mu.RLock()
 		rt.IP = pod.Annotations[meta.AnnotationIP]
 		p.mu.RUnlock()
 	}
 	p.applyVMRuntime(ctx, pod, rt)
+	if current, err := p.GetPod(ctx, pod.Namespace, pod.Name); err == nil {
+		p.reconcileRuntimeEndpoints(ctx, current, rt.IP)
+	}
 	p.startMacosProbe(pod)
 }
 
@@ -260,16 +263,27 @@ func (p *Provider) recoverMacosVM(ctx context.Context, namespace, name string, v
 	ctx, cancel := detachedLaunchCtx(ctx)
 	defer cancel()
 	if rec := p.macosInspect(ctx, v.Name); rec != nil && p.macosProcessAlive(rec.PID) {
-		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
 		return "adopted running qemu"
 	}
 	if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
 		return "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
 	}
 	if rec := p.macosInspect(ctx, v.Name); rec != nil {
-		p.updateTrackedVM(namespace, name, v.ID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
 	}
 	return "qemu restarted"
+}
+
+func (p *Provider) updateRecoveredMacosVM(ctx context.Context, namespace, name, vmID string, rec *macosVMRecord) {
+	v := p.updateTrackedVM(namespace, name, vmID, func(u *vm.VM) { applyMacosRecord(u, rec) })
+	if v == nil {
+		return
+	}
+	p.adoptMacosVNCPort(meta.PodKey(namespace, name), rec)
+	if pod, err := p.GetPod(ctx, namespace, name); err == nil {
+		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
+	}
 }
 
 func (p *Provider) buildMacosOnUpdate(namespace, name string) probes.OnUpdate {
@@ -291,9 +305,9 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 		p.refreshAndNotify(ctx, pod)
 		return
 	}
-	// re-publish the IP the probe just dialed before flipping Ready; the lease usually resolves post-patch.
-	if v := p.vmForPod(namespace, name); v != nil && v.IP != "" && pod.Annotations[meta.AnnotationIP] != v.IP {
-		p.applyRuntime(ctx, pod, v)
+	// reconcile runtime endpoints before flipping Ready; the lease usually resolves post-patch.
+	if v := p.vmForPod(namespace, name); v != nil {
+		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
 	}
 	p.markReadyPublished(ctx, pod)
 }

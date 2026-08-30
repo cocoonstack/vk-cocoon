@@ -59,6 +59,13 @@ class (see
 mismatch fails startup reconcile, and vk-cocoon refuses to register the
 node rather than resume snapshots on an incompatible host.
 
+## Periodic convergence
+
+Every 30 seconds, the status reconciler re-resolves each tracked VM's DHCP
+lease and repairs drifted pod status. The same pass idempotently reconciles the
+published IP and macOS VNC-port annotations, removing an endpoint when the
+runtime no longer serves it; failed patches are retried on the next pass.
+
 ## VM event watcher
 
 In addition to the periodic probe, vk-cocoon subscribes to cocoon's

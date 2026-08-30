@@ -225,8 +225,8 @@ func (p *Provider) goBackground(f func()) {
 	p.bgWG.Go(f)
 }
 
-// runStatusReconciler repairs status notifications dropped during startup or
-// an apiserver outage without touching the VM lifecycle.
+// runStatusReconciler repairs endpoint annotations and status notifications
+// dropped during startup or an apiserver outage without touching the VM lifecycle.
 func (p *Provider) runStatusReconciler(ctx context.Context) {
 	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
 		return
@@ -255,6 +255,7 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
 			return
 		}
+		p.reconcileRuntimeEndpoints(ctx, current, status.PodIP)
 		if podStatusMatches(current.Status, *status) {
 			return
 		}
@@ -786,8 +787,8 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
-		if v := p.vmForPod(namespace, name); v != nil && v.IP != "" && pod.Annotations[meta.AnnotationIP] != v.IP {
-			p.applyRuntime(ctx, pod, v)
+		if v := p.vmForPod(namespace, name); v != nil {
+			p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
 		}
 		p.refreshAndNotify(ctx, pod)
 	}

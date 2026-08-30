@@ -417,6 +417,56 @@ func TestMacosProbeRestartsDeadQemu(t *testing.T) {
 	}
 }
 
+func TestMacosRecoverClearsDisabledVNC(t *testing.T) {
+	p := newTestProvider(t)
+	p.MacosVNCPassword = ""
+	pod := newPodWithSpec(macosSpec())
+	pod.Annotations[meta.AnnotationVNCPort] = "5907"
+	p.Clientset = fake.NewSimpleClientset(pod)
+	started := false
+	p.macosProcessAliveFn = func(pid int) bool { return started && pid == 4243 }
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		switch {
+		case macosCallIs(args, "vm", "start"):
+			started = true
+			return "macos-demo (pid 4243)\n", nil
+		case macosCallIs(args, "vm", "inspect"):
+			if started {
+				return strings.NewReplacer("4242", "4243", `"vnc": 7`, `"vnc": -1`).Replace(macosInspectJSON), nil
+			}
+			return macosInspectJSON, nil
+		default:
+			return "", nil
+		}
+	})
+	p.trackPod(pod, &vm.VM{
+		ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor,
+		State: vm.StateRunning, PID: 4242, MAC: "52:54:00:12:34:56",
+	})
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	p.macosVNC[key] = 5907
+	p.mu.Unlock()
+
+	if msg := p.recoverMacosVM(t.Context(), pod.Namespace, pod.Name, p.vmForPod(pod.Namespace, pod.Name)); !strings.Contains(msg, "restarted") {
+		t.Fatalf("recoverMacosVM = %q, want restarted", msg)
+	}
+	if port := p.macosVNCPortFor(key); port != 0 {
+		t.Fatalf("VNC reservation = %d, want released", port)
+	}
+	got, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(t.Context(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if port := got.Annotations[meta.AnnotationVNCPort]; port != "" {
+		t.Fatalf("VNC annotation = %q, want cleared", port)
+	}
+	starts := macosCallsWithPrefix(calls(), "vm", "start")
+	if len(starts) != 1 || slices.Contains(starts[0], "--vnc") {
+		t.Fatalf("VNC-off recovery must start without a display, got %v", starts)
+	}
+}
+
 func TestMacosRecoverAdoptsSlowStartedQemu(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
