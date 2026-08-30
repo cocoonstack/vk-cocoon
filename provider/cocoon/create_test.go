@@ -2251,6 +2251,7 @@ func (nopWriteCloser) Close() error                { return nil }
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
 	p := NewProvider(t.Context())
+	p.MacosVNCPassword = "testpass"
 	p.Probes = probes.NewManager(t.Context())
 	t.Cleanup(p.Close)
 	return p

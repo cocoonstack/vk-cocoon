@@ -90,7 +90,7 @@ func main() {
 	}
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
-	macosBridge := commonk8s.EnvOrDefault("COCOON_MACOS_BRIDGE", "")
+	macosVNCPassword := os.Getenv("COCOON_MACOS_VNC_PASSWORD")
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
 	restoreMode := commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode)
 	stagingDir := commonk8s.EnvOrDefault("VK_STAGING_DIR", defaultStagingDir)
@@ -155,7 +155,7 @@ func main() {
 		controlSocket:              controlSocket,
 		cocoonBin:                  cocoonBin,
 		macosBin:                   macosBin,
-		macosBridge:                macosBridge,
+		macosVNCPassword:           macosVNCPassword,
 		orphanPolicy:               orphanPolicy,
 		restoreMode:                restoreMode,
 		stagingDir:                 stagingDir,
@@ -263,7 +263,7 @@ type buildOpts struct {
 	controlSocket              string
 	cocoonBin                  string
 	macosBin                   string
-	macosBridge                string
+	macosVNCPassword           string
 	orphanPolicy               string
 	restoreMode                string
 	stagingDir                 string
@@ -299,7 +299,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	p.Recorder = opts.recorder
 	p.Runtime = runtime
 	p.MacosBin = opts.macosBin
-	p.MacosBridge = opts.macosBridge
+	p.MacosVNCPassword = opts.macosVNCPassword
 	transfer := snapshots.TransferConfigFromEnv()
 	p.Puller = &snapshots.Puller{Registry: registry, Runtime: runtime, Transfer: transfer}
 	p.Pusher = &snapshots.Pusher{Registry: registry, Runtime: runtime, Transfer: transfer, NodeName: opts.nodeName}
