@@ -378,18 +378,6 @@ func (p *Provider) macosImagePresent(ctx context.Context, image string) bool {
 	return err == nil
 }
 
-func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMRecord {
-	out, err := p.macosExec(ctx, "vm", "inspect", vmName)
-	if err != nil {
-		return nil
-	}
-	rec := macosVMRecord{VNC: -1}
-	if json.Unmarshal([]byte(out), &rec) != nil || strings.TrimSpace(rec.Name) == "" {
-		return nil
-	}
-	return &rec
-}
-
 // startMacosVM boots a dead record, re-asserting the VNC display (a bare `vm start` disables it).
 func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (string, error) {
 	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, port)
@@ -450,20 +438,6 @@ func (p *Provider) macosProcessAlive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
-// configureMacosLifecycleCommand swaps CommandContext's SIGKILL for SIGTERM + a bounded wait: cocoon-macos traps SIGTERM and unwinds mounts/NBD/VM state.
-func configureMacosLifecycleCommand(cmd *exec.Cmd) {
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return err
-		}
-		return nil
-	}
-	cmd.WaitDelay = macosCommandCleanupGrace
-}
-
 // macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for adopt-vs-restart and lease resolution.
 type macosVMRecord struct {
 	Name  string `json:"name"`
@@ -473,6 +447,29 @@ type macosVMRecord struct {
 	Tap   string `json:"tap"`
 	Disk  string `json:"disk"`
 	VNC   int    `json:"vnc"` // display number; -1 = off
+}
+
+func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMRecord {
+	out, err := p.macosExec(ctx, "vm", "inspect", vmName)
+	if err != nil {
+		return nil
+	}
+	rec := macosVMRecord{VNC: -1}
+	if json.Unmarshal([]byte(out), &rec) != nil || strings.TrimSpace(rec.Name) == "" {
+		return nil
+	}
+	return &rec
+}
+
+// ValidateMacosVNCPassword rejects a set password QEMU cannot accept; empty means VNC off.
+func ValidateMacosVNCPassword(pw string) error {
+	if pw == "" {
+		return nil
+	}
+	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, unicode.IsControl) {
+		return fmt.Errorf("must be at most %d bytes with no control characters", maxVNCPasswordBytes)
+	}
+	return nil
 }
 
 func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
@@ -512,15 +509,18 @@ func macosMemMB(pod *corev1.Pod) int {
 	return macosDefaultMemMB
 }
 
-// ValidateMacosVNCPassword rejects a set password QEMU cannot accept; empty means VNC off.
-func ValidateMacosVNCPassword(pw string) error {
-	if pw == "" {
+// configureMacosLifecycleCommand swaps CommandContext's SIGKILL for SIGTERM + a bounded wait: cocoon-macos's ctx-aware teardown settles and releases its locks instead of dying mid-write.
+func configureMacosLifecycleCommand(cmd *exec.Cmd) {
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
 		return nil
 	}
-	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, unicode.IsControl) {
-		return fmt.Errorf("must be at most %d bytes with no control characters", maxVNCPasswordBytes)
-	}
-	return nil
+	cmd.WaitDelay = macosCommandCleanupGrace
 }
 
 func formatMacosArgsForLog(args []string) string {

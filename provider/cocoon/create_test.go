@@ -2192,32 +2192,6 @@ type nopWriteCloser struct{}
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
 
-func newTestProvider(t *testing.T) *Provider {
-	t.Helper()
-	p := NewProvider(t.Context())
-	p.MacosVNCPassword = "testpass"
-	p.Probes = probes.NewManager(t.Context())
-	t.Cleanup(p.Close)
-	return p
-}
-
-func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "leases.json")
-	entry := `[{"mac":"` + mac + `","ip":"` + ip + `","expiry":"2099-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(path, []byte(entry), 0o644); err != nil {
-		t.Fatalf("write leases: %v", err)
-	}
-	return network.NewLeaseParser(path)
-}
-
-func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	spec.Managed = true
-	spec.Apply(pod)
-	return pod
-}
-
 var _ oci.Registry = fakeRegistry{}
 
 type fakeRegistry struct {
@@ -2257,6 +2231,32 @@ func (c *countingRegistry) GetBlob(_ context.Context, _, digest string) (io.Read
 		return io.NopCloser(bytes.NewReader(b)), nil
 	}
 	return nil, fmt.Errorf("blob %s not found", digest)
+}
+
+func newTestProvider(t *testing.T) *Provider {
+	t.Helper()
+	p := NewProvider(t.Context())
+	p.MacosVNCPassword = "testpass"
+	p.Probes = probes.NewManager(t.Context())
+	t.Cleanup(p.Close)
+	return p
+}
+
+func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "leases.json")
+	entry := `[{"mac":"` + mac + `","ip":"` + ip + `","expiry":"2099-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(entry), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	return network.NewLeaseParser(path)
+}
+
+func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	spec.Managed = true
+	spec.Apply(pod)
+	return pod
 }
 
 func blobDigest(b []byte) string {
