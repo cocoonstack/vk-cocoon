@@ -171,7 +171,7 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	lc := meta.ReadLifecycleState(pod)
 	pcs := pod.Annotations[annotationPostCloneState]
 	// an empty lifecycle (lost Creating patch) with a marker still records owed work.
-	resuming := lc == meta.LifecycleStateCreating || (lc == "" && pcs != "")
+	resuming := lc == meta.LifecycleStateCreating || lc == ""
 	if !resuming {
 		return ""
 	}

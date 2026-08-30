@@ -88,6 +88,13 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 			wantLC: meta.LifecycleStateReady,
 		},
 		{
+			name:     "empty lifecycle with no marker still resumes the ready wait",
+			spec:     meta.VMSpec{VMName: vmName, Mode: "clone"},
+			annotate: func(*corev1.Pod) {},
+			vms:      []vm.VM{running},
+			wantLC:   meta.LifecycleStateReady,
+		},
+		{
 			name: "drop-nic restore without marker resumes ready wait",
 			spec: meta.VMSpec{
 				VMName:  vmName,
