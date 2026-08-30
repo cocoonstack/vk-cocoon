@@ -316,7 +316,8 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
 	logger := log.WithFunc("Provider.deleteMacosPod")
 	vmName := spec.VMName
-	if v := p.vmForPod(pod.Namespace, pod.Name); v != nil && v.Name != "" {
+	v := p.vmForPod(pod.Namespace, pod.Name)
+	if v != nil && v.Name != "" {
 		vmName = v.Name
 	}
 	if vmName == "" {
@@ -324,11 +325,18 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "no_vm").Inc()
 		return nil
 	}
+	if v == nil {
+		if rec := p.macosInspect(ctx, vmName); rec != nil {
+			v = &vm.VM{ID: macosVMID(vmName), Name: vmName, Hypervisor: macosHypervisor}
+			applyMacosRecord(v, rec)
+		}
+	}
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
 		return fmt.Errorf("cocoon-macos vm rm %s: %w: %s", vmName, err, strings.TrimSpace(out))
 	}
+	p.releaseDHCPLeases(ctx, v)
 	p.forgetPod(pod.Namespace, pod.Name)
 	pod.Status.Phase = corev1.PodSucceeded
 	p.notify(pod)

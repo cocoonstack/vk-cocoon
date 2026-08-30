@@ -3,7 +3,9 @@ package cocoon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -11,7 +13,10 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
+
+const leaseReleaseTimeout = 5 * time.Second
 
 func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.DeletePod")
@@ -44,7 +49,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 		p.saveAndPushSnapshot(ctx, v.Name, v.ID, meta.DefaultSnapshotTag, spec.Image)
 	}
 
-	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+	if err := p.removeVM(ctx, v); err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
 		return fmt.Errorf("remove vm %s: %w", v.ID, err)
 	}
@@ -60,6 +65,31 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
+func (p *Provider) removeVM(ctx context.Context, v *vm.VM) error {
+	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+		return err
+	}
+	p.releaseDHCPLeases(ctx, v)
+	return nil
+}
+
+func (p *Provider) releaseDHCPLeases(ctx context.Context, v *vm.VM) {
+	if v == nil || p.LeaseReleaser == nil {
+		return
+	}
+	logger := log.WithFunc("Provider.releaseDHCPLeases")
+	for _, mac := range dhcpMACs(v) {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
+		err := p.LeaseReleaser.ReleaseByMAC(releaseCtx, mac)
+		cancel()
+		if err != nil {
+			// The VM is already gone. Keep deletion progressing and let the lease
+			// expiry fallback handle a temporarily unavailable cocoon-net daemon.
+			logger.Warnf(ctx, "release DHCP lease for VM %s MAC %s: %v", v.ID, mac, err)
+		}
+	}
+}
+
 func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	if vmName == "" {
 		return
@@ -72,4 +102,31 @@ func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 		})
 	}
 	wg.Wait()
+}
+
+func dhcpMACs(v *vm.VM) []string {
+	if len(v.NetworkConfigs) == 0 {
+		if mac := strings.TrimSpace(v.MAC); mac != "" {
+			return []string{mac}
+		}
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(v.NetworkConfigs))
+	macs := make([]string, 0, len(v.NetworkConfigs))
+	for _, nic := range v.NetworkConfigs {
+		if nic == nil || isStaticNIC(nic) {
+			continue
+		}
+		mac := strings.ToLower(strings.TrimSpace(nic.MAC))
+		if mac == "" {
+			continue
+		}
+		if _, ok := seen[mac]; ok {
+			continue
+		}
+		seen[mac] = struct{}{}
+		macs = append(macs, mac)
+	}
+	return macs
 }
