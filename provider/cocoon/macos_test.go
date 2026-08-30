@@ -176,11 +176,27 @@ func TestFormatMacosArgsForLogRedactsPassword(t *testing.T) {
 	}
 }
 
-func TestAppendMacosVNCArgsRequiresPassword(t *testing.T) {
+func TestMacosVNCOffWithoutPassword(t *testing.T) {
 	p := newTestProvider(t)
 	p.MacosVNCPassword = ""
-	if _, err := p.appendMacosVNCArgs([]string{"vm", "start"}, 5900); err == nil {
-		t.Fatal("expected missing VNC password to be rejected")
+	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, 5900)
+	if err != nil {
+		t.Fatalf("unset password must disable VNC, not fail: %v", err)
+	}
+	if slices.Contains(args, "--vnc") || slices.Contains(args, "--vnc-password") {
+		t.Fatalf("unset password must drop VNC args, got %v", args)
+	}
+	if port := p.claimMacosVNCPort("ns/demo-0", 0); port != 0 {
+		t.Fatalf("claimMacosVNCPort = %d without a password, want 0", port)
+	}
+}
+
+func TestValidateMacosVNCPasswordRejectsControlChars(t *testing.T) {
+	if err := ValidateMacosVNCPassword("pw\n"); err == nil {
+		t.Fatal("control characters must be rejected")
+	}
+	if err := ValidateMacosVNCPassword(""); err != nil {
+		t.Fatalf("empty means VNC off, got %v", err)
 	}
 }
 

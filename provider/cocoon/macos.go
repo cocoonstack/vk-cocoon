@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,9 @@ const (
 
 // claimMacosVNCPort reserves a node-unique VNC port for key, preferring a previously published one; 0 means exhausted.
 func (p *Provider) claimMacosVNCPort(key string, preferred int) int {
+	if p.MacosVNCPassword == "" {
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if port, ok := p.macosVNC[key]; ok {
@@ -422,11 +426,11 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 }
 
 func (p *Provider) appendMacosVNCArgs(args []string, port int) ([]string, error) {
-	if port == 0 {
+	if port == 0 || p.MacosVNCPassword == "" {
 		return args, nil
 	}
-	if n := len(p.MacosVNCPassword); n == 0 || n > maxVNCPasswordBytes {
-		return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD must be 1-%d bytes, got %d", maxVNCPasswordBytes, n)
+	if err := ValidateMacosVNCPassword(p.MacosVNCPassword); err != nil {
+		return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD %w", err)
 	}
 	// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
 	return append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase), "--vnc-password", p.MacosVNCPassword), nil
@@ -506,6 +510,17 @@ func macosMemMB(pod *corev1.Pod) int {
 		}
 	}
 	return macosDefaultMemMB
+}
+
+// ValidateMacosVNCPassword rejects a set password QEMU cannot accept; empty means VNC off.
+func ValidateMacosVNCPassword(pw string) error {
+	if pw == "" {
+		return nil
+	}
+	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, unicode.IsControl) {
+		return fmt.Errorf("must be at most %d bytes with no control characters", maxVNCPasswordBytes)
+	}
+	return nil
 }
 
 func formatMacosArgsForLog(args []string) string {

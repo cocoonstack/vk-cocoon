@@ -89,6 +89,9 @@ func main() {
 	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
 	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
 	macosVNCPassword := os.Getenv("COCOON_MACOS_VNC_PASSWORD")
+	if err := cocoon.ValidateMacosVNCPassword(macosVNCPassword); err != nil {
+		logger.Fatalf(ctx, err, "invalid COCOON_MACOS_VNC_PASSWORD")
+	}
 	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
 	restoreMode := commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode)
 	stagingDir := commonk8s.EnvOrDefault("VK_STAGING_DIR", defaultStagingDir)
