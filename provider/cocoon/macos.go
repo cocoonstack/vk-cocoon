@@ -156,7 +156,10 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		if err != nil {
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed", err)
 		}
-		args = append(args, "--random-smbios", "--net", "cni", spec.Image)
+		if storage := vm.NormalizeSizeArg(spec.Storage); storage != "" {
+			args = append(args, "--storage", storage)
+		}
+		args = append(args, "--exit-on-reboot", "--random-smbios", "--net", "cni", spec.Image)
 		if out, err := p.macosExec(ctx, args...); err != nil {
 			// A failed inspect above is indistinguishable from a missing record,
 			// so this `vm run` may have merely collided with a live same-name
@@ -407,7 +410,8 @@ func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMReco
 }
 
 // startMacosVM boots a dead record, re-asserting the VNC display (launch-scoped
-// in cocoon-macos, a bare `vm start` disables it); port 0 leaves VNC off.
+// in cocoon-macos, a bare `vm start` disables it); persisted create-time policy,
+// including exit-on-reboot, is restored from the record. Port 0 leaves VNC off.
 func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (string, error) {
 	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, port)
 	if err != nil {

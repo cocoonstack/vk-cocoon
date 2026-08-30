@@ -703,7 +703,7 @@ func quantityCPURoundUp(q resource.Quantity) int {
 	return int((milli + 999) / 1000)
 }
 
-// quantityArg renders a non-zero quantity as-is; vm's normalizeSizeArg
+// quantityArg renders a non-zero quantity as-is; vm.NormalizeSizeArg
 // owns the byte conversion for cocoon's CLI flags.
 func quantityArg(q resource.Quantity) string {
 	if q.IsZero() {
