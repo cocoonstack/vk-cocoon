@@ -3,8 +3,8 @@
 After a clone (or hibernate wake / fork), vk-cocoon checks whether the VM
 needs manual guest-side network setup. CH clones are automatic on all-DHCP
 networks (NIC hot-swap triggers systemd-networkd to re-DHCP); the fixup path
-is entered only when a static-IP NIC is present. These combinations require
-intervention:
+is entered when a static-IP NIC is present, and unconditionally for every
+`os=windows` pod. These combinations require intervention:
 
 | Scenario | Reason | Hint commands |
 |---|---|---|
@@ -12,9 +12,11 @@ intervention:
 | CH + OCI + static IP | guest retains old IP config | write MAC-based networkd files |
 | FC (any) | guest MAC frozen in vmstate | `ip link set address` + networkd reconfig |
 
-When a hint is needed, vk-cocoon base64-encodes the required shell
-commands into `vm.cocoonstack.io/post-clone-hint` on the pod and logs a
-warning. The pod stays Running but Not Ready. To retrieve the commands:
+vk-cocoon first applies the fixup itself over `cocoon vm exec`, retrying
+every 3 s within a 180 s budget and flipping the pod Ready on success. Only
+once that budget is exhausted does it base64-encode the required shell
+commands into `vm.cocoonstack.io/post-clone-hint` on the pod and emit a
+warning, leaving the pod Running but Not Ready. To retrieve the commands:
 
 ```bash
 kubectl get pod <name> \

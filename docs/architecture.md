@@ -46,7 +46,9 @@ cocoon's internals — the subprocess boundary is architectural, not tech
 debt. Per-VM stats are the one exception: CPU and throttling are read
 from the VM's cocoon cgroup scope (`cpu.stat`), RSS and network from
 `/proc` using the hypervisor PID tracked in memory, so a metrics scrape
-never forks a `cocoon` process.
+never forks a `cocoon` process. macOS guests are the exception to the
+exception: qemu runs outside cocoon's cgroup slice, so their CPU and RSS
+both come from `/proc/<pid>/stat` and throttling is always reported 0.
 
 ## Place in the cocoonstack
 

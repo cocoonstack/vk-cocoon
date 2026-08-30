@@ -9,7 +9,7 @@ inherits cgroup knobs from a snapshot.
 |---|---|---|
 | `limits.cpu` (rounded up) | vCPU count — guest parallelism and the hard cap | `--cpu` (run only; clones keep snapshot topology) |
 | `limits.cpu` | quota: long-run average ceiling, kernel floor 1ms | `--cpu-quota-us` + `--cpu-period-us` |
-| `requests.cpu` | contention share via kubelet's cgroup v2 shares→weight conversion, minimum 1 | `--cpu-weight` |
+| `requests.cpu` | contention share via kubelet's cgroup v2 shares→weight conversion, minimum 1; falls back to `limits.cpu` when unset | `--cpu-weight` |
 | unset limit | no quota flag — cocoon's Guaranteed-at-N default (cap = vCPU count) | — |
 
 Resources are declared on the CocoonSet (`spec.agent.resources`,

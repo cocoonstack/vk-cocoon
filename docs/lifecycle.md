@@ -30,8 +30,10 @@ cannot wedge node registration. Rejected create/update calls count on
    (idempotent on restart). Adoption hinges on `StartupReconcile` having
    populated `vmsByName`; before reconcile completes, CreatePod treats
    the pod as new and may collide on VM name.
-3. Otherwise `bringUpVM` selects a path — restore-from-hibernate and
-   fork-from take precedence, then `spec.Managed`, then `spec.Mode`:
+3. Otherwise `bringUpVM` selects a path. An unmanaged pod (`spec.Managed`
+   false) short-circuits first onto its pre-assigned VMID/IP; the managed
+   paths are then tried in order — restore-from-hibernate, clone-from-dir,
+   fork-from, and finally `spec.Mode`:
    - **Restore-from-hibernate**: taken when the operator set
      `vm.cocoonstack.io/restore-from-hibernate` (a cross-node wake
      arriving via CreatePod rather than UpdatePod), **or derived from
@@ -104,12 +106,13 @@ cannot wedge node registration. Rejected create/update calls count on
      --from-dir <abs-path> --pull`, bypassing the local snapshot DB.
      Pairs with `cocoon snapshot export --to-dir` for cross-node staging.
      Conflicts with `mode=run` or `fork-from` fast-fail.
-4. For clone/fork/wake paths, check whether the VM needs manual network
-   setup (see [Post-clone hints](post-clone.md)). If so, write the
-   required commands as a base64-encoded annotation
-   (`vm.cocoonstack.io/post-clone-hint`) and log a warning. The pod stays
-   Running but Not Ready until the user executes the commands via `cocoon
-   vm console` and the probe detects network connectivity.
+4. For clone/fork/wake paths, check whether the VM needs guest-side network
+   setup (see [Post-clone hints](post-clone.md)). vk-cocoon runs the fixup
+   itself over `cocoon vm exec`, retrying every 3 s within a 180 s budget,
+   and marks the pod Ready on success. Only when that budget is exhausted
+   does it write the commands as a base64-encoded annotation
+   (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`, and
+   leave the pod Running but Not Ready for manual repair.
 5. Resolve the IP from the cocoon-net JSON lease file by MAC.
 6. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations
    back so the operator and other consumers can pick them up. `VNCPort`

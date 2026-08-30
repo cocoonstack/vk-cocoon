@@ -29,8 +29,9 @@ The `probes/` package owns that loop:
       TCP on that port instead of ICMP. Otherwise fall back to
       `Pinger.Ping(ctx, ip)` — a single ICMPv4 echo. This matches the
       cocoon Windows golden image contract
-      (`windows/autounattend.xml` explicitly opens `icmpv4:8` and disables
-      all firewall profiles), and it decouples readiness from specific
+      ([cocoonstack/windows](https://github.com/cocoonstack/windows)'s
+      `autounattend.xml` explicitly opens `icmpv4:8` and disables all
+      firewall profiles), and it decouples readiness from specific
       services so the same probe works for Linux and Windows guests alike.
 
    `os=macos` pods get a different closure: when

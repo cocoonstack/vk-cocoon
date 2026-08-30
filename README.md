@@ -23,7 +23,7 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
 |---|---|---|
 | Application | `package main` | Entry point, node registration, metrics server, VM event watcher startup |
 | Provider | `provider/cocoon/` | Lifecycle methods, startup reconcile, orphan policy, VM event watcher, pod eviction |
-| Provider iface | `provider/` | Shared provider interface and node-capacity helpers |
+| Provider types | `provider/` | Shared orphan policy, `VMStats` / `NodeStats`, and node-capacity helpers |
 | Cocoon CLI | `vm/` | `Runtime` interface + the `CocoonCLI` that shells out to `cocoon` |
 | Snapshot SDK | `snapshots/` | `Puller` / `Pusher` stream snapshots and cloud images to an OCI registry |
 | Network | `network/` | cocoon-net lease parser, the lease-release control-socket client, and the ICMPv4 `Pinger` the probe loop uses |

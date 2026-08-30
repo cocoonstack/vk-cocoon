@@ -33,8 +33,11 @@ On every restart vk-cocoon:
 5. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
    - `destroy` (default): remove the VM and release its DHCP leases so pod-less VMs don't accumulate
      after restart or pod chaos.
-   - `alert`: log + bump `cocoon_vk_orphan_vm_total`, leave the VM alone.
-   - `keep`: no log, no metric.
+   - `alert`: log + bump `cocoon_vk_orphan_vm_total`, and index the VM by name.
+   - `keep`: index the VM by name, no log, no metric.
+
+   Both non-destroy policies publish the VM to `vmsByName`, so the next
+   `CreatePod` for its pod takes the adopt branch instead of creating a second VM.
 
 6. Dispatches the work a restart interrupted (`dispatchOwedWork`),
    derived per tracked pod from persisted facts only: a hibernate
