@@ -2,8 +2,8 @@ package cocoon
 
 // os=macos pods dispatch to the standalone cocoon-macos QEMU binary; no
 // cloud-hypervisor machinery applies (offline disk snapshots — no hibernate,
-// wake, or fork). Tap-only networking (SLIRP accepts TCP before the guest is
-// up, defeating connect probes); a replay adopts or `vm start`s an existing
+// wake, or fork). CNI networking gives the guest a routed IP and exposes password-protected
+// per-VM QEMU VNC ports on the node. A replay adopts or `vm start`s an existing
 // record, never `vm run`s it — two QEMU processes on one overlay corrupt the disk.
 
 import (
@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -34,7 +35,8 @@ import (
 )
 
 const (
-	defaultMacosBinary = "/usr/local/bin/cocoon-macos"
+	defaultMacosBinary  = "/usr/local/bin/cocoon-macos"
+	maxVNCPasswordBytes = 8
 
 	// macosHypervisor tags macOS VMs in the shared tables; the CH event and
 	// resume paths key off it to skip them.
@@ -47,9 +49,6 @@ const (
 	macosVNCPortBase = 5900
 	macosVNCPortSpan = 100
 
-	// macosCNIBridge is the cocoon-net host bridge cloud-hypervisor VMs use.
-	macosCNIBridge = "cni0"
-
 	macosGuestSSHPort = "22"
 
 	// macosLaunchTimeout bounds a detached `vm run`/`vm start`: the CLI
@@ -61,8 +60,6 @@ const (
 	// subprocess per interval, not one per tick.
 	macosInspectRetryEvery = 10 * time.Second
 )
-
-func (p *Provider) macosBridge() string { return cmp.Or(p.MacosBridge, macosCNIBridge) }
 
 // claimMacosVNCPort reserves a node-unique VNC host port for key, preferring
 // a previously published port while it is still free; 0 means exhausted (VNC off).
@@ -151,12 +148,15 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		if err := p.ensureMacosImage(ctx, spec.Image); err != nil {
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed", err)
 		}
-		args := appendMacosVNCArg([]string{
+		args, err := p.appendMacosVNCArgs([]string{
 			"vm", "run", "--name", spec.VMName,
 			"--cpus", strconv.Itoa(macosCPUs(pod)),
 			"--memory", strconv.Itoa(macosMemMB(pod)),
 		}, port)
-		args = append(args, "--random-smbios", "--net", "tap", "--bridge", p.macosBridge(), spec.Image)
+		if err != nil {
+			return p.failCreate(ctx, pod, false, "CreateBringUpFailed", err)
+		}
+		args = append(args, "--random-smbios", "--net", "cni", spec.Image)
 		if out, err := p.macosExec(ctx, args...); err != nil {
 			// A failed inspect above is indistinguishable from a missing record,
 			// so this `vm run` may have merely collided with a live same-name
@@ -164,7 +164,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm run %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
-		logger.Infof(ctx, "%s: launched macOS VM %s (bridge=%s, vnc=%d)", key, spec.VMName, p.macosBridge(), port)
+		logger.Infof(ctx, "%s: launched macOS VM %s (net=cni, vnc=%d)", key, spec.VMName, port)
 		rec = p.macosInspect(ctx, spec.VMName)
 	}
 	p.registerMacosVM(ctx, pod, spec, rec, port)
@@ -409,7 +409,11 @@ func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMReco
 // startMacosVM boots a dead record, re-asserting the VNC display (launch-scoped
 // in cocoon-macos, a bare `vm start` disables it); port 0 leaves VNC off.
 func (p *Provider) startMacosVM(ctx context.Context, vmName string, port int) (string, error) {
-	return p.macosExec(ctx, append(appendMacosVNCArg([]string{"vm", "start"}, port), vmName)...)
+	args, err := p.appendMacosVNCArgs([]string{"vm", "start"}, port)
+	if err != nil {
+		return "", err
+	}
+	return p.macosExec(ctx, append(args, vmName)...)
 }
 
 // macosExec runs a cocoon-macos subcommand. `vm run`/`vm start` detach from
@@ -427,7 +431,7 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 		defer cancel()
 	}
 	bin := cmp.Or(p.MacosBin, defaultMacosBinary)
-	log.WithFunc("Provider.macosExec").Debugf(ctx, "%s %s", bin, strings.Join(args, " "))
+	log.WithFunc("Provider.macosExec").Debugf(ctx, "%s %s", bin, formatMacosArgsForLog(args))
 	cmd := exec.CommandContext(ctx, bin, args...) //nolint:gosec // path comes from operator config, not untrusted input
 	if isLifecycleMutation {
 		configureMacosLifecycleCommand(cmd)
@@ -438,6 +442,23 @@ func (p *Provider) macosExec(ctx context.Context, args ...string) (string, error
 		return stdout.String() + stderr.String(), err
 	}
 	return stdout.String(), nil
+}
+
+func (p *Provider) appendMacosVNCArgs(args []string, port int) ([]string, error) {
+	if port != 0 {
+		if p.MacosVNCPassword == "" {
+			return nil, errors.New("COCOON_MACOS_VNC_PASSWORD must be set when macOS VNC is enabled")
+		}
+		if len([]byte(p.MacosVNCPassword)) > maxVNCPasswordBytes {
+			return nil, fmt.Errorf("COCOON_MACOS_VNC_PASSWORD must be at most %d bytes", maxVNCPasswordBytes)
+		}
+		// argv exposure is acceptable because nodes have no unprivileged local users and guests cannot read host /proc.
+		args = append(args,
+			"--vnc", strconv.Itoa(port-macosVNCPortBase),
+			"--vnc-password", p.MacosVNCPassword,
+		)
+	}
+	return args, nil
 }
 
 func (p *Provider) macosProcessAlive(pid int) bool {
@@ -518,11 +539,15 @@ func macosMemMB(pod *corev1.Pod) int {
 	return macosDefaultMemMB
 }
 
-func appendMacosVNCArg(args []string, port int) []string {
-	if port != 0 {
-		args = append(args, "--vnc", strconv.Itoa(port-macosVNCPortBase))
+func formatMacosArgsForLog(args []string) string {
+	redacted := slices.Clone(args)
+	for i := 0; i+1 < len(redacted); i++ {
+		if redacted[i] == "--vnc-password" {
+			redacted[i+1] = "<redacted>"
+			i++
+		}
 	}
-	return args
+	return strings.Join(redacted, " ")
 }
 
 func detachedLaunchCtx(ctx context.Context) (context.Context, context.CancelFunc) {

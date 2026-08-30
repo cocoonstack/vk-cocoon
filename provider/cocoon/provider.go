@@ -82,22 +82,21 @@ type Provider struct {
 
 	Clientset kubernetes.Interface
 	Runtime   vm.Runtime
-	// MacosBin is the cocoon-macos binary os=macos pods dispatch to;
-	// MacosBridge is the host bridge their tap NICs join. Empty values
-	// fall back to defaultMacosBinary / macosCNIBridge.
-	MacosBin      string
-	MacosBridge   string
-	Puller        *snapshots.Puller
-	Pusher        *snapshots.Pusher
-	PeerRestorer  *snapshots.PeerRestorer
-	PeerPort      string
-	Registry      oci.Registry
-	LeaseParser   *network.LeaseParser
-	LeaseReleaser network.LeaseReleaser
-	Pinger        network.Pinger
-	GuestSAC      guest.Dialer
-	Probes        *probes.Manager
-	Recorder      record.EventRecorder
+	// MacosBin is the cocoon-macos binary os=macos pods dispatch to.
+	// MacosVNCPassword protects the node-exposed per-VM QEMU VNC ports.
+	MacosBin         string
+	MacosVNCPassword string
+	Puller           *snapshots.Puller
+	Pusher           *snapshots.Pusher
+	PeerRestorer     *snapshots.PeerRestorer
+	PeerPort         string
+	Registry         oci.Registry
+	LeaseParser      *network.LeaseParser
+	LeaseReleaser    network.LeaseReleaser
+	Pinger           network.Pinger
+	GuestSAC         guest.Dialer
+	Probes           *probes.Manager
+	Recorder         record.EventRecorder
 
 	startTime time.Time
 	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
