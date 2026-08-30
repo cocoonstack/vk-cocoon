@@ -38,6 +38,28 @@ func TestIsCocoonNotFound(t *testing.T) {
 	}
 }
 
+func TestRemoveMapsNotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "cocoon")
+	script := "#!/bin/sh\necho \"Error: rm: vm not found\" >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cocoon: %v", err)
+	}
+	err := NewCocoonCLI(bin).Remove(t.Context(), "GONE")
+	if !errors.Is(err, ErrVMNotFound) {
+		t.Fatalf("Remove of a missing VM = %v, want ErrVMNotFound", err)
+	}
+
+	script = "#!/bin/sh\necho \"Error: rm: disk detach failed\" >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("rewrite fake cocoon: %v", err)
+	}
+	if err := NewCocoonCLI(bin).Remove(t.Context(), "LIVE"); err == nil || errors.Is(err, ErrVMNotFound) {
+		t.Fatalf("a real rm failure must stay untyped, got %v", err)
+	}
+}
+
 func TestSnapshotNameTakenPhrases(t *testing.T) {
 	t.Parallel()
 
