@@ -210,9 +210,7 @@ func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
 	}
 	rx, tx := s.rxBytes, s.txBytes
 	return &statsv1alpha1.NetworkStats{
-		InterfaceStats: statsv1alpha1.InterfaceStats{
-			Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
-		},
+		Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
 	}
 }
 

@@ -1,6 +1,6 @@
 module github.com/cocoonstack/vk-cocoon
 
-go 1.26.5
+go 1.27.0
 
 require (
 	github.com/cocoonstack/cocoon-common v0.3.1-0.20260830150428-0d1a441f84a9
