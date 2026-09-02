@@ -51,7 +51,7 @@ const (
 func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wake bool) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
-		p.markReadyAfterIP(ctx, pod, v, wake)
+		p.markReadyAfterIP(ctx, pod, spec, v, wake)
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
@@ -87,7 +87,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
-					p.markReadyAfterIP(ctx, pod, v, wake)
+					p.markReadyAfterIP(ctx, pod, spec, v, wake)
 				}
 				return
 			}
@@ -126,8 +126,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 }
 
 // markReadyAfterIP defers ready until the clone's DHCP lease lands, because ready promises vm-service a resolvable IP.
-func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, v *vm.VM, wake bool) {
-	gotIP := p.waitForFreshIP(ctx, pod, v.ID)
+func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wake bool) {
+	gotIP := p.waitForFreshIP(ctx, pod, spec, v.ID)
 	if ctx.Err() != nil {
 		return
 	}

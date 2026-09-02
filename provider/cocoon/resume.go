@@ -68,7 +68,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 				p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
 				return
 			}
-			if err := p.hibernate(p.lifecycleCtx, pod, v); err != nil {
+			if err := p.hibernate(p.lifecycleCtx, pod, spec, v); err != nil {
 				return
 			}
 			p.refreshAndNotify(p.lifecycleCtx, pod)
@@ -122,7 +122,7 @@ func (p *Provider) resumeReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec
 			return
 		}
 	}
-	p.markReadyAfterIP(ctx, pod, v, wake)
+	p.markReadyAfterIP(ctx, pod, spec, v, wake)
 }
 
 func (p *Provider) claimResume(key string) bool {

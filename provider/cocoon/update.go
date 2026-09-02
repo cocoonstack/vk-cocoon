@@ -57,13 +57,15 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
 		return err
 	}
+	spec := meta.ParseVMSpec(pod)
+	wantHibernate := bool(meta.ReadHibernateState(pod))
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
 	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.
-	if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
-		if meta.ReadHibernateState(pod) {
+	if isMacosSpec(spec) {
+		if wantHibernate {
 			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)
 			p.failOp(ctx, pod, "HibernateUnsupported", "update", err)
 			return err
@@ -71,17 +73,16 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		return p.noopUpdate(ctx, pod)
 	}
 
-	wantHibernate := bool(meta.ReadHibernateState(pod))
 	haveVM := v != nil
 
 	switch {
 	case wantHibernate && haveVM:
-		if err := p.hibernate(ctx, pod, v); err != nil {
+		if err := p.hibernate(ctx, pod, spec, v); err != nil {
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	case !wantHibernate && !haveVM:
-		if err := p.wake(ctx, pod); err != nil {
+		if err := p.wake(ctx, pod, spec); err != nil {
 			return err
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
@@ -100,9 +101,8 @@ func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
 }
 
 // hibernate runs Save -> Push -> Remove; CH+Windows drops the NIC first to dodge a Windows PnP MAC-swap.
-func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
+func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
-	spec := meta.ParseVMSpec(pod)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
@@ -214,8 +214,7 @@ func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped b
 }
 
 // wake restores the VM from the hibernation snapshot; dispatchHibernateRestore handles the post-restore step.
-func (p *Provider) wake(ctx context.Context, pod *corev1.Pod) error {
-	spec := meta.ParseVMSpec(pod)
+func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
 	if spec.VMName == "" {
 		return nil
 	}
@@ -277,7 +276,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, op string) {
 	if shouldDropNICBeforeHibernate(spec) {
 		p.goBackground(func() {
-			p.markReadyAfterIP(p.lifecycleCtx, pod, v, true)
+			p.markReadyAfterIP(p.lifecycleCtx, pod, spec, v, true)
 		})
 		return
 	}
@@ -321,12 +320,12 @@ func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Po
 }
 
 // waitForFreshIP polls for the clone's DHCP lease; UFFD contention under concurrent resumes can delay it many seconds.
-func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, vmID string) bool {
+func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, vmID string) bool {
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
 	deadline := time.Now().Add(budget)
 	renewAt := time.Now().Add(cmp.Or(p.wakeRenewNudgeDelay, defaultWakeRenewNudgeDelay))
-	nudged := meta.ParseVMSpec(pod).OS != string(cocoonv1.OSWindows)
+	nudged := spec.OS != string(cocoonv1.OSWindows)
 	for {
 		v := p.vmForPod(pod.Namespace, pod.Name)
 		// A same-name recreate swaps the tracked VM; never touch the successor.
