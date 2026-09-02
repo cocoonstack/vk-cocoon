@@ -1803,6 +1803,19 @@ func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
 	}
 }
 
+func TestReconcileRuntimeEndpointsReportsSupersededWhenPodIsGone(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod.UID = "a"
+
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset()
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
+
+	if p.reconcileRuntimeEndpoints(t.Context(), pod, "192.0.2.10") {
+		t.Error("a pod the apiserver no longer holds must report supersession")
+	}
+}
+
 func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)

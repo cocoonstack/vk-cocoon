@@ -288,7 +288,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
 	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 	return applied
 }

@@ -304,8 +304,8 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 		return
 	}
 	// reconcile runtime endpoints before flipping Ready; the lease usually resolves post-patch.
-	if v := p.vmForPod(namespace, name); v != nil {
-		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
+	if v := p.vmForPod(namespace, name); v != nil && !p.reconcileRuntimeEndpoints(ctx, pod, v.IP) {
+		return
 	}
 	p.markReadyPublished(ctx, pod)
 }

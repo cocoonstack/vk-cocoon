@@ -435,7 +435,7 @@ func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 		return false, nil, nil
 	})
 	stale := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 4}
-	p.flushLifecycle(t.Context(), "ns", "demo-0", stale)
+	p.flushLifecycle(t.Context(), "ns", "demo-0", "", stale)
 	if patches != 0 {
 		t.Errorf("flushLifecycle must skip stale snapshot, got %d patches", patches)
 	}
@@ -452,7 +452,7 @@ func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 	p.lifecycleIntent[key] = status
 	p.recordLifecycleFlushed(key, status.Snapshot())
 
-	p.flushLifecycle(t.Context(), "ns", "demo-0", status)
+	p.flushLifecycle(t.Context(), "ns", "demo-0", "", status)
 
 	p.mu.RLock()
 	_, intentStill := p.lifecycleIntent[key]

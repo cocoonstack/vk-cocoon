@@ -12,7 +12,6 @@ import (
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -545,11 +544,11 @@ func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Po
 	}
 	logger := log.WithFunc("Provider.reconcileRuntimeEndpoints")
 	err := patchWithRetry(ctx, func() error {
-		return p.patchIncarnationAnnotations(ctx, pod, annos)
+		return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, annos)
 	})
 	switch {
 	case err == nil:
-	case apierrors.IsInvalid(err) || apierrors.IsConflict(err):
+	case patchSuperseded(err):
 		logger.Infof(ctx, "runtime endpoints for %s/%s superseded by a newer incarnation, skipping",
 			pod.Namespace, pod.Name)
 		return false

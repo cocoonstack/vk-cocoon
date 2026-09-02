@@ -67,7 +67,10 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error 
 	}
 	logger := log.WithFunc("Provider.publishPodStatus")
 	p.mu.RLock()
-	patch, err := json.Marshal(map[string]any{"status": pod.Status})
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": pod.UID},
+		"status":   pod.Status,
+	})
 	p.mu.RUnlock()
 	if err != nil {
 		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
@@ -78,7 +81,12 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error 
 			ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
 		return patchErr
 	})
-	if err != nil {
+	switch {
+	case err == nil:
+	case patchSuperseded(err):
+		logger.Infof(ctx, "status publish for %s/%s superseded by a newer incarnation, skipping",
+			pod.Namespace, pod.Name)
+	default:
 		logger.Errorf(ctx, err,
 			"status publish failed after retries for %s/%s, lifecycle Ready remains pending", pod.Namespace, pod.Name)
 	}

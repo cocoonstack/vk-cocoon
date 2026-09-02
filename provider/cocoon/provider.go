@@ -778,14 +778,14 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 }
 
 // patchIncarnationAnnotations carries metadata.uid so the apiserver rejects the patch once another incarnation owns the name.
-func (p *Provider) patchIncarnationAnnotations(ctx context.Context, pod *corev1.Pod, annos map[string]any) error {
+func (p *Provider) patchIncarnationAnnotations(ctx context.Context, namespace, name string, uid types.UID, annos map[string]any) error {
 	patch, err := json.Marshal(map[string]any{
-		"metadata": map[string]any{"uid": pod.UID, "annotations": annos},
+		"metadata": map[string]any{"uid": uid, "annotations": annos},
 	})
 	if err != nil {
-		return fmt.Errorf("marshal annotations %s/%s: %w", pod.Namespace, pod.Name, err)
+		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
 	}
-	return p.patchPod(ctx, pod.Namespace, pod.Name, patch)
+	return p.patchPod(ctx, namespace, name, patch)
 }
 
 func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch []byte) error {
@@ -823,11 +823,15 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 				Errorf(ctx, err, "pod %s/%s lookup failed, skipping notify", namespace, name)
 			return
 		}
-		if v := p.vmForPod(namespace, name); v != nil {
-			p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
+		if v := p.vmForPod(namespace, name); v != nil && !p.reconcileRuntimeEndpoints(ctx, pod, v.IP) {
+			return
 		}
 		p.refreshAndNotify(ctx, pod)
 	}
+}
+
+func patchSuperseded(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsConflict(err) || apierrors.IsNotFound(err)
 }
 
 // patchWithRetry retries fn lifecyclePatchAttempts times; a canceled ctx returns nil since nothing is left to log against.

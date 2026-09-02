@@ -7,7 +7,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -29,7 +29,7 @@ func (p *Provider) StartLifecycleReconciler() {
 func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
 	status, applied := p.setLifecycleState(ctx, pod, state, message)
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 }
 
@@ -55,7 +55,7 @@ func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, s
 	if err := p.publishPodStatus(ctx, pod); err != nil {
 		return
 	}
-	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	p.notify(pod)
 }
 
@@ -101,7 +101,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	return status, true
 }
 
-func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
+func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, uid types.UID, status meta.LifecycleStatus) {
 	logger := log.WithFunc("Provider.flushLifecycle")
 	annos := status.Annotations()
 	key := meta.PodKey(namespace, name)
@@ -115,13 +115,13 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 		if !ok || cur.Snapshot() != snap {
 			return
 		}
-		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		err := p.patchIncarnationAnnotations(ctx, namespace, name, uid, annos)
 		if err == nil {
 			p.recordLifecycleFlushed(key, snap)
 			return
 		}
-		if apierrors.IsNotFound(err) {
-			// pod deleted on apiserver; drop tracking so reconciler stops retrying.
+		if patchSuperseded(err) {
+			// the name is gone or now holds another incarnation; drop tracking so reconciler stops retrying.
 			p.mu.Lock()
 			delete(p.lifecycleIntent, key)
 			delete(p.lifecycleFlushed, key)
@@ -147,6 +147,7 @@ func (p *Provider) runLifecycleReconciler(ctx context.Context) {
 func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	type lcDrift struct {
 		ns, name string
+		uid      types.UID
 		status   meta.LifecycleStatus
 	}
 
@@ -157,19 +158,23 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 			continue
 		}
 		ns, name := splitPodKey(key)
-		drifts = append(drifts, lcDrift{ns: ns, name: name, status: intent})
+		var uid types.UID
+		if tracked := p.pods[key]; tracked != nil {
+			uid = tracked.UID
+		}
+		drifts = append(drifts, lcDrift{ns: ns, name: name, uid: uid, status: intent})
 	}
 	p.mu.RUnlock()
 
 	fanOut(statusReconcileFanOut, drifts, func(d lcDrift) {
 		if d.status.State != meta.LifecycleStateReady {
-			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			p.flushLifecycle(ctx, d.ns, d.name, d.uid, d.status)
 			return
 		}
 		if pod, err := p.GetPod(ctx, d.ns, d.name); err == nil {
 			p.publishReadyLifecycle(ctx, pod, d.status)
 		} else {
-			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			p.flushLifecycle(ctx, d.ns, d.name, d.uid, d.status)
 		}
 	})
 }
@@ -200,7 +205,7 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
 	p.mu.Unlock()
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 }
 
