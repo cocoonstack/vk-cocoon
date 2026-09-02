@@ -14,10 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

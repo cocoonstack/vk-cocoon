@@ -29,7 +29,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/ociutil"
-
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/provider"
@@ -178,10 +177,10 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	const n = 6
 	entered := make(chan struct{})
+	closeEntered := sync.OnceFunc(func() { close(entered) })
 	release := make(chan struct{})
-	var once sync.Once
 	rt := &fakeRuntime{snapshotSaveHook: func() {
-		once.Do(func() { close(entered) })
+		closeEntered()
 		<-release
 	}}
 	p := &Provider{
@@ -1253,9 +1252,9 @@ func TestEnsureRunImageConcurrentForceShareOneImport(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p, rt, _ := newCloudImageTestSetup(t)
 		entered := make(chan struct{})
+		closeEntered := sync.OnceFunc(func() { close(entered) })
 		release := make(chan struct{})
-		var once sync.Once
-		rt.importHook = func() { once.Do(func() { close(entered) }); <-release }
+		rt.importHook = func() { closeEntered(); <-release }
 
 		var wg sync.WaitGroup
 		var err1, err2 error
@@ -1284,9 +1283,9 @@ func TestEnsureRunImageFallbackDeduped(t *testing.T) {
 		p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}
 
 		entered := make(chan struct{})
+		closeEntered := sync.OnceFunc(func() { close(entered) })
 		release := make(chan struct{})
-		var once sync.Once
-		rt.ensureImageHook = func() { once.Do(func() { close(entered) }); <-release }
+		rt.ensureImageHook = func() { closeEntered(); <-release }
 
 		var wg sync.WaitGroup
 		var err1, err2 error

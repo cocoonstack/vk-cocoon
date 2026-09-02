@@ -19,7 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/ociutil"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -359,9 +358,7 @@ func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	return digest != "" && p.Runtime.Image(ctx, digest) == nil
 }
 
-// cocoon's `vm clone --pull` only fetches http(s) bases, so an OCI-ref base
-// must be imported here. Dedup by digest — the same bytes may be local under
-// another name (epoch→AR ref migration).
+// ensureSnapshotBaseImage imports an OCI-ref base that `vm clone --pull` cannot fetch, deduplicated by digest.
 func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
 	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
 		return nil

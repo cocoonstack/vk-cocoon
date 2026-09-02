@@ -19,7 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/vm"

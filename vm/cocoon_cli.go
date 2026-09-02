@@ -91,7 +91,6 @@ func (c *CocoonCLI) EnsureImage(ctx context.Context, image string, force bool) e
 	return nil
 }
 
-// Image runs `cocoon image inspect` as a local-presence probe; "not found in any backend" maps to ErrImageNotFound.
 func (c *CocoonCLI) Image(ctx context.Context, name string) error {
 	out, err := c.command(ctx, "image", "inspect", name).CombinedOutput()
 	if err != nil {

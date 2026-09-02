@@ -5,7 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -255,7 +255,7 @@ func TestBuildCloneArgs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := buildCloneArgs(tc.opts)
-			if !reflect.DeepEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) {
 				t.Fatalf("buildCloneArgs() = %#v, want %#v", got, tc.want)
 			}
 		})
@@ -353,7 +353,7 @@ func TestBuildRunArgs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := buildRunArgs(tc.opts)
-			if !reflect.DeepEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) {
 				t.Fatalf("buildRunArgs() = %#v, want %#v", got, tc.want)
 			}
 		})
@@ -402,7 +402,7 @@ func TestBuildExecArgsAssemblesEnvAndArgv(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := buildExecArgs(tc.vmID, tc.argv, tc.env, tc.interactive)
-			if !reflect.DeepEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) {
 				t.Fatalf("buildExecArgs() = %#v, want %#v", got, tc.want)
 			}
 		})

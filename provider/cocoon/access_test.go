@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,7 +14,6 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -35,7 +34,7 @@ func TestRunInContainerLinuxRoutesToRuntimeExec(t *testing.T) {
 	if got.vmID != "vmid-1" {
 		t.Errorf("vmID = %q, want vmid-1", got.vmID)
 	}
-	if !reflect.DeepEqual(got.argv, []string{"echo", "hello"}) {
+	if !slices.Equal(got.argv, []string{"echo", "hello"}) {
 		t.Errorf("argv = %v, want [echo hello]", got.argv)
 	}
 	if got.stdin != "stdin-bytes" {

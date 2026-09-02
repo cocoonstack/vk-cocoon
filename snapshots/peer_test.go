@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/cocoon-common/manifest"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

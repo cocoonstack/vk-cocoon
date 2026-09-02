@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
