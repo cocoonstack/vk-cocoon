@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/probes"
 )
 
 func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
@@ -29,7 +30,11 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 
 	ready := corev1.ConditionFalse
 	lifecycleReady := meta.ReadLifecycleState(pod) == meta.LifecycleStateReady
-	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && lifecycleReady {
+	var probe probes.Result
+	if p.Probes != nil {
+		probe = p.Probes.Get(meta.PodKey(namespace, name))
+	}
+	if probe.Ready && lifecycleReady {
 		ready = corev1.ConditionTrue
 	}
 
@@ -39,7 +44,7 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 		PodIP:     podIP,
 		StartTime: pod.Status.StartTime,
 		Conditions: []corev1.PodCondition{
-			{Type: corev1.PodReady, Status: ready, LastTransitionTime: now},
+			{Type: corev1.PodReady, Status: ready, LastTransitionTime: now, Message: probe.Message},
 			{Type: corev1.PodInitialized, Status: corev1.ConditionTrue, LastTransitionTime: now},
 		},
 		ContainerStatuses: []corev1.ContainerStatus{

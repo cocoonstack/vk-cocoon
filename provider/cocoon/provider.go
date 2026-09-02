@@ -19,12 +19,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/record"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
-
 	"github.com/cocoonstack/vk-cocoon/guest"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -38,21 +38,18 @@ const (
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
 
-	// initialStatusPushDelay waits out the kubelet pod-informer's knownPods
-	// population window so the first post-restart status push isn't dropped.
+	// initialStatusPushDelay outlasts the pod informer's knownPods population, which drops earlier pushes.
 	initialStatusPushDelay  = 10 * time.Second
 	statusReconcileInterval = 30 * time.Second
 
 	// containerName is the synthetic container name used in pod status and metrics.
 	containerName = "agent"
 
-	// evictDeleteAttempts / evictDeleteBaseDelay bound evictPod's K8s-side
-	// retry; kept small so a flaky apiserver can't stall the serialized event loop.
+	// evictDeleteAttempts and evictDeleteBaseDelay stay small so a flaky apiserver cannot stall the serialized event loop.
 	evictDeleteAttempts  = 2
 	evictDeleteBaseDelay = 200 * time.Millisecond
 
-	// inlineInspectAttempts bounds handleVMGone's synchronous retry; beyond
-	// a single CLI hiccup the deferred recheck takes over.
+	// inlineInspectAttempts covers one CLI hiccup; the deferred recheck takes over beyond it.
 	inlineInspectAttempts = 2
 
 	// startupFanOut and statusReconcileFanOut bound separate fan-outs; equal today, tuned separately.
@@ -64,8 +61,7 @@ const (
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
 
-	// defaultDeferredRecheckBudget caps one recheck loop; on timeout the pod
-	// is evicted (VMInspectTimeout) so a broken cocoon can't leave it tracked forever.
+	// defaultDeferredRecheckBudget caps one recheck loop; on timeout the pod is evicted (VMInspectTimeout).
 	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
@@ -78,6 +74,7 @@ type Provider struct {
 	RestoreMode  vm.RestoreMode
 
 	Clientset kubernetes.Interface
+	Pods      corev1listers.PodLister
 	Runtime   vm.Runtime
 	// MacosBin is the cocoon-macos binary os=macos pods dispatch to.
 	// MacosVNCPassword protects the node-exposed per-VM QEMU VNC ports.
@@ -141,9 +138,7 @@ type Provider struct {
 	wakeRenewNudgeDelay time.Duration
 }
 
-// NewProvider constructs a Provider with empty tables; background work stops
-// when ctx is canceled or Close is called. Default Pinger is NopPinger so
-// tests degrade gracefully.
+// NewProvider constructs a Provider with empty tables; background work stops when ctx is canceled or Close is called.
 func NewProvider(ctx context.Context) *Provider {
 	lifecycleCtx, lifecycleStop := context.WithCancel(ctx)
 	return &Provider{
@@ -166,9 +161,7 @@ func NewProvider(ctx context.Context) *Provider {
 	}
 }
 
-// Close cancels background goroutines and waits for them. The lifecycle
-// cancel runs under p.mu so spawn paths cannot Add to a waitgroup after
-// Wait has returned.
+// Close cancels background goroutines under p.mu, so no spawn path can Add to a waitgroup after Wait returned.
 func (p *Provider) Close() {
 	p.mu.Lock()
 	p.lifecycleStop()
@@ -200,8 +193,7 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-// NotifyPods stores the kubelet's pod-status callback and schedules a deferred
-// initial push, since a synchronous push before WaitForCacheSync hits an empty knownPods and is dropped.
+// NotifyPods stores the kubelet's status callback; the initial push is deferred because one before WaitForCacheSync is dropped.
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -211,15 +203,12 @@ func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	})
 }
 
-// StartVMWatcher launches a background goroutine that subscribes to cocoon's
-// VM event stream and reacts to VM state changes in near-real-time.
+// StartVMWatcher subscribes to cocoon's VM event stream in the background.
 func (p *Provider) StartVMWatcher(ctx context.Context) {
 	go p.vmWatchLoop(ctx)
 }
 
-// goBackground spawns f tracked by p.bgWG, taking p.mu so Add cannot
-// race Close's lifecycleStop+Wait. A bgWG.Go after Close's Wait would
-// trip the sync.WaitGroup add-after-wait misuse.
+// goBackground spawns f under p.mu so bgWG.Go cannot race Close's Wait (add-after-wait misuse).
 func (p *Provider) goBackground(f func()) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -229,8 +218,7 @@ func (p *Provider) goBackground(f func()) {
 	p.bgWG.Go(f)
 }
 
-// runStatusReconciler repairs endpoint annotations and status notifications
-// dropped during startup or an apiserver outage without touching the VM lifecycle.
+// runStatusReconciler repairs endpoint annotations and status pushes dropped during startup or an apiserver outage.
 func (p *Provider) runStatusReconciler(ctx context.Context) {
 	if !commonk8s.SleepCtx(ctx, initialStatusPushDelay) {
 		return
@@ -249,7 +237,7 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 	}
 	logger := log.WithFunc("Provider.reconcilePodStatuses")
 	fanOut(statusReconcileFanOut, pods, func(pod *corev1.Pod) {
-		current, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		current, err := p.currentPod(ctx, pod)
 		if err != nil {
 			logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
 			return
@@ -269,8 +257,19 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 	})
 }
 
-// notify hands the framework a copy taken under p.mu: vk stores the pointer
-// and DeepCopies it only at drain time, racing the locked writes to tracked pods.
+// currentPod reads the framework's node-filtered lister; the apiserver GET is the test seam.
+func (p *Provider) currentPod(ctx context.Context, pod *corev1.Pod) (*corev1.Pod, error) {
+	if p.Pods == nil {
+		return p.Clientset.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+	}
+	current, err := p.Pods.Pods(pod.Namespace).Get(pod.Name)
+	if err != nil {
+		return nil, err
+	}
+	return current.DeepCopy(), nil
+}
+
+// notify hands the framework a copy taken under p.mu: vk DeepCopies the pointer only at drain time.
 func (p *Provider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
 	hook := p.notifyHook
@@ -285,10 +284,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	// UpdatePod hands us a fresh framework snapshot that can carry a stale
-	// lifecycle-state (e.g. creating) captured before vk advanced it out-of-band.
-	// Re-assert the authoritative intent, else the framework syncs that stale
-	// annotation back to the apiserver and strands a healthy VM at creating.
+	// re-assert the lifecycle intent: the framework's snapshot can carry a stale state it would sync back to the apiserver
 	if intent, ok := p.lifecycleIntent[key]; ok {
 		intent.Apply(pod)
 	}
@@ -299,8 +295,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
 
-// setVMLocked writes v into both VM tables; the write half of dropVMLocked.
-// Caller must hold p.mu for writing.
+// setVMLocked writes v into both VM tables under p.mu; the write half of dropVMLocked.
 func (p *Provider) setVMLocked(key string, v *vm.VM) {
 	p.vmsByPod[key] = v
 	if v.Name != "" {
@@ -353,9 +348,7 @@ func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
-// updateTrackedVM applies mutate to the tracked VM (copy-on-write for
-// concurrency safety) and returns the updated record, or nil when the pod's
-// VM changed underneath the caller (same-name recreate).
+// updateTrackedVM applies mutate copy-on-write and returns nil when the pod's VM changed underneath the caller.
 func (p *Provider) updateTrackedVM(namespace, name, vmID string, mutate func(*vm.VM)) *vm.VM {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -399,8 +392,7 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 	return ip
 }
 
-// buildProbe returns a probe closure that resolves the VM's IP and pings it.
-// ICMP works for both Linux and Windows guests.
+// buildProbe returns a probe that resolves the VM's IP and pings it; ICMP works for Linux and Windows guests.
 func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 	return func(ctx context.Context) (bool, string) {
 		v := p.vmForPod(namespace, name)
@@ -421,8 +413,7 @@ func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 	}
 }
 
-// probePort reads the annotation under RLock without GetPod's full
-// DeepCopy — this runs on every probe tick.
+// probePort reads the annotation under RLock; a DeepCopy per probe tick is not affordable.
 func (p *Provider) probePort(namespace, name string) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -483,9 +474,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 	}
 }
 
-// handleVMGone handles a DELETED or MODIFIED(stopped/error) event,
-// re-inspecting first so a transient state (e.g. watchdog restart)
-// cannot evict a live pod.
+// handleVMGone re-inspects before acting on a DELETED or stopped/error event, so a transient state cannot evict a live pod.
 func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	logger := log.WithFunc("Provider.handleVMGone")
 
@@ -525,9 +514,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.releaseDHCPLeases(ctx, tracked)
 
 	case err != nil:
-		// Still transient after inline retries. Spawn a deferred recheck so
-		// a genuinely gone VM does not leave the pod stuck indefinitely —
-		// cocoon does not re-emit DELETED, and probes only ping IPs.
+		// cocoon does not re-emit DELETED and probes only ping IPs, so a deferred recheck must settle a still-transient VM
 		logger.Errorf(ctx, err, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		metrics.VMInspectTransientFailTotal.Inc()
@@ -555,23 +542,15 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 			p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartFailed", startErr.Error())
 			return
 		}
-		// Re-inspect to refresh PID and NetworkConfigs for stats collection.
 		if fresh, inspectErr := p.Runtime.Inspect(ctx, trackedID); inspectErr == nil {
-			p.mu.Lock()
-			if old := p.vmsByPod[affectedKey]; old != nil {
-				updated := *old
-				updated.PID = fresh.PID
-				updated.NetworkConfigs = fresh.NetworkConfigs
-				p.setVMLocked(affectedKey, &updated)
-			}
-			p.mu.Unlock()
+			p.updateTrackedVM(affectedPod.Namespace, affectedPod.Name, trackedID, func(v *vm.VM) {
+				v.PID, v.NetworkConfigs = fresh.PID, fresh.NetworkConfigs
+			})
 		}
 	}
 }
 
-// removeThenEvict removes the VM then evicts the pod. On remove failure the
-// pod is kept for investigation — evicting would orphan the live VM and
-// collide on recreate.
+// removeThenEvict keeps the pod when the VM remove fails: evicting would orphan the live VM and collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
 		log.WithFunc("Provider.removeThenEvict").
@@ -582,10 +561,7 @@ func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, po
 	p.releaseDHCPLeases(ctx, v)
 }
 
-// inspectWithRetry calls Runtime.Inspect up to inlineInspectAttempts
-// times, returning early on a definitive result (success or
-// ErrVMNotFound). Other errors are treated as transient and retried
-// with a linearly growing delay.
+// inspectWithRetry returns on a definitive result (success or ErrVMNotFound) and retries other errors with a growing delay.
 func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, error) {
 	base := cmp.Or(p.inlineInspectBaseDelay, defaultInlineInspectBaseDelay)
 	var lastErr error
@@ -605,10 +581,7 @@ func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, e
 	return nil, lastErr
 }
 
-// scheduleDeferredRecheck re-inspects an inconclusive VM in the background,
-// dedup'd via pendingRecheck. The ctx check and recheckWG.Go happen under
-// p.mu to pair with Close's cancel-under-lock, so every goroutine started
-// here is visible to Close's Wait.
+// scheduleDeferredRecheck re-inspects an inconclusive VM in the background; the ctx check and recheckWG.Go run under p.mu so Close's Wait sees every goroutine.
 func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -658,9 +631,7 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			}
 			delay = min(delay*2, maxDelay)
 		case v.State != vm.StateRunning:
-			// Stopped/error — let the normal event path handle restart.
-			// Feeding a synthetic event keeps restart-cooldown bookkeeping
-			// in one place instead of duplicating it here.
+			// a synthetic event keeps the restart-cooldown bookkeeping in one place
 			logger.Infof(ctx, "deferred recheck: vm %s non-running (state=%s), replaying event",
 				vmID, v.State)
 			p.handleVMGone(ctx, v)
@@ -677,30 +648,24 @@ func (p *Provider) recheckBackoff() (delay, maxDelay, budget time.Duration) {
 		cmp.Or(p.deferredRecheckBudget, defaultDeferredRecheckBudget)
 }
 
-// podForVMMatch returns the pod and tracked-VM ID for a pod that matches
-// the given id or (optionally) name. name may be empty to restrict the
-// match to id only. Used by handleVMGone (match on id OR name from a
-// potentially sparse event) and by runDeferredRecheck (id only).
+// podForVMMatch finds the tracked pod by VM id, or by name when name is set (events can be sparse).
 func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
-		// cocoon's event stream cannot describe cocoon-macos guests; a
-		// name-colliding CH event must match the CH record, not a macOS one.
+		// a name-colliding CH event must match the CH record, never a cocoon-macos guest
 		if isMacosVM(tracked) {
 			continue
 		}
-		if tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name) {
-			return key, p.pods[key].DeepCopy(), tracked
+		pod := p.pods[key]
+		if pod != nil && (tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name)) {
+			return key, pod.DeepCopy(), tracked
 		}
 	}
 	return "", nil, nil
 }
 
-// evictPod deletes the pod from the API server first and clears the
-// in-memory tables only on success: a transient API failure leaves memory
-// intact so the next VM event or probe retries, never a live K8s pod
-// with no provider record. The pod is marked PodFailed on success.
+// evictPod clears the in-memory tables only after the apiserver delete succeeds, so a live pod never loses its provider record.
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
@@ -729,8 +694,7 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 	p.notify(pod)
 }
 
-// deletePodWithRetry deletes the pod with a short bounded retry.
-// IsNotFound is success so repeated evict calls are idempotent.
+// deletePodWithRetry treats IsNotFound as success so repeated evicts are idempotent.
 func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) error {
 	var lastErr error
 	for i := range evictDeleteAttempts {
@@ -741,6 +705,9 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 			return nil
 		}
 		lastErr = err
+		if i == evictDeleteAttempts-1 {
+			break
+		}
 		if !commonk8s.SleepCtx(ctx, time.Duration(i+1)*evictDeleteBaseDelay) {
 			return ctx.Err()
 		}
@@ -765,9 +732,7 @@ func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name stri
 	return nil
 }
 
-// clearRuntimeAnnotations removes VMID/IP and the post-clone marker from the
-// pod's in-memory annotations (under p.mu against GetPod's DeepCopy) and
-// patches the API server; both callers mean this VM incarnation is gone.
+// clearRuntimeAnnotations drops VMID, IP and the post-clone marker in memory (under p.mu) and on the apiserver.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
 	p.mu.Lock()
 	delete(pod.Annotations, meta.AnnotationVMID)
@@ -781,8 +746,7 @@ func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod)
 	})
 }
 
-// buildOnUpdate returns the callback invoked on readiness transitions.
-// Under the async provider contract this is the only way status changes reach the kubelet.
+// buildOnUpdate returns the readiness-transition callback, the only way status reaches the kubelet under the async contract.
 func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 	return func(ctx context.Context) {
 		pod, err := p.GetPod(ctx, namespace, name)
@@ -798,14 +762,15 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 	}
 }
 
-// patchWithRetry runs fn up to lifecyclePatchAttempts times with
-// lifecyclePatchInterval between failures; a canceled ctx returns nil —
-// there is nothing left to log against on shutdown.
+// patchWithRetry retries fn lifecyclePatchAttempts times; a canceled ctx returns nil since nothing is left to log against.
 func patchWithRetry(ctx context.Context, fn func() error) error {
 	var lastErr error
-	for range lifecyclePatchAttempts {
+	for i := range lifecyclePatchAttempts {
 		if lastErr = fn(); lastErr == nil {
 			return nil
+		}
+		if i == lifecyclePatchAttempts-1 {
+			break
 		}
 		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
 			return nil

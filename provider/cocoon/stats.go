@@ -15,7 +15,6 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/provider"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -185,9 +184,9 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	defer p.mu.RUnlock()
 
 	out := make([]vmSnapshot, 0, len(p.pods))
-	for _, pod := range p.pods {
+	for key, pod := range p.pods {
 		spec := meta.ParseVMSpec(pod)
-		v := p.vmsByName[spec.VMName]
+		v := p.vmsByPod[key]
 		if v == nil || v.PID == 0 {
 			continue
 		}
