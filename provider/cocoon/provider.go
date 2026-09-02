@@ -117,7 +117,7 @@ type Provider struct {
 	macosExecFn         func(context.Context, ...string) (string, error)
 	macosProcessAliveFn func(int) bool
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
-	lifecycleIntent  map[string]meta.LifecycleStatus
+	lifecycleIntent  map[string]lifecycleEntry
 	lifecycleFlushed map[string]string
 	deleting         map[string]struct{}
 
@@ -156,7 +156,7 @@ func NewProvider(ctx context.Context) *Provider {
 		lastRestart:      map[string]time.Time{},
 		pendingRecheck:   map[string]struct{}{},
 		resumedOps:       map[string]struct{}{},
-		lifecycleIntent:  map[string]meta.LifecycleStatus{},
+		lifecycleIntent:  map[string]lifecycleEntry{},
 		lifecycleFlushed: map[string]string{},
 		deleting:         map[string]struct{}{},
 	}
@@ -299,7 +299,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	// re-assert the lifecycle intent: the framework's snapshot can carry a stale state it would sync back to the apiserver
 	if intent, ok := p.lifecycleIntent[key]; ok {
-		intent.Apply(pod)
+		intent.status.Apply(pod)
 	}
 	p.pods[key] = pod
 	if v != nil {

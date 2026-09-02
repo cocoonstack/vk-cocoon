@@ -19,6 +19,11 @@ const (
 	lifecycleReconcileInterval = 15 * time.Second
 )
 
+type lifecycleEntry struct {
+	uid    types.UID
+	status meta.LifecycleStatus
+}
+
 // StartLifecycleReconciler runs the annotation re-flush loop; NotifyPods only pushes pod.Status.
 func (p *Provider) StartLifecycleReconciler() {
 	p.goBackground(func() {
@@ -74,25 +79,25 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		}
 		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
 	}
-	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
+	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.status.ObservedGeneration {
 		logger.Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
 			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
-			cur.State, cur.ObservedGeneration)
+			cur.status.State, cur.status.ObservedGeneration)
 		return status, false
 	}
 	// same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
 	if cur, ok := p.lifecycleIntent[key]; ok &&
-		cur.State == meta.LifecycleStateFailed &&
+		cur.status.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateCreating &&
 		state != meta.LifecycleStateHibernating &&
-		status.ObservedGeneration == cur.ObservedGeneration {
+		status.ObservedGeneration == cur.status.ObservedGeneration {
 		logger.Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
 		return status, false
 	}
-	p.lifecycleIntent[key] = status
+	p.lifecycleIntent[key] = lifecycleEntry{uid: pod.UID, status: status}
 	status.Apply(pod)
 	if tracked != nil && tracked != pod {
 		// keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
@@ -108,24 +113,20 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, u
 	snap := status.Snapshot()
 	var lastErr error
 	for attempt := range lifecyclePatchAttempts {
-		// skip if intent advanced or pod was forgotten — a newer flush owns the write.
+		// skip if intent advanced, another incarnation staged one, or the pod was forgotten — a newer flush owns the write.
 		p.mu.RLock()
-		cur, ok := p.lifecycleIntent[key]
+		owned := p.lifecycleOwnedLocked(key, uid, snap)
 		p.mu.RUnlock()
-		if !ok || cur.Snapshot() != snap {
+		if !owned {
 			return
 		}
 		err := p.patchIncarnationAnnotations(ctx, namespace, name, uid, annos)
 		if err == nil {
-			p.recordLifecycleFlushed(key, snap)
+			p.recordLifecycleFlushed(key, uid, snap)
 			return
 		}
 		if patchSuperseded(err) {
-			// the name is gone or now holds another incarnation; drop tracking so reconciler stops retrying.
-			p.mu.Lock()
-			delete(p.lifecycleIntent, key)
-			delete(p.lifecycleFlushed, key)
-			p.mu.Unlock()
+			p.dropSupersededLifecycle(key, uid, snap)
 			return
 		}
 		lastErr = err
@@ -154,15 +155,11 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	p.mu.RLock()
 	drifts := make([]lcDrift, 0, len(p.lifecycleIntent))
 	for key, intent := range p.lifecycleIntent {
-		if p.lifecycleFlushed[key] == intent.Snapshot() {
+		if p.lifecycleFlushed[key] == intent.status.Snapshot() {
 			continue
 		}
 		ns, name := splitPodKey(key)
-		var uid types.UID
-		if tracked := p.pods[key]; tracked != nil {
-			uid = tracked.UID
-		}
-		drifts = append(drifts, lcDrift{ns: ns, name: name, uid: uid, status: intent})
+		drifts = append(drifts, lcDrift{ns: ns, name: name, uid: intent.uid, status: intent.status})
 	}
 	p.mu.RUnlock()
 
@@ -187,7 +184,7 @@ func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
 	status := meta.ReadLifecycleStatus(pod)
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	p.lifecycleIntent[key] = status
+	p.lifecycleIntent[key] = lifecycleEntry{uid: pod.UID, status: status}
 	p.lifecycleFlushed[key] = status.Snapshot()
 	p.mu.Unlock()
 }
@@ -197,26 +194,40 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
 	cur, ok := p.lifecycleIntent[key]
-	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.status.ObservedGeneration {
 		p.mu.Unlock()
 		return
 	}
 	// read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
-	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
+	status, applied := p.applyLifecycleLocked(ctx, pod, cur.status.State, cur.status.Message)
 	p.mu.Unlock()
 	if applied {
 		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 }
 
-func (p *Provider) recordLifecycleFlushed(key, snap string) {
+func (p *Provider) recordLifecycleFlushed(key string, uid types.UID, snap string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	cur, ok := p.lifecycleIntent[key]
-	if !ok || cur.Snapshot() != snap {
+	if !p.lifecycleOwnedLocked(key, uid, snap) {
 		return
 	}
 	p.lifecycleFlushed[key] = snap
+}
+
+func (p *Provider) dropSupersededLifecycle(key string, uid types.UID, snap string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.lifecycleOwnedLocked(key, uid, snap) {
+		return
+	}
+	delete(p.lifecycleIntent, key)
+	delete(p.lifecycleFlushed, key)
+}
+
+func (p *Provider) lifecycleOwnedLocked(key string, uid types.UID, snap string) bool {
+	cur, ok := p.lifecycleIntent[key]
+	return ok && cur.uid == uid && cur.status.Snapshot() == snap
 }
 
 func splitPodKey(key string) (string, string) {

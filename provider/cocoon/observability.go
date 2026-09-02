@@ -38,5 +38,5 @@ func (p *Provider) lifecycleAlreadyFailed(pod *corev1.Pod) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	cur, ok := p.lifecycleIntent[meta.PodKey(pod.Namespace, pod.Name)]
-	return ok && cur.State == meta.LifecycleStateFailed
+	return ok && cur.status.State == meta.LifecycleStateFailed
 }

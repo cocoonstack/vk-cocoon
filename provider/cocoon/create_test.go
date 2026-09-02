@@ -274,8 +274,8 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	p.mu.RLock()
 	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
 	p.mu.RUnlock()
-	if got.State != meta.LifecycleStateReady {
-		t.Errorf("intent state = %q, want ready (stale predecessor write mid-bring-up must drop)", got.State)
+	if got.status.State != meta.LifecycleStateReady {
+		t.Errorf("intent state = %q, want ready (stale predecessor write mid-bring-up must drop)", got.status.State)
 	}
 }
 
@@ -305,8 +305,8 @@ func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	p.mu.RLock()
 	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
 	p.mu.RUnlock()
-	if got.State != meta.LifecycleStateReady {
-		t.Errorf("intent after retry = %q, want ready", got.State)
+	if got.status.State != meta.LifecycleStateReady {
+		t.Errorf("intent after retry = %q, want ready", got.status.State)
 	}
 }
 
