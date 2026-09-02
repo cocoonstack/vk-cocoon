@@ -107,7 +107,7 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 	key := meta.PodKey(namespace, name)
 	snap := status.Snapshot()
 	var lastErr error
-	for range lifecyclePatchAttempts {
+	for attempt := range lifecyclePatchAttempts {
 		// skip if intent advanced or pod was forgotten — a newer flush owns the write.
 		p.mu.RLock()
 		cur, ok := p.lifecycleIntent[key]
@@ -129,6 +129,9 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, s
 			return
 		}
 		lastErr = err
+		if attempt == lifecyclePatchAttempts-1 {
+			break
+		}
 		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
 			return
 		}

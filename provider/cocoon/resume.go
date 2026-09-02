@@ -9,7 +9,6 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -110,7 +109,9 @@ func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence
 			p.failOp(p.lifecycleCtx, pod, "ResumeClassifyFailed", "reconcile", err)
 			return false, false
 		}
-		commonk8s.SleepCtx(ctx, delay)
+		if !commonk8s.SleepCtx(ctx, delay) {
+			continue
+		}
 		delay = min(delay*2, maxDelay)
 	}
 }

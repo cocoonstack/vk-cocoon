@@ -1,7 +1,6 @@
 package cocoon
 
-// os=macos pods dispatch to the standalone cocoon-macos QEMU binary, not cloud-hypervisor.
-// A replay adopts or `vm start`s an existing record, never `vm run`s it: two processes corrupt the disk.
+// os=macos pods dispatch to the cocoon-macos binary; a replay adopts or starts the existing record, never runs a second QEMU on the disk.
 
 import (
 	"bytes"
@@ -26,7 +25,6 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -454,13 +452,12 @@ func (p *Provider) macosProcessAlive(pid int) bool {
 
 // macosVMRecord is the subset of cocoon-macos `vm inspect` JSON needed for adopt-vs-restart and lease resolution.
 type macosVMRecord struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
-	PID   int    `json:"pid"`
-	MAC   string `json:"mac"`
-	Tap   string `json:"tap"`
-	Disk  string `json:"disk"`
-	VNC   int    `json:"vnc"` // display number; -1 = off
+	Name string `json:"name"`
+	PID  int    `json:"pid"`
+	MAC  string `json:"mac"`
+	Tap  string `json:"tap"`
+	Disk string `json:"disk"`
+	VNC  int    `json:"vnc"` // display number; -1 = off
 }
 
 func (p *Provider) macosInspect(ctx context.Context, vmName string) *macosVMRecord {
