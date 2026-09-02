@@ -242,9 +242,15 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 			logger.Errorf(ctx, err, "get pod %s/%s for status reconciliation", pod.Namespace, pod.Name)
 			return
 		}
+		if current.UID != pod.UID {
+			return
+		}
 		status, err := p.GetPodStatus(ctx, pod.Namespace, pod.Name)
 		if err != nil {
 			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
+			return
+		}
+		if !p.trackedPodMatches(meta.PodKey(pod.Namespace, pod.Name), pod.UID) {
 			return
 		}
 		p.reconcileRuntimeEndpoints(ctx, current, status.PodIP)
@@ -330,22 +336,59 @@ func (p *Provider) forgetPod(namespace, name string) {
 
 func (p *Provider) untrackPod(key string) {
 	p.mu.Lock()
-	p.dropVMLocked(key)
-	delete(p.pods, key)
-	delete(p.macosVNC, key)
-	delete(p.lifecycleIntent, key)
-	delete(p.lifecycleFlushed, key)
-	delete(p.deleting, key)
+	p.untrackLocked(key)
 	p.mu.Unlock()
 	if p.Probes != nil {
 		p.Probes.Forget(key)
 	}
 }
 
+func (p *Provider) untrackIncarnation(key string, uid types.UID) {
+	p.mu.Lock()
+	tracked, ok := p.pods[key]
+	dropped := ok && tracked.UID == uid
+	if dropped {
+		p.untrackLocked(key)
+	}
+	p.mu.Unlock()
+	if dropped && p.Probes != nil {
+		p.Probes.Forget(key)
+	}
+}
+
+func (p *Provider) untrackLocked(key string) {
+	p.dropVMLocked(key)
+	delete(p.pods, key)
+	delete(p.macosVNC, key)
+	delete(p.lifecycleIntent, key)
+	delete(p.lifecycleFlushed, key)
+	delete(p.deleting, key)
+}
+
 func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByPod[meta.PodKey(namespace, name)]
+}
+
+func (p *Provider) trackedPodMatches(key string, uid types.UID) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	tracked, ok := p.pods[key]
+	return ok && tracked.UID == uid
+}
+
+func (p *Provider) trackedIncarnation(key string, uid types.UID, vmID string) *vm.VM {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	tracked, ok := p.pods[key]
+	if !ok || tracked.UID != uid {
+		return nil
+	}
+	if v, ok := p.vmsByPod[key]; ok && v.ID == vmID {
+		return v
+	}
+	return nil
 }
 
 // updateTrackedVM applies mutate copy-on-write and returns nil when the pod's VM changed underneath the caller.
@@ -503,8 +546,8 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):
-		tracked := p.vmForPod(affectedPod.Namespace, affectedPod.Name)
-		if tracked == nil || tracked.ID != trackedID {
+		tracked := p.trackedIncarnation(affectedKey, affectedPod.UID, trackedID)
+		if tracked == nil {
 			logger.Infof(ctx, "vm %s tracking changed before eviction, ignoring stale gone event", trackedID)
 			return
 		}
@@ -552,9 +595,14 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 
 // removeThenEvict keeps the pod when the VM remove fails: evicting would orphan the live VM and collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
+	logger := log.WithFunc("Provider.removeThenEvict")
+	if p.trackedIncarnation(key, pod.UID, v.ID) == nil {
+		logger.Infof(ctx, "vm %s tracking changed before %s eviction of pod %s/%s, skipping",
+			v.ID, reason, pod.Namespace, pod.Name)
+		return
+	}
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
-		log.WithFunc("Provider.removeThenEvict").
-			Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
+		logger.Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
 	p.evictPod(ctx, key, pod, reason, message)
@@ -676,7 +724,7 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 		return
 	}
 
-	p.untrackPod(key)
+	p.untrackIncarnation(key, pod.UID)
 
 	pod.Status.Phase = corev1.PodFailed
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
@@ -696,11 +744,10 @@ func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, re
 
 // deletePodWithRetry treats IsNotFound as success so repeated evicts are idempotent.
 func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) error {
+	opts := metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &pod.UID}}
 	var lastErr error
 	for i := range evictDeleteAttempts {
-		err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(
-			ctx, pod.Name, metav1.DeleteOptions{},
-		)
+		err := p.Clientset.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, opts)
 		if err == nil || apierrors.IsNotFound(err) {
 			return nil
 		}

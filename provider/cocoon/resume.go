@@ -102,17 +102,14 @@ func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence
 		if err == nil {
 			return evidence, true
 		}
-		switch {
-		case p.lifecycleCtx.Err() != nil:
-			return false, false
-		case ctx.Err() != nil:
-			p.failOp(p.lifecycleCtx, pod, "ResumeClassifyFailed", "reconcile", err)
-			return false, false
-		}
-		if !commonk8s.SleepCtx(ctx, delay) {
+		if p.lifecycleCtx.Err() == nil && commonk8s.SleepCtx(ctx, delay) {
+			delay = min(delay*2, maxDelay)
 			continue
 		}
-		delay = min(delay*2, maxDelay)
+		if p.lifecycleCtx.Err() == nil {
+			p.failOp(p.lifecycleCtx, pod, "ResumeClassifyFailed", "reconcile", err)
+		}
+		return false, false
 	}
 }
 

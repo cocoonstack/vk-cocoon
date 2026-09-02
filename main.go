@@ -381,7 +381,7 @@ func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interf
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
-			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+			if attempt == nodePatchAttempts-1 || !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue

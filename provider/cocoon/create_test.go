@@ -1767,6 +1767,42 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 	t.Fatal("deferred recheck goroutine did not exit after pod was forgotten")
 }
 
+func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	p.Clientset = client
+	base := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: "stopped"}}
+	p.Runtime = &recreatingRuntime{fakeRuntime: base, recreate: sync.OnceFunc(func() {
+		p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	})}
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.mu.Lock()
+	p.lastRestart["vmid-a"] = time.Now()
+	p.mu.Unlock()
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+
+	if base.removedID != "" {
+		t.Errorf("removed VM %q while the successor incarnation owns the pod key", base.removedID)
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "delete" {
+			t.Error("deleted the recreated pod on behalf of the superseded incarnation")
+		}
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Errorf("successor VM tracking = %#v, want vmid-b", got)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
+		t.Errorf("successor pod untracked: %v", err)
+	}
+}
+
 func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
 	p := newTestProvider(t)
@@ -2206,6 +2242,16 @@ func (f *fakeRuntime) started() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.startCalls)
+}
+
+type recreatingRuntime struct {
+	*fakeRuntime
+	recreate func()
+}
+
+func (r *recreatingRuntime) Inspect(ctx context.Context, vmID string) (*vm.VM, error) {
+	r.recreate()
+	return r.fakeRuntime.Inspect(ctx, vmID)
 }
 
 type nopWriteCloser struct{}

@@ -34,7 +34,7 @@ func (p *Provider) saveAndPushSnapshot(ctx context.Context, vmName, vmID, tag, i
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 
 	pushStart := time.Now()
-	if _, err := p.Pusher.PushSnapshot(ctx, vmName, "", tag, image); err != nil {
+	if err := p.Pusher.PushSnapshot(ctx, vmName, "", tag, image); err != nil {
 		logger.Errorf(ctx, err, "push snapshot %s", vmName)
 		metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 		return

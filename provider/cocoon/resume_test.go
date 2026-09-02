@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -384,6 +385,25 @@ func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
 	}
 }
 
+func TestClassifyNICRecoveryStopsAtBudgetWithoutRetryingEvidence(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	registry := &staleEvidenceRegistry{}
+
+	p := newTestProvider(t)
+	p.Registry = registry
+	p.deferredRecheckInitialDelay = 50 * time.Millisecond
+	p.deferredRecheckBudget = 10 * time.Millisecond
+
+	evidence, ok := p.classifyNICRecovery(pod, "vk-ns-demo-0")
+
+	if ok {
+		t.Errorf("classification = (%t, %t), want no verdict once the budget expired", evidence, ok)
+	}
+	if got := registry.calls.Load(); got != 1 {
+		t.Errorf("evidence lookups = %d, want the single call made before the budget expired", got)
+	}
+}
+
 func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta.LifecycleState) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -409,6 +429,18 @@ func (r *flakyEvidenceRegistry) GetManifest(context.Context, string, string) ([]
 	defer r.mu.Unlock()
 	if r.fails > 0 {
 		r.fails--
+		return nil, "", errors.New("registry down")
+	}
+	return nil, "", fmt.Errorf("get manifest: %w", snapshot.ErrManifestNotFound)
+}
+
+type staleEvidenceRegistry struct {
+	fakeRegistry
+	calls atomic.Int64
+}
+
+func (r *staleEvidenceRegistry) GetManifest(context.Context, string, string) ([]byte, string, error) {
+	if r.calls.Add(1) == 1 {
 		return nil, "", errors.New("registry down")
 	}
 	return nil, "", fmt.Errorf("get manifest: %w", snapshot.ErrManifestNotFound)

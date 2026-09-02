@@ -97,18 +97,21 @@ func podStatusMatches(current, expected corev1.PodStatus) bool {
 }
 
 func conditionMatches(current, expected []corev1.PodCondition, conditionType corev1.PodConditionType) bool {
-	currentStatus, currentFound := conditionStatus(current, conditionType)
-	expectedStatus, expectedFound := conditionStatus(expected, conditionType)
-	return currentFound == expectedFound && currentStatus == expectedStatus
+	currentCondition, currentFound := findCondition(current, conditionType)
+	expectedCondition, expectedFound := findCondition(expected, conditionType)
+	if currentFound != expectedFound || currentCondition.Status != expectedCondition.Status {
+		return false
+	}
+	return conditionType != corev1.PodReady || currentCondition.Message == expectedCondition.Message
 }
 
-func conditionStatus(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.ConditionStatus, bool) {
+func findCondition(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.PodCondition, bool) {
 	for _, condition := range conditions {
 		if condition.Type == conditionType {
-			return condition.Status, true
+			return condition, true
 		}
 	}
-	return "", false
+	return corev1.PodCondition{}, false
 }
 
 func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {

@@ -182,7 +182,7 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo", IP: "192.0.2.10"})
 	readyNotifications := 0
 	p.notifyHook = func(notified *corev1.Pod) {
-		if ready, _ := conditionStatus(notified.Status.Conditions, corev1.PodReady); ready == corev1.ConditionTrue {
+		if ready, _ := findCondition(notified.Status.Conditions, corev1.PodReady); ready.Status == corev1.ConditionTrue {
 			readyNotifications++
 		}
 	}
@@ -226,8 +226,8 @@ func TestReadyPublicationNotifiesWhenLifecycleTransitionIsRejected(t *testing.T)
 	notified := false
 	p.notifyHook = func(updated *corev1.Pod) {
 		notified = true
-		if ready, _ := conditionStatus(updated.Status.Conditions, corev1.PodReady); ready != corev1.ConditionFalse {
-			t.Fatalf("Ready = %s, want False while lifecycle remains failed", ready)
+		if ready, _ := findCondition(updated.Status.Conditions, corev1.PodReady); ready.Status != corev1.ConditionFalse {
+			t.Fatalf("Ready = %s, want False while lifecycle remains failed", ready.Status)
 		}
 	}
 

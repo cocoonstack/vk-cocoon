@@ -125,7 +125,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	if p.Pusher != nil {
 		pushStart := time.Now()
 		// spec.Image rides as the baseimage annotation for hibernateEvidence's identity guard.
-		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
+		if err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
 			p.rollbackHibernateNIC(ctx, v, dropNIC)
