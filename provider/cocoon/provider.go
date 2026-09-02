@@ -151,7 +151,7 @@ func NewProvider(ctx context.Context) *Provider {
 		lifecycleCtx:     lifecycleCtx,
 		lifecycleStop:    lifecycleStop,
 		OrphanPolicy:     provider.OrphanDestroy,
-		RestoreMode:      vm.RestoreOnDemand,
+		RestoreMode:      vm.RestoreMmap,
 		Pinger:           network.NopPinger{},
 		pods:             map[string]*corev1.Pod{},
 		vmsByPod:         map[string]*vm.VM{},
