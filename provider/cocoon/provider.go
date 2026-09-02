@@ -3,6 +3,7 @@ package cocoon
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -250,11 +251,17 @@ func (p *Provider) reconcilePodStatuses(ctx context.Context) {
 			logger.Errorf(ctx, err, "derive pod %s/%s status", pod.Namespace, pod.Name)
 			return
 		}
-		if !p.trackedPodMatches(meta.PodKey(pod.Namespace, pod.Name), pod.UID) {
+		key := meta.PodKey(pod.Namespace, pod.Name)
+		if !p.trackedPodMatches(key, pod.UID) {
 			return
 		}
-		p.reconcileRuntimeEndpoints(ctx, current, status.PodIP)
+		if !p.reconcileRuntimeEndpoints(ctx, current, status.PodIP) {
+			return
+		}
 		if podStatusMatches(current.Status, *status) {
+			return
+		}
+		if !p.trackedPodMatches(key, pod.UID) {
 			return
 		}
 		current.Status = *status
@@ -762,17 +769,31 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 	return lastErr
 }
 
-// patchPodAnnotations patches the given annotations onto a pod via the API server.
 func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) error {
+	patch, err := commonk8s.AnnotationsMergePatch(annos)
+	if err != nil {
+		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
+	}
+	return p.patchPod(ctx, namespace, name, patch)
+}
+
+// patchIncarnationAnnotations carries metadata.uid so the apiserver rejects the patch once another incarnation owns the name.
+func (p *Provider) patchIncarnationAnnotations(ctx context.Context, pod *corev1.Pod, annos map[string]any) error {
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": pod.UID, "annotations": annos},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal annotations %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
+	return p.patchPod(ctx, pod.Namespace, pod.Name, patch)
+}
+
+func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch []byte) error {
 	if p.Clientset == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	patch, err := commonk8s.AnnotationsMergePatch(annos)
-	if err != nil {
-		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
-	}
 	if _, err := p.Clientset.CoreV1().Pods(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch annotations %s/%s: %w", namespace, name, err)
 	}

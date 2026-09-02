@@ -12,6 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -523,7 +524,7 @@ func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.
 	}
 }
 
-func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) {
+func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) bool {
 	annos := map[string]any{}
 	addAnnotationPatch(annos, meta.AnnotationIP, pod.Annotations[meta.AnnotationIP], ip)
 
@@ -540,14 +541,22 @@ func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Po
 		addAnnotationPatch(annos, meta.AnnotationVNCPort, pod.Annotations[meta.AnnotationVNCPort], vnc)
 	}
 	if len(annos) == 0 {
-		return
+		return true
 	}
-	if err := patchWithRetry(ctx, func() error {
-		return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, annos)
-	}); err != nil {
-		log.WithFunc("Provider.reconcileRuntimeEndpoints").
-			Errorf(ctx, err, "runtime endpoint annotation reconciliation failed for %s/%s", pod.Namespace, pod.Name)
+	logger := log.WithFunc("Provider.reconcileRuntimeEndpoints")
+	err := patchWithRetry(ctx, func() error {
+		return p.patchIncarnationAnnotations(ctx, pod, annos)
+	})
+	switch {
+	case err == nil:
+	case apierrors.IsInvalid(err) || apierrors.IsConflict(err):
+		logger.Infof(ctx, "runtime endpoints for %s/%s superseded by a newer incarnation, skipping",
+			pod.Namespace, pod.Name)
+		return false
+	default:
+		logger.Errorf(ctx, err, "runtime endpoint annotation reconciliation failed for %s/%s", pod.Namespace, pod.Name)
 	}
+	return true
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

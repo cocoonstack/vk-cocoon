@@ -1,11 +1,17 @@
 package cocoon
 
 import (
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	corev1listers "k8s.io/client-go/listers/core/v1"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/probes"
@@ -159,6 +165,80 @@ func TestReconcilePodStatusesRepublishesProbeMessageDrift(t *testing.T) {
 	}
 }
 
+func TestReconcilePodStatusesSkipsSupersededIncarnationBehindStaleLister(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podA.Annotations[meta.AnnotationIP] = "192.0.2.10"
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(podA)
+	podA.Status = runningPodStatus(corev1.ConditionFalse)
+
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+	podB.Annotations[meta.AnnotationIP] = "192.0.2.99"
+	podB.Status = corev1.PodStatus{Phase: corev1.PodPending}
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	p.Pods = stalePodLister(t, podA)
+	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.55"})
+
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) {
+		notified <- updated
+	}
+	p.reconcilePodStatuses(t.Context())
+
+	live, err := client.CoreV1().Pods(podB.Namespace).Get(t.Context(), podB.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if ip := live.Annotations[meta.AnnotationIP]; ip != "192.0.2.99" {
+		t.Errorf("successor IP annotation = %q, want its own 192.0.2.99", ip)
+	}
+	select {
+	case updated := <-notified:
+		t.Errorf("enqueued status of superseded incarnation %q", updated.UID)
+	default:
+	}
+}
+
+func TestReconcilePodStatusesDropsNotifyWhenTrackingFlipsDuringPatch(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podA.Annotations[meta.AnnotationIP] = "192.0.2.10"
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(podA)
+	podA.Status = runningPodStatus(corev1.ConditionFalse)
+
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podA)
+	client.PrependReactor("patch", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		p.trackPod(podB, nil)
+		return false, nil, nil
+	})
+	p.Clientset = client
+	p.Pods = stalePodLister(t, podA)
+	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.55"})
+
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) {
+		notified <- updated
+	}
+	p.reconcilePodStatuses(t.Context())
+
+	select {
+	case updated := <-notified:
+		t.Errorf("enqueued status of incarnation %q after tracking moved on", updated.UID)
+	default:
+	}
+}
+
 func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", OS: "windows"})
 	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}.Apply(pod)
@@ -176,6 +256,35 @@ func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
 	}
 	if status.ContainerStatuses[0].Ready {
 		t.Fatal("container Ready = true while lifecycle is creating")
+	}
+}
+
+func stalePodLister(t *testing.T, pods ...*corev1.Pod) corev1listers.PodLister {
+	t.Helper()
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
+	})
+	for _, pod := range pods {
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("seed lister with %s/%s: %v", pod.Namespace, pod.Name, err)
+		}
+	}
+	return corev1listers.NewPodLister(indexer)
+}
+
+func rejectMismatchedUID(uid string) k8stesting.ReactionFunc {
+	return func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(k8stesting.PatchAction)
+		var body map[string]map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &body); err != nil {
+			return true, nil, err
+		}
+		patched, _ := body["metadata"]["uid"].(string)
+		if patched == "" || patched == uid {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewInvalid(
+			corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), patchAction.GetName(), nil)
 	}
 }
 
