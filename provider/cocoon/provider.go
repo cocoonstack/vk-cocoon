@@ -193,7 +193,11 @@ func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Po
 func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return slices.Collect(maps.Values(p.pods)), nil
+	pods := make([]*corev1.Pod, 0, len(p.pods))
+	for _, pod := range p.pods {
+		pods = append(pods, pod.DeepCopy())
+	}
+	return pods, nil
 }
 
 // NotifyPods stores the kubelet's pod-status callback and schedules a deferred
