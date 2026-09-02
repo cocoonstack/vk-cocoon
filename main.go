@@ -54,7 +54,7 @@ const (
 	defaultNodeName     = "cocoon-pool"
 	defaultMetricsAddr  = ":9091"
 	defaultOrphanPolicy = string(provider.OrphanDestroy)
-	defaultRestoreMode  = string(vm.RestoreOnDemand)
+	defaultRestoreMode  = string(vm.RestoreMmap)
 	// defaultStagingDir must share a filesystem with cocoon's data dir (clone hardlinks).
 	defaultStagingDir = "/var/lib/cocoon/vk-staging"
 	// defaultPeerAddr serves snapshots to waking peers; they dial this port by convention.

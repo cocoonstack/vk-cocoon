@@ -388,8 +388,8 @@ func TestCreatePodCloneFromDirAnnotationDispatches(t *testing.T) {
 	if rt.cloned.From != "" {
 		t.Errorf("clone From = %q, want empty when FromDir is set", rt.cloned.From)
 	}
-	if rt.cloned.RestoreMode != vm.RestoreOnDemand {
-		t.Errorf("RestoreMode = %q, want %q on clone-from-dir path", rt.cloned.RestoreMode, vm.RestoreOnDemand)
+	if rt.cloned.RestoreMode != vm.RestoreMmap {
+		t.Errorf("RestoreMode = %q, want %q on clone-from-dir path", rt.cloned.RestoreMode, vm.RestoreMmap)
 	}
 	if rt.snapshotSaveCount != 0 || len(rt.ensuredImages) != 0 {
 		t.Errorf("from-dir path should bypass snapshot/ensure: save=%d images=%v",
