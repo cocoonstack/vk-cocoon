@@ -671,27 +671,12 @@ func TestUpdatePodReadsPodBeforeTracking(t *testing.T) {
 	key := meta.PodKey(base.Namespace, base.Name)
 	p.trackPod(base.DeepCopy(), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"})
 
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			p.mu.Lock()
-			p.pods[key].Annotations[annotationPostCloneState] = postCloneStateDone
-			p.mu.Unlock()
-		}
-	})
+	hammerPodAnnotation(t, p, key)
 	for range 200 {
 		if err := p.UpdatePod(t.Context(), base.DeepCopy()); err != nil {
 			t.Fatalf("UpdatePod: %v", err)
 		}
 	}
-	close(stop)
-	wg.Wait()
 }
 
 func TestGetPodsReturnsCopies(t *testing.T) {
@@ -700,6 +685,18 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 	key := meta.PodKey(base.Namespace, base.Name)
 	p.trackPod(base.DeepCopy(), nil)
 
+	hammerPodAnnotation(t, p, key)
+	for range 200 {
+		pods, err := p.GetPods(t.Context())
+		if err != nil || len(pods) != 1 {
+			t.Fatalf("GetPods = %v, %v, want one pod", pods, err)
+		}
+		_ = pods[0].Annotations[annotationPostCloneState]
+	}
+}
+
+func hammerPodAnnotation(t *testing.T, p *Provider, key string) {
+	t.Helper()
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -714,15 +711,10 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 			p.mu.Unlock()
 		}
 	})
-	for range 200 {
-		pods, err := p.GetPods(t.Context())
-		if err != nil || len(pods) != 1 {
-			t.Fatalf("GetPods = %v, %v, want one pod", pods, err)
-		}
-		_ = pods[0].Annotations[annotationPostCloneState]
-	}
-	close(stop)
-	wg.Wait()
+	t.Cleanup(func() {
+		close(stop)
+		wg.Wait()
+	})
 }
 
 func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provider, *corev1.Pod) {
