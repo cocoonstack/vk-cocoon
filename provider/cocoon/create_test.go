@@ -1996,6 +1996,40 @@ func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
 	}
 }
 
+func TestEvictGoneIncarnationSkipsWhenSuccessorOwnsTheKey(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	deletes := 0
+	client.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		deletes++
+		return false, nil, nil
+	})
+	p.Clientset = client
+	p.Runtime = &fakeRuntime{}
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+
+	key := meta.PodKey("ns", "demo-0")
+	p.evictGoneIncarnation(t.Context(), key, podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}, "VMGone", "vm no longer exists")
+
+	if deletes != 0 {
+		t.Fatalf("apiserver deletes = %d, want none when a successor owns the key", deletes)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Fatalf("tracked VM = %#v, want the successor's vmid-b", got)
+	}
+	p.mu.Lock()
+	held := p.deletingLocked(key)
+	p.mu.Unlock()
+	if held {
+		t.Fatal("rejected eviction left the deleting fence set")
+	}
+}
+
 func TestReconcileRuntimeEndpointsReportsSupersededWhenPodIsGone(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.UID = "a"

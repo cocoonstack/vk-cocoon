@@ -97,6 +97,36 @@ func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
 	}
 }
 
+func TestDeletePodRejectsWhileDeleteInFlight(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.trackPod(pod, &vm.VM{ID: "vmid-inflight", Name: "vk-ns-demo-0"})
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.Lock()
+	p.deleting[key] = struct{}{}
+	p.mu.Unlock()
+
+	err := p.DeletePod(t.Context(), pod)
+
+	if err == nil || !strings.Contains(err.Error(), "delete operation still in flight") {
+		t.Fatalf("DeletePod error = %v, want in-flight deletion", err)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("removed VM = %q, want none while a delete is in flight", rt.removedID)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-inflight" {
+		t.Fatalf("tracked VM = %#v, want vmid-inflight kept", got)
+	}
+	p.mu.Lock()
+	held := p.deletingLocked(key)
+	p.mu.Unlock()
+	if !held {
+		t.Fatal("rejected delete cleared the fence held by the in-flight delete")
+	}
+}
+
 func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	rt := &fakeRuntime{}
 	releaser := &recordingLeaseReleaser{}
