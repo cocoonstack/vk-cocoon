@@ -109,6 +109,7 @@ type Provider struct {
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
 	vmsByName      map[string]*vm.VM
+	vmCountsByNS   map[string]int
 	macosVNC       map[string]int       // key=pod, node-unique VNC host-port reservations for macOS guests
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
@@ -159,6 +160,7 @@ func NewProvider(ctx context.Context) *Provider {
 		pods:            map[string]*corev1.Pod{},
 		vmsByPod:        map[string]*vm.VM{},
 		vmsByName:       map[string]*vm.VM{},
+		vmCountsByNS:    map[string]int{},
 		macosVNC:        map[string]int{},
 		lastRestart:     map[string]time.Time{},
 		pendingRecheck:  map[string]struct{}{},
@@ -333,14 +335,22 @@ func (p *Provider) trackPodLocked(pod *corev1.Pod, v *vm.VM) {
 	if v != nil {
 		p.setVMLocked(key, v)
 	}
-	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
 
 // setVMLocked writes v into both VM tables under p.mu; the write half of dropVMLocked.
 func (p *Provider) setVMLocked(key string, v *vm.VM) {
+	_, alreadyTracked := p.vmsByPod[key]
 	p.vmsByPod[key] = v
 	if v.Name != "" {
 		p.vmsByName[v.Name] = v
+	}
+	if !alreadyTracked {
+		namespace, _ := splitPodKey(key)
+		if p.vmCountsByNS == nil {
+			p.vmCountsByNS = map[string]int{}
+		}
+		p.vmCountsByNS[namespace]++
+		metrics.VMTableSize.WithLabelValues(namespace).Set(float64(p.vmCountsByNS[namespace]))
 	}
 }
 
@@ -354,7 +364,14 @@ func (p *Provider) dropVMLocked(key string) {
 		delete(p.vmsByName, v.Name)
 	}
 	delete(p.vmsByPod, key)
-	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
+	namespace, _ := splitPodKey(key)
+	if p.vmCountsByNS[namespace] <= 1 {
+		delete(p.vmCountsByNS, namespace)
+		metrics.VMTableSize.DeleteLabelValues(namespace)
+		return
+	}
+	p.vmCountsByNS[namespace]--
+	metrics.VMTableSize.WithLabelValues(namespace).Set(float64(p.vmCountsByNS[namespace]))
 }
 
 func (p *Provider) gcStaleRestarts() {

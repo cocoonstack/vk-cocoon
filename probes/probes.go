@@ -3,8 +3,11 @@ package probes
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/vk-cocoon/metrics"
@@ -35,7 +38,8 @@ type OnUpdate func(ctx context.Context)
 
 // agent is a per-pod probe goroutine, canceled by Forget or shutdown.
 type agent struct {
-	cancel context.CancelFunc
+	cancel        context.CancelFunc
+	probeDuration prometheus.Observer
 }
 
 // Manager tracks probe results per pod and manages per-pod agent goroutines.
@@ -97,11 +101,15 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 		delete(m.agents, key)
 	}
 	ctx, cancel := context.WithCancel(m.agentRoot)
-	ag := &agent{cancel: cancel}
+	namespace, _, _ := strings.Cut(key, "/")
+	ag := &agent{
+		cancel:        cancel,
+		probeDuration: metrics.ProbeDuration.WithLabelValues(namespace),
+	}
 	m.agents[key] = ag
 	m.mu.Unlock()
 
-	ready, message := runProbe(ctx, probe)
+	ready, message := runProbe(ctx, probe, ag.probeDuration)
 	if !m.setOwned(key, ag, Result{Ready: ready, Message: message}) {
 		cancel()
 		return
@@ -139,7 +147,7 @@ func (m *Manager) run(ctx context.Context, key string, ag *agent, probe Probe, o
 			return
 		}
 
-		ready, message := runProbe(ctx, probe)
+		ready, message := runProbe(ctx, probe, ag.probeDuration)
 		if !m.setOwned(key, ag, Result{Ready: ready, Message: message}) {
 			return
 		}
@@ -174,11 +182,11 @@ func nextInitialInterval(d time.Duration) time.Duration {
 	return min(time.Duration(float64(d)*defaultInitialBackoffStep), defaultInitialBackoffMax)
 }
 
-func runProbe(ctx context.Context, probe Probe) (bool, string) {
+func runProbe(ctx context.Context, probe Probe, duration prometheus.Observer) (bool, string) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	start := time.Now()
 	ok, msg := probe(probeCtx)
-	metrics.ProbeDuration.Observe(time.Since(start).Seconds())
+	duration.Observe(time.Since(start).Seconds())
 	return ok, msg
 }

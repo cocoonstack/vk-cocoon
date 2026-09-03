@@ -52,7 +52,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	if meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName)) && p.Pusher != nil && v.Name != "" {
-		p.saveAndPushSnapshot(ctx, v.Name, v.ID, meta.DefaultSnapshotTag, spec.Image)
+		p.saveAndPushSnapshot(ctx, pod, v, meta.DefaultSnapshotTag, spec.Image)
 	}
 
 	if err := p.removeVM(ctx, v); err != nil {
