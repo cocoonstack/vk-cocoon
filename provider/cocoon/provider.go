@@ -36,6 +36,10 @@ import (
 )
 
 const (
+	deleteClaimed deleteClaim = iota
+	deleteInFlight
+	deleteSuperseded
+
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
 
@@ -49,10 +53,6 @@ const (
 	// evictDeleteAttempts and evictDeleteBaseDelay stay small so a flaky apiserver cannot stall the serialized event loop.
 	evictDeleteAttempts  = 2
 	evictDeleteBaseDelay = 200 * time.Millisecond
-
-	deleteClaimed deleteClaim = iota
-	deleteInFlight
-	deleteSuperseded
 
 	// inlineInspectAttempts covers one CLI hiccup; the deferred recheck takes over beyond it.
 	inlineInspectAttempts = 2
@@ -72,9 +72,9 @@ const (
 
 type podNotifier func(*corev1.Pod)
 
-// Provider maps Kubernetes pods to cocoon MicroVMs.
 type deleteClaim int
 
+// Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
 	NodeName                   string
 	SnapshotCompatibilityClass string
