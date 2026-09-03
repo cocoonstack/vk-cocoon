@@ -351,7 +351,9 @@ func (p *Provider) dropVMLocked(key string) {
 		return
 	}
 	delete(p.lastRestart, v.ID)
-	delete(p.vmsByName, v.Name)
+	if p.vmsByName[v.Name] == v {
+		delete(p.vmsByName, v.Name)
+	}
 	delete(p.vmsByPod, key)
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }

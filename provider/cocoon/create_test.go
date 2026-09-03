@@ -1996,6 +1996,30 @@ func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
 	}
 }
 
+func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+	p := newTestProvider(t)
+	vmA := &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}
+	vmB := &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"}
+	p.trackPod(podA, vmA)
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.Lock()
+	p.deleting[key] = struct{}{}
+	p.mu.Unlock()
+
+	if p.trackPodIncarnation(podB, vmB) {
+		t.Fatal("bind during an in-flight delete must be rejected")
+	}
+	p.untrackPod(key)
+
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Fatalf("orphan by name = %#v, want vmid-b kept for adoption", got)
+	}
+}
+
 func TestEvictGoneIncarnationSkipsWhenSuccessorOwnsTheKey(t *testing.T) {
 	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	podA.UID = "a"
