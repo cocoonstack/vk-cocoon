@@ -97,6 +97,88 @@ func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
 	}
 }
 
+func TestDeletePodRejectsWhileDeleteInFlight(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.trackPod(pod, &vm.VM{ID: "vmid-inflight", Name: "vk-ns-demo-0"})
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.Lock()
+	p.deleting[key] = struct{}{}
+	p.mu.Unlock()
+
+	err := p.DeletePod(t.Context(), pod)
+
+	if err == nil || !strings.Contains(err.Error(), "delete operation still in flight") {
+		t.Fatalf("DeletePod error = %v, want in-flight deletion", err)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("removed VM = %q, want none while a delete is in flight", rt.removedID)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-inflight" {
+		t.Fatalf("tracked VM = %#v, want vmid-inflight kept", got)
+	}
+	p.mu.Lock()
+	held := p.deletingLocked(key)
+	p.mu.Unlock()
+	if !held {
+		t.Fatal("rejected delete cleared the fence held by the in-flight delete")
+	}
+}
+
+func TestDeletePodSkipsASupersededIncarnation(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+
+	if err := p.DeletePod(t.Context(), podA); err != nil {
+		t.Fatalf("DeletePod of the superseded incarnation: %v", err)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("removed VM = %q, want the successor's VM kept", rt.removedID)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Fatalf("tracked VM = %#v, want the successor's vmid-b", got)
+	}
+	if _, uid, tracked := p.trackedIncarnation(meta.PodKey("ns", "demo-0")); !tracked || uid != podB.UID {
+		t.Fatalf("tracked UID = %q (%v), want %q", uid, tracked, podB.UID)
+	}
+}
+
+func TestDeletePodSkipsASupersededIncarnationWhileAnotherDeleteIsInFlight(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.Lock()
+	p.deleting[key] = struct{}{}
+	p.mu.Unlock()
+
+	if err := p.DeletePod(t.Context(), podA); err != nil {
+		t.Fatalf("DeletePod of the superseded incarnation: %v", err)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("removed VM = %q, want the successor's VM kept", rt.removedID)
+	}
+	p.mu.Lock()
+	held := p.deletingLocked(key)
+	p.mu.Unlock()
+	if !held {
+		t.Fatal("superseded delete released the fence held by the in-flight delete")
+	}
+}
+
 func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	rt := &fakeRuntime{}
 	releaser := &recordingLeaseReleaser{}

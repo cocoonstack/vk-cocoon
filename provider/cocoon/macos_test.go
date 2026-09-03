@@ -148,7 +148,7 @@ func TestMacosProbeUsesDeclaredProbePort(t *testing.T) {
 		State: vm.StateRunning, IP: "127.0.0.1", MAC: "52:54:00:12:34:56",
 	})
 
-	probe := p.buildMacosProbe("ns", "demo-0")
+	probe := p.buildMacosProbe("ns", "demo-0", pod.UID)
 	if ready, msg := probe(t.Context()); !ready || msg != "tcp ok" {
 		t.Fatalf("declared probe port should make macOS ready, got ready=%v msg=%q", ready, msg)
 	}
@@ -445,7 +445,7 @@ func TestMacosProbeRestartsDeadQemu(t *testing.T) {
 		State: vm.StateRunning, PID: 4242, MAC: "52:54:00:12:34:56",
 	})
 
-	probe := p.buildMacosProbe("ns", "demo-0")
+	probe := p.buildMacosProbe("ns", "demo-0", pod.UID)
 	if ready, msg := probe(t.Context()); ready || !strings.Contains(msg, "restarted") {
 		t.Fatalf("dead qemu must trigger a restart, got ready=%v msg=%q", ready, msg)
 	}
@@ -494,7 +494,7 @@ func TestMacosRecoverClearsDisabledVNC(t *testing.T) {
 	p.macosVNC[key] = 5907
 	p.mu.Unlock()
 
-	if msg := p.recoverMacosVM(t.Context(), pod.Namespace, pod.Name, p.vmForPod(pod.Namespace, pod.Name)); !strings.Contains(msg, "restarted") {
+	if msg := p.recoverMacosVM(t.Context(), pod.Namespace, pod.Name, pod.UID, p.vmForPod(pod.Namespace, pod.Name)); !strings.Contains(msg, "restarted") {
 		t.Fatalf("recoverMacosVM = %q, want restarted", msg)
 	}
 	if port := p.macosVNCPortFor(key); port != 0 {
@@ -510,6 +510,39 @@ func TestMacosRecoverClearsDisabledVNC(t *testing.T) {
 	starts := macosCallsWithPrefix(calls(), "vm", "start")
 	if len(starts) != 1 || slices.Contains(starts[0], "--vnc") {
 		t.Fatalf("VNC-off recovery must start without a display, got %v", starts)
+	}
+}
+
+func TestMacosRecoverSkipsSupersededIncarnation(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	pod.UID = "b"
+	p.Clientset = fake.NewSimpleClientset(pod)
+	started := false
+	p.macosProcessAliveFn = func(pid int) bool { return started && pid == 4243 }
+	stubMacosExec(p, func(args []string) (string, error) {
+		switch {
+		case macosCallIs(args, "vm", "start"):
+			started = true
+			return "macos-demo (pid 4243)\n", nil
+		case macosCallIs(args, "vm", "inspect"):
+			if started {
+				return strings.Replace(macosInspectJSON, "4242", "4243", 1), nil
+			}
+			return macosInspectJSON, nil
+		default:
+			return "", nil
+		}
+	})
+	p.trackPod(pod, &vm.VM{
+		ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor,
+		State: vm.StateRunning, PID: 4242, MAC: "52:54:00:12:34:56",
+	})
+
+	p.recoverMacosVM(t.Context(), "ns", "demo-0", "a", p.vmForPod("ns", "demo-0"))
+
+	if v := p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4242 {
+		t.Fatalf("a superseded probe rewrote the successor's record: %+v", v)
 	}
 }
 
@@ -544,13 +577,13 @@ func TestMacosRecoverAdoptsSlowStartedQemu(t *testing.T) {
 	})
 
 	v := p.vmForPod("ns", "demo-0")
-	if msg := p.recoverMacosVM(t.Context(), "ns", "demo-0", v); !strings.Contains(msg, "restarted") {
+	if msg := p.recoverMacosVM(t.Context(), "ns", "demo-0", pod.UID, v); !strings.Contains(msg, "restarted") {
 		t.Fatalf("first round must start the dead record, got %q", msg)
 	}
 	if v = p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4242 {
 		t.Fatalf("failed post-start inspect must leave the record unchanged, got %+v", v)
 	}
-	if msg := p.recoverMacosVM(t.Context(), "ns", "demo-0", v); !strings.Contains(msg, "adopted") {
+	if msg := p.recoverMacosVM(t.Context(), "ns", "demo-0", pod.UID, v); !strings.Contains(msg, "adopted") {
 		t.Fatalf("second round must adopt the running qemu, got %q", msg)
 	}
 	if v = p.vmForPod("ns", "demo-0"); v == nil || v.PID != 4243 {

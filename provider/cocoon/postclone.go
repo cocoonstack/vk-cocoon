@@ -177,14 +177,11 @@ func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM,
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	target := p.pods[key]
-	if target != nil && target.UID != pod.UID {
+	if p.supersededLocked(key, pod.UID) {
 		p.mu.Unlock()
 		return
 	}
-	if target == nil {
-		target = pod
-	}
+	target := cmp.Or(p.pods[key], pod)
 	if target.Annotations == nil {
 		target.Annotations = map[string]string{}
 	}
@@ -194,7 +191,9 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
+	if err := p.patchIncarnationAnnotations(
+		ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{annotationPostCloneState: state},
+	); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", annotationPostCloneState, pod.Namespace, pod.Name)
 	}
@@ -215,7 +214,7 @@ func (p *Provider) emitPostCloneHint(ctx context.Context, pod *corev1.Pod, plan 
 // setPodAnnotation writes one annotation locally under p.mu and patches it best-effort.
 func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, val string) {
 	p.mu.Lock()
-	if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID != pod.UID {
+	if p.supersededLocked(meta.PodKey(pod.Namespace, pod.Name), pod.UID) {
 		p.mu.Unlock()
 		return
 	}
@@ -224,7 +223,9 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	}
 	pod.Annotations[key] = val
 	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{key: val}); err != nil {
+	if err := p.patchIncarnationAnnotations(
+		ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{key: val},
+	); err != nil {
 		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}

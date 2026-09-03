@@ -57,9 +57,29 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	spec := meta.ParseVMSpec(pod)
 	wantHibernate := bool(meta.ReadHibernateState(pod))
-	v := p.vmForPod(pod.Namespace, pod.Name)
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	v, trackedUID, tracked := p.trackedIncarnation(key)
+	// an untracked pod with nothing to wake from is a recreate, not a wake
+	if !tracked && v == nil && !wantHibernate {
+		hasSource, err := p.hasWakeSource(ctx, spec)
+		if err != nil {
+			return err
+		}
+		if !hasSource {
+			return p.CreatePod(ctx, pod)
+		}
+	}
+	// a same-name recreate reaches the provider as an update while the old incarnation is still tracked
+	if tracked && trackedUID != pod.UID {
+		if !p.detachIncarnation(key, trackedUID, v) {
+			return errDeleteInFlight(pod)
+		}
+		return p.CreatePod(ctx, pod)
+	}
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
-	p.trackPod(pod, nil)
+	if !p.trackPodUnlessDeleting(pod, nil) {
+		return errDeleteInFlight(pod)
+	}
 
 	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.
 	if isMacosSpec(spec) {
@@ -80,8 +100,12 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	case !wantHibernate && !haveVM:
-		if err := p.wake(ctx, pod, spec); err != nil {
+		woken, err := p.wake(ctx, pod, spec)
+		if err != nil {
 			return err
+		}
+		if !woken {
+			return nil
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	default:
@@ -211,10 +235,10 @@ func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped b
 	}
 }
 
-// wake restores the VM from the hibernation snapshot; dispatchHibernateRestore handles the post-restore step.
-func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
+// wake restores the VM from the hibernation snapshot; ok=false means a newer incarnation owns the pod key.
+func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
 	if spec.VMName == "" {
-		return nil
+		return true, nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 	// annotations that survived a failed clear at hibernate must not describe the incarnation this wake creates.
@@ -225,22 +249,24 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
-		return err
+		return false, err
 	}
 	cloneStart := time.Now()
 	v, err := p.cloneFromHibernate(ctx, spec, src, podCPUPolicy(pod))
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
-		return err
+		return false, err
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	p.applyRuntime(ctx, pod, v)
-	p.trackPod(pod, v)
+	if !p.applyRuntime(ctx, pod, v) {
+		p.skipSuperseded(ctx, pod, "update")
+		return false, nil
+	}
 	p.startProbeIfEnabled(pod)
 	p.dispatchHibernateRestore(pod, spec, v, "update")
 	p.emitNormalf(pod, "Woken", "cloned from %s", src.label())
-	return nil
+	return true, nil
 }
 
 // cloneFromHibernate clones from a resolved wake source; CH+Windows snapshots are NIC-less, so it hot-adds a fresh NIC.
@@ -433,6 +459,25 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
+func (p *Provider) hasWakeSource(ctx context.Context, spec meta.VMSpec) (bool, error) {
+	if isMacosSpec(spec) {
+		return false, nil
+	}
+	if _, err := p.Runtime.Snapshot(ctx, spec.VMName); err == nil {
+		return true, nil
+	} else if !errors.Is(err, vm.ErrSnapshotNotFound) {
+		return false, fmt.Errorf("inspect local snapshot %s: %w", spec.VMName, err)
+	}
+	if p.Puller == nil {
+		return false, nil
+	}
+	if p.Registry == nil {
+		return true, nil
+	}
+	_, ok, err := p.fetchHibernateManifest(ctx, spec.VMName)
+	return ok, err
 }
 
 // wakeSource is a resolved wake clone source: a named snapshot, or a peer-staged dir for `vm clone --from-dir`.

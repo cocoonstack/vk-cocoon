@@ -36,6 +36,10 @@ import (
 )
 
 const (
+	deleteClaimed deleteClaim = iota
+	deleteInFlight
+	deleteSuperseded
+
 	// restartCooldown prevents tight restart loops when a VM keeps crashing.
 	restartCooldown = 30 * time.Second
 
@@ -67,6 +71,8 @@ const (
 )
 
 type podNotifier func(*corev1.Pod)
+
+type deleteClaim int
 
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
@@ -295,6 +301,32 @@ func (p *Provider) notify(pod *corev1.Pod) {
 func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.trackPodLocked(pod, v)
+}
+
+func (p *Provider) trackPodUnlessDeleting(pod *corev1.Pod, v *vm.VM) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deletingLocked(meta.PodKey(pod.Namespace, pod.Name)) {
+		return false
+	}
+	p.trackPodLocked(pod, v)
+	return true
+}
+
+func (p *Provider) trackPodIncarnation(pod *corev1.Pod, v *vm.VM) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if p.deletingLocked(key) || p.supersededLocked(key, pod.UID) {
+		p.indexOrphanByNameLocked(v)
+		return false
+	}
+	p.trackPodLocked(pod, v)
+	return true
+}
+
+func (p *Provider) trackPodLocked(pod *corev1.Pod, v *vm.VM) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.reassertLifecycleLocked(key, pod)
 	p.pods[key] = pod
@@ -319,7 +351,9 @@ func (p *Provider) dropVMLocked(key string) {
 		return
 	}
 	delete(p.lastRestart, v.ID)
-	delete(p.vmsByName, v.Name)
+	if p.vmsByName[v.Name] == v {
+		delete(p.vmsByName, v.Name)
+	}
 	delete(p.vmsByPod, key)
 	metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 }
@@ -348,15 +382,37 @@ func (p *Provider) untrackPod(key string) {
 
 func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 	p.mu.Lock()
-	tracked, ok := p.pods[key]
-	dropped := ok && tracked.UID == uid
-	if dropped {
-		p.untrackLocked(key)
+	dropped := p.untrackIncarnationLocked(key, uid)
+	p.mu.Unlock()
+	if dropped && p.Probes != nil {
+		p.Probes.Forget(key)
+	}
+}
+
+func (p *Provider) detachIncarnation(key string, uid types.UID, v *vm.VM) bool {
+	p.mu.Lock()
+	if p.deletingLocked(key) {
+		p.mu.Unlock()
+		return false
+	}
+	dropped := p.untrackIncarnationLocked(key, uid)
+	if bound := p.vmsByPod[key]; v != nil && (bound == nil || bound.Name != v.Name) {
+		p.indexOrphanByNameLocked(v)
 	}
 	p.mu.Unlock()
 	if dropped && p.Probes != nil {
 		p.Probes.Forget(key)
 	}
+	return true
+}
+
+func (p *Provider) untrackIncarnationLocked(key string, uid types.UID) bool {
+	tracked, ok := p.pods[key]
+	if !ok || tracked.UID != uid {
+		return false
+	}
+	p.untrackLocked(key)
+	return true
 }
 
 func (p *Provider) untrackLocked(key string) {
@@ -364,13 +420,22 @@ func (p *Provider) untrackLocked(key string) {
 	delete(p.pods, key)
 	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
-	delete(p.deleting, key)
 }
 
 func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByPod[meta.PodKey(namespace, name)]
+}
+
+func (p *Provider) trackedIncarnation(key string) (*vm.VM, types.UID, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	tracked := p.pods[key]
+	if tracked == nil {
+		return p.vmsByPod[key], "", false
+	}
+	return p.vmsByPod[key], tracked.UID, true
 }
 
 func (p *Provider) trackedPodMatches(key string, uid types.UID) bool {
@@ -380,17 +445,48 @@ func (p *Provider) trackedPodMatches(key string, uid types.UID) bool {
 	return ok && tracked.UID == uid
 }
 
-func (p *Provider) trackedIncarnation(key string, uid types.UID, vmID string) *vm.VM {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	tracked, ok := p.pods[key]
-	if !ok || tracked.UID != uid {
-		return nil
+func (p *Provider) supersededLocked(key string, uid types.UID) bool {
+	tracked := p.pods[key]
+	return tracked != nil && tracked.UID != uid
+}
+
+func (p *Provider) claimDeletingIncarnation(key string, uid types.UID, vmID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deletingLocked(key) {
+		return false
 	}
-	if v, ok := p.vmsByPod[key]; ok && v.ID == vmID {
-		return v
+	tracked := p.pods[key]
+	v := p.vmsByPod[key]
+	if tracked == nil || tracked.UID != uid || v == nil || v.ID != vmID {
+		return false
 	}
-	return nil
+	p.deleting[key] = struct{}{}
+	return true
+}
+
+func (p *Provider) claimDeleting(key string, uid types.UID) deleteClaim {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.supersededLocked(key, uid) {
+		return deleteSuperseded
+	}
+	if p.deletingLocked(key) {
+		return deleteInFlight
+	}
+	p.deleting[key] = struct{}{}
+	return deleteClaimed
+}
+
+func (p *Provider) finishDeleting(key string) {
+	p.mu.Lock()
+	delete(p.deleting, key)
+	p.mu.Unlock()
+}
+
+func (p *Provider) deletingLocked(key string) bool {
+	_, deleting := p.deleting[key]
+	return deleting
 }
 
 // updateTrackedVM applies mutate copy-on-write and returns nil when the pod's VM changed underneath the caller.
@@ -435,6 +531,15 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 		return ""
 	}
 	return ip
+}
+
+func (p *Provider) seedLeaseIP(v *vm.VM) {
+	if v.IP != "" || v.MAC == "" || p.LeaseParser == nil {
+		return
+	}
+	if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
+		v.IP = lease.IP
+	}
 }
 
 // buildProbe returns a probe that resolves the VM's IP and pings it; ICMP works for Linux and Windows guests.
@@ -537,7 +642,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	}
 
 	p.mu.RLock()
-	_, midDelete := p.deleting[affectedKey]
+	midDelete := p.deletingLocked(affectedKey)
 	p.mu.RUnlock()
 	if midDelete {
 		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
@@ -548,15 +653,9 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
 	switch {
 	case errors.Is(err, vm.ErrVMNotFound):
-		tracked := p.trackedIncarnation(affectedKey, affectedPod.UID, trackedID)
-		if tracked == nil {
-			logger.Infof(ctx, "vm %s tracking changed before eviction, ignoring stale gone event", trackedID)
-			return
-		}
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		p.evictPod(ctx, affectedKey, affectedPod, "VMGone", "vm no longer exists")
-		p.releaseDHCPLeases(ctx, tracked)
+		p.evictGoneIncarnation(ctx, affectedKey, affectedPod, trackedVM, "VMGone", "vm no longer exists")
 
 	case err != nil:
 		// cocoon does not re-emit DELETED and probes only ping IPs, so a deferred recheck must settle a still-transient VM
@@ -598,17 +697,29 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 // removeThenEvict keeps the pod when the VM remove fails: evicting would orphan the live VM and collide on recreate.
 func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.removeThenEvict")
-	if p.trackedIncarnation(key, pod.UID, v.ID) == nil {
+	if !p.claimDeletingIncarnation(key, pod.UID, v.ID) {
 		logger.Infof(ctx, "vm %s tracking changed before %s eviction of pod %s/%s, skipping",
 			v.ID, reason, pod.Namespace, pod.Name)
 		return
 	}
+	defer p.finishDeleting(key)
 	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
 		logger.Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
-	p.evictPod(ctx, key, pod, reason, message)
 	p.releaseDHCPLeases(ctx, v)
+	p.evictPod(ctx, key, pod, reason, message)
+}
+
+func (p *Provider) evictGoneIncarnation(ctx context.Context, key string, pod *corev1.Pod, v *vm.VM, reason, message string) {
+	if !p.claimDeletingIncarnation(key, pod.UID, v.ID) {
+		log.WithFunc("Provider.evictGoneIncarnation").Infof(ctx, "vm %s tracking changed before %s eviction of pod %s/%s, skipping",
+			v.ID, reason, pod.Namespace, pod.Name)
+		return
+	}
+	defer p.finishDeleting(key)
+	p.releaseDHCPLeases(ctx, v)
+	p.evictPod(ctx, key, pod, reason, message)
 }
 
 // inspectWithRetry returns on a definitive result (success or ErrVMNotFound) and retries other errors with a growing delay.
@@ -669,8 +780,7 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 		case errors.Is(err, vm.ErrVMNotFound):
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
-			p.evictPod(ctx, key, pod, "VMGone", "vm no longer exists")
-			p.releaseDHCPLeases(ctx, tracked)
+			p.evictGoneIncarnation(ctx, key, pod, tracked, "VMGone", "vm no longer exists")
 			return
 		case err != nil:
 			if time.Now().After(deadline) {
@@ -715,11 +825,17 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) 
 	return "", nil, nil
 }
 
-// evictPod clears the in-memory tables only after the apiserver delete succeeds, so a live pod never loses its provider record.
+// evictPod clears the in-memory tables only once the apiserver delete succeeds or another incarnation owns the name, so a live pod never loses its provider record.
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
-	if err := p.deletePodWithRetry(ctx, pod); err != nil {
+	err := p.deletePodWithRetry(ctx, pod)
+	if apierrors.IsConflict(err) {
+		logger.Infof(ctx, "pod %s/%s was replaced before eviction, dropping superseded incarnation", pod.Namespace, pod.Name)
+		p.untrackIncarnation(key, pod.UID)
+		return
+	}
+	if err != nil {
 		logger.Errorf(ctx, err, "delete pod %s/%s failed after retries, keeping state for retry",
 			pod.Namespace, pod.Name)
 		metrics.PodEvictFailureTotal.Inc()
@@ -753,6 +869,9 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 		if err == nil || apierrors.IsNotFound(err) {
 			return nil
 		}
+		if apierrors.IsConflict(err) {
+			return err
+		}
 		lastErr = err
 		if i == evictDeleteAttempts-1 {
 			break
@@ -762,14 +881,6 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 		}
 	}
 	return lastErr
-}
-
-func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) error {
-	patch, err := commonk8s.AnnotationsMergePatch(annos)
-	if err != nil {
-		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
-	}
-	return p.patchPod(ctx, namespace, name, patch)
 }
 
 // patchIncarnationAnnotations carries metadata.uid so the apiserver rejects the patch once another incarnation owns the name.
@@ -797,12 +908,17 @@ func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch [
 
 // clearRuntimeAnnotations drops VMID, IP and the post-clone marker in memory (under p.mu) and on the apiserver.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
+	if p.supersededLocked(key, pod.UID) {
+		p.mu.Unlock()
+		return nil
+	}
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
 	delete(pod.Annotations, annotationPostCloneState)
 	p.mu.Unlock()
-	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
+	return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{
 		meta.AnnotationVMID:      nil,
 		meta.AnnotationIP:        nil,
 		annotationPostCloneState: nil,
@@ -825,8 +941,16 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 	}
 }
 
+func errDeleteInFlight(pod *corev1.Pod) error {
+	return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+}
+
 func patchSuperseded(err error) bool {
-	return apierrors.IsInvalid(err) || apierrors.IsConflict(err) || apierrors.IsNotFound(err)
+	return nameTaken(err) || apierrors.IsNotFound(err)
+}
+
+func nameTaken(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsConflict(err)
 }
 
 // patchWithRetry retries fn lifecyclePatchAttempts times; a canceled ctx returns nil since nothing is left to log against.
@@ -835,6 +959,9 @@ func patchWithRetry(ctx context.Context, fn func() error) error {
 	for i := range lifecyclePatchAttempts {
 		if lastErr = fn(); lastErr == nil {
 			return nil
+		}
+		if patchSuperseded(lastErr) {
+			return lastErr
 		}
 		if i == lifecyclePatchAttempts-1 {
 			break

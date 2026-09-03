@@ -21,7 +21,7 @@ var (
 			Name:      "pod_lifecycle_total",
 			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
-		// result=ok|failed|skipped; reason=adopted|noop|missing_vmname|no_vm|seat_release
+		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release
 		[]string{"op", labelResult, "reason"},
 	)
 

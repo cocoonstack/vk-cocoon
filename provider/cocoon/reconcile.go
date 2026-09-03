@@ -252,8 +252,10 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	}
 	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing)",
 		v.Name, pod.Namespace, pod.Name)
-	p.applyRuntime(ctx, pod, v)
-	p.trackPod(pod, v)
+	if !p.applyRuntime(ctx, pod, v) {
+		p.skipSuperseded(ctx, pod, "create")
+		return nil
+	}
 	p.seedLifecycleIntentFromPod(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v
@@ -291,12 +293,16 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 
 // indexOrphanByName exposes an orphan VM to vmByName so the next CreatePod for its pod takes the adopt branch.
 func (p *Provider) indexOrphanByName(v *vm.VM) {
-	if v.Name == "" {
+	p.mu.Lock()
+	p.indexOrphanByNameLocked(v)
+	p.mu.Unlock()
+}
+
+func (p *Provider) indexOrphanByNameLocked(v *vm.VM) {
+	if v == nil || v.Name == "" {
 		return
 	}
-	p.mu.Lock()
 	p.vmsByName[v.Name] = v
-	p.mu.Unlock()
 }
 
 // inFlightCreate: vm run passes through created between the create-lock windows.

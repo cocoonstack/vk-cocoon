@@ -22,6 +22,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -161,7 +162,10 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		logger.Infof(ctx, "%s: launched macOS VM %s (net=cni, vnc=%d)", key, spec.VMName, port)
 		rec = p.macosInspect(ctx, spec.VMName)
 	}
-	p.registerMacosVM(ctx, pod, spec, rec, port)
+	if !p.registerMacosVM(ctx, pod, spec, rec, port) {
+		p.skipSuperseded(ctx, pod, "create")
+		return nil
+	}
 
 	p.mu.Lock()
 	pod.Status.Phase = corev1.PodRunning
@@ -182,7 +186,7 @@ func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 }
 
 // registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and starts the macOS readiness probe.
-func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) {
+func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) bool {
 	v := &vm.VM{
 		ID:         macosVMID(spec.VMName),
 		Name:       spec.VMName,
@@ -190,11 +194,11 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		State:      vm.StateRunning,
 	}
 	applyMacosRecord(v, rec)
-	p.trackPod(pod, v)
+	p.seedLeaseIP(v)
 
 	rt := meta.VMRuntime{
 		VMID:    v.ID,
-		IP:      p.resolveVMIP(pod.Namespace, pod.Name, v),
+		IP:      v.IP,
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
 	if rt.IP == "" {
@@ -203,24 +207,31 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		rt.IP = pod.Annotations[meta.AnnotationIP]
 		p.mu.RUnlock()
 	}
-	p.applyVMRuntime(ctx, pod, rt)
+	if !p.bindRuntime(ctx, pod, v, rt) {
+		return false
+	}
 	if current, err := p.GetPod(ctx, pod.Namespace, pod.Name); err == nil {
 		p.reconcileRuntimeEndpoints(ctx, current, rt.IP)
 	}
 	p.startMacosProbe(pod)
+	return true
 }
 
 func (p *Provider) startMacosProbe(pod *corev1.Pod) {
 	p.startProbe(pod,
-		p.buildMacosProbe(pod.Namespace, pod.Name),
+		p.buildMacosProbe(pod.Namespace, pod.Name, pod.UID),
 		p.buildMacosOnUpdate(pod.Namespace, pod.Name))
 }
 
 // buildMacosProbe dials probePort when declared, else sshd: the lease lands minutes before sshd on a cold boot.
-func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
+func (p *Provider) buildMacosProbe(namespace, name string, uid types.UID) probes.Probe {
 	// Goroutine-confined: the probes.Manager runs one probe at a time per agent.
 	var lastInspect, lastRestart time.Time
+	key := meta.PodKey(namespace, name)
 	return func(ctx context.Context) (bool, string) {
+		if !p.trackedPodMatches(key, uid) {
+			return false, "pod incarnation replaced"
+		}
 		v := p.vmForPod(namespace, name)
 		if v == nil {
 			return false, "vm gone"
@@ -243,7 +254,7 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 				return false, "qemu process dead"
 			}
 			lastRestart = time.Now()
-			return false, p.recoverMacosVM(ctx, namespace, name, v)
+			return false, p.recoverMacosVM(ctx, namespace, name, uid, v)
 		}
 		ip := p.resolveVMIP(namespace, name, v)
 		if ip == "" {
@@ -257,28 +268,32 @@ func (p *Provider) buildMacosProbe(namespace, name string) probes.Probe {
 }
 
 // recoverMacosVM adopts a live record or `vm start`s a dead one, detached from the probe deadline to avoid a stale PID.
-func (p *Provider) recoverMacosVM(ctx context.Context, namespace, name string, v *vm.VM) string {
+func (p *Provider) recoverMacosVM(ctx context.Context, namespace, name string, uid types.UID, v *vm.VM) string {
 	ctx, cancel := detachedLaunchCtx(ctx)
 	defer cancel()
 	if rec := p.macosInspect(ctx, v.Name); rec != nil && p.macosProcessAlive(rec.PID) {
-		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
+		p.updateRecoveredMacosVM(ctx, namespace, name, uid, v.ID, rec)
 		return "adopted running qemu"
 	}
 	if out, err := p.startMacosVM(ctx, v.Name, p.macosVNCPortFor(meta.PodKey(namespace, name))); err != nil {
 		return "qemu restart: " + strings.TrimSpace(out) + ": " + err.Error()
 	}
 	if rec := p.macosInspect(ctx, v.Name); rec != nil {
-		p.updateRecoveredMacosVM(ctx, namespace, name, v.ID, rec)
+		p.updateRecoveredMacosVM(ctx, namespace, name, uid, v.ID, rec)
 	}
 	return "qemu restarted"
 }
 
-func (p *Provider) updateRecoveredMacosVM(ctx context.Context, namespace, name, vmID string, rec *macosVMRecord) {
+func (p *Provider) updateRecoveredMacosVM(ctx context.Context, namespace, name string, uid types.UID, vmID string, rec *macosVMRecord) {
+	key := meta.PodKey(namespace, name)
+	if !p.trackedPodMatches(key, uid) {
+		return
+	}
 	v := p.updateTrackedVM(namespace, name, vmID, func(u *vm.VM) { applyMacosRecord(u, rec) })
 	if v == nil {
 		return
 	}
-	p.adoptMacosVNCPort(meta.PodKey(namespace, name), rec)
+	p.adoptMacosVNCPort(key, rec)
 	if pod, err := p.GetPod(ctx, namespace, name); err == nil {
 		p.reconcileRuntimeEndpoints(ctx, pod, v.IP)
 	}
@@ -359,7 +374,10 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 		spec.VMName, rec.PID, pod.Namespace, pod.Name)
 	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
-	p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec))
+	if !p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec)) {
+		p.skipSuperseded(ctx, pod, "create")
+		return
+	}
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 }
 

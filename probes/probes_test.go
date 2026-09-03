@@ -70,6 +70,26 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 	}
 }
 
+func TestReplacedAgentCannotWriteSuccessorResult(t *testing.T) {
+	m := NewManager(t.Context())
+	defer m.Close()
+
+	m.Start("ns/demo-0", func(_ context.Context) (bool, string) { return false, "predecessor" }, nil)
+	m.mu.RLock()
+	stale := m.agents["ns/demo-0"]
+	m.mu.RUnlock()
+
+	m.Forget("ns/demo-0")
+	m.Start("ns/demo-0", func(_ context.Context) (bool, string) { return true, "successor" }, nil)
+
+	if m.setOwned("ns/demo-0", stale, Result{Ready: false, Message: "stale"}) {
+		t.Fatal("an agent replaced under the same key wrote the successor's result")
+	}
+	if r := m.Get("ns/demo-0"); r.Message != "successor" || !r.Ready {
+		t.Fatalf("successor result = %#v, want the successor's own probe outcome", r)
+	}
+}
+
 func TestForgetCancelsAgent(t *testing.T) {
 	m := NewManager(t.Context())
 	defer m.Close()
