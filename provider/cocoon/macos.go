@@ -185,7 +185,6 @@ func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 
 // registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and starts the macOS readiness probe.
 func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) bool {
-	key := meta.PodKey(pod.Namespace, pod.Name)
 	v := &vm.VM{
 		ID:         macosVMID(spec.VMName),
 		Name:       spec.VMName,
@@ -193,13 +192,11 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		State:      vm.StateRunning,
 	}
 	applyMacosRecord(v, rec)
-	if !p.trackPodIncarnation(pod, v) {
-		return false
-	}
+	p.seedLeaseIP(v)
 
 	rt := meta.VMRuntime{
 		VMID:    v.ID,
-		IP:      p.resolveVMIP(pod.Namespace, pod.Name, v),
+		IP:      v.IP,
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
 	if rt.IP == "" {
@@ -208,8 +205,7 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		rt.IP = pod.Annotations[meta.AnnotationIP]
 		p.mu.RUnlock()
 	}
-	if !p.applyVMRuntime(ctx, pod, rt) {
-		p.detachIncarnation(key, pod.UID)
+	if !p.bindRuntime(ctx, pod, v, rt) {
 		return false
 	}
 	if current, err := p.GetPod(ctx, pod.Namespace, pod.Name); err == nil {
@@ -368,7 +364,9 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 		spec.VMName, rec.PID, pod.Namespace, pod.Name)
 	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
-	p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec))
+	if !p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec)) {
+		return
+	}
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 }
 

@@ -292,12 +292,16 @@ func (p *Provider) handleOrphan(ctx context.Context, v *vm.VM) {
 
 // indexOrphanByName exposes an orphan VM to vmByName so the next CreatePod for its pod takes the adopt branch.
 func (p *Provider) indexOrphanByName(v *vm.VM) {
-	if v.Name == "" {
+	p.mu.Lock()
+	p.indexOrphanByNameLocked(v)
+	p.mu.Unlock()
+}
+
+func (p *Provider) indexOrphanByNameLocked(v *vm.VM) {
+	if v == nil || v.Name == "" {
 		return
 	}
-	p.mu.Lock()
 	p.vmsByName[v.Name] = v
-	p.mu.Unlock()
 }
 
 // inFlightCreate: vm run passes through created between the create-lock windows.

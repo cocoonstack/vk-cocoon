@@ -301,13 +301,8 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 func (p *Provider) trackPodIncarnation(pod *corev1.Pod, v *vm.VM) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := meta.PodKey(pod.Namespace, pod.Name)
-	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
-		if v != nil && v.Name != "" {
-			if _, ok := p.vmsByName[v.Name]; !ok {
-				p.vmsByName[v.Name] = v
-			}
-		}
+	if p.supersededLocked(meta.PodKey(pod.Namespace, pod.Name), pod.UID) {
+		p.indexOrphanByNameLocked(v)
 		return false
 	}
 	p.trackPodLocked(pod, v)
@@ -379,22 +374,11 @@ func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 	}
 }
 
-func (p *Provider) detachIncarnation(key string, uid types.UID) {
+func (p *Provider) detachIncarnation(key string, uid types.UID, v *vm.VM) {
+	p.untrackIncarnation(key, uid)
 	p.mu.Lock()
-	tracked, ok := p.pods[key]
-	dropped := ok && tracked.UID == uid
-	if dropped {
-		delete(p.vmsByPod, key)
-		delete(p.pods, key)
-		delete(p.macosVNC, key)
-		delete(p.lifecycleIntent, key)
-		delete(p.deleting, key)
-		metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
-	}
+	p.indexOrphanByNameLocked(v)
 	p.mu.Unlock()
-	if dropped && p.Probes != nil {
-		p.Probes.Forget(key)
-	}
 }
 
 func (p *Provider) untrackLocked(key string) {
@@ -416,6 +400,11 @@ func (p *Provider) trackedPodMatches(key string, uid types.UID) bool {
 	defer p.mu.RUnlock()
 	tracked, ok := p.pods[key]
 	return ok && tracked.UID == uid
+}
+
+func (p *Provider) supersededLocked(key string, uid types.UID) bool {
+	tracked := p.pods[key]
+	return tracked != nil && tracked.UID != uid
 }
 
 func (p *Provider) trackedIncarnation(key string, uid types.UID, vmID string) *vm.VM {
@@ -473,6 +462,15 @@ func (p *Provider) resolveVMIP(namespace, name string, v *vm.VM) string {
 		return ""
 	}
 	return ip
+}
+
+func (p *Provider) seedLeaseIP(v *vm.VM) {
+	if v.IP != "" || v.MAC == "" || p.LeaseParser == nil {
+		return
+	}
+	if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
+		v.IP = lease.IP
+	}
 }
 
 // buildProbe returns a probe that resolves the VM's IP and pings it; ICMP works for Linux and Windows guests.
@@ -829,7 +827,7 @@ func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch [
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
+	if p.supersededLocked(key, pod.UID) {
 		p.mu.Unlock()
 		return nil
 	}

@@ -424,6 +424,8 @@ func TestSetPodAnnotationDropsStaleIncarnation(t *testing.T) {
 }
 
 func TestPostClonePatchRejectsRecreatedAPIPod(t *testing.T) {
+	t.Parallel()
+
 	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
 	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
 	p := newTestProvider(t)

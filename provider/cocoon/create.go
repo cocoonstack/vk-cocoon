@@ -98,11 +98,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	metrics.VMBootDuration.WithLabelValues(bootMode, spec.Backend).Observe(time.Since(bootStart).Seconds())
 
-	if v.IP == "" && v.MAC != "" && p.LeaseParser != nil {
-		if lease, err := p.LeaseParser.LookupByMAC(v.MAC); err == nil {
-			v.IP = lease.IP
-		}
-	}
+	p.seedLeaseIP(v)
 
 	if !p.applyRuntime(ctx, pod, v) {
 		return nil
@@ -491,15 +487,19 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-// applyRuntime binds the VM and publishes VMID/IP only while this pod incarnation owns the key.
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) bool {
+	return p.bindRuntime(ctx, pod, v, meta.VMRuntime{VMID: v.ID, IP: v.IP})
+}
+
+// bindRuntime binds the VM and publishes rt only while this pod incarnation owns the key.
+func (p *Provider) bindRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM, rt meta.VMRuntime) bool {
 	if !p.trackPodIncarnation(pod, v) {
 		return false
 	}
-	if p.applyVMRuntime(ctx, pod, meta.VMRuntime{VMID: v.ID, IP: v.IP}) {
+	if p.applyVMRuntime(ctx, pod, rt) {
 		return true
 	}
-	p.detachIncarnation(meta.PodKey(pod.Namespace, pod.Name), pod.UID)
+	p.detachIncarnation(meta.PodKey(pod.Namespace, pod.Name), pod.UID, v)
 	return false
 }
 
@@ -507,7 +507,7 @@ func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) 
 func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.VMRuntime) bool {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
+	if p.supersededLocked(key, pod.UID) {
 		p.mu.Unlock()
 		return false
 	}
