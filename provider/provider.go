@@ -1,14 +1,14 @@
 // Package provider holds the virtual-kubelet scaffolding shared across cocoon backends: orphan policy, capacity, stats types.
 package provider
 
-// OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
-type OrphanPolicy string
-
 const (
 	OrphanAlert   OrphanPolicy = "alert"
 	OrphanDestroy OrphanPolicy = "destroy"
 	OrphanKeep    OrphanPolicy = "keep"
 )
+
+// OrphanPolicy controls what happens to VMs with no matching pod at startup reconcile.
+type OrphanPolicy string
 
 // VMStats holds per-VM resource usage for metrics collection.
 type VMStats struct {
