@@ -236,6 +236,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	if !p.applyRuntime(ctx, pod, v) {
+		p.skipSuperseded(ctx, pod, "update")
 		return nil
 	}
 	p.startProbeIfEnabled(pod)

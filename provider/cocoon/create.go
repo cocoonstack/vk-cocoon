@@ -68,6 +68,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// and lifecycle verbs would misfire); only createMacosPod may bind it.
 	if existing := p.vmByName(spec.VMName); existing != nil && !isMacosVM(existing) {
 		if !p.applyRuntime(ctx, pod, existing) {
+			p.skipSuperseded(ctx, pod, "create")
 			return nil
 		}
 		p.startProbeIfEnabled(pod)
@@ -101,6 +102,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.seedLeaseIP(v)
 
 	if !p.applyRuntime(ctx, pod, v) {
+		p.skipSuperseded(ctx, pod, "create")
 		return nil
 	}
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.

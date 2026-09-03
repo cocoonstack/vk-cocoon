@@ -25,6 +25,12 @@ func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op strin
 	log.WithFunc("Provider.failOp").Errorf(ctx, err, "%s/%s %s", pod.Namespace, pod.Name, op)
 }
 
+func (p *Provider) skipSuperseded(ctx context.Context, pod *corev1.Pod, op string) {
+	metrics.PodLifecycleTotal.WithLabelValues(op, "skipped", "superseded").Inc()
+	log.WithFunc("Provider.skipSuperseded").Infof(ctx, "%s for pod %s uid %s superseded by a newer incarnation, skipping",
+		op, meta.PodKey(pod.Namespace, pod.Name), pod.UID)
+}
+
 func (p *Provider) emitWarningf(pod *corev1.Pod, reason, format string, args ...any) {
 	commonk8s.Eventf(p.Recorder, pod, corev1.EventTypeWarning, reason, format, args...)
 }

@@ -162,6 +162,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		rec = p.macosInspect(ctx, spec.VMName)
 	}
 	if !p.registerMacosVM(ctx, pod, spec, rec, port) {
+		p.skipSuperseded(ctx, pod, "create")
 		return nil
 	}
 
@@ -365,6 +366,7 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
 	if !p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec)) {
+		p.skipSuperseded(ctx, pod, "create")
 		return
 	}
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)

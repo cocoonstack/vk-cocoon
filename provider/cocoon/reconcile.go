@@ -253,6 +253,7 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing)",
 		v.Name, pod.Namespace, pod.Name)
 	if !p.applyRuntime(ctx, pod, v) {
+		p.skipSuperseded(ctx, pod, "create")
 		return nil
 	}
 	p.seedLifecycleIntentFromPod(pod)
