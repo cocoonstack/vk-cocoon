@@ -295,6 +295,26 @@ func (p *Provider) notify(pod *corev1.Pod) {
 func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.trackPodLocked(pod, v)
+}
+
+func (p *Provider) trackPodIncarnation(pod *corev1.Pod, v *vm.VM) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
+		if v != nil && v.Name != "" {
+			if _, ok := p.vmsByName[v.Name]; !ok {
+				p.vmsByName[v.Name] = v
+			}
+		}
+		return false
+	}
+	p.trackPodLocked(pod, v)
+	return true
+}
+
+func (p *Provider) trackPodLocked(pod *corev1.Pod, v *vm.VM) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.reassertLifecycleLocked(key, pod)
 	p.pods[key] = pod
@@ -352,6 +372,24 @@ func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 	dropped := ok && tracked.UID == uid
 	if dropped {
 		p.untrackLocked(key)
+	}
+	p.mu.Unlock()
+	if dropped && p.Probes != nil {
+		p.Probes.Forget(key)
+	}
+}
+
+func (p *Provider) detachIncarnation(key string, uid types.UID) {
+	p.mu.Lock()
+	tracked, ok := p.pods[key]
+	dropped := ok && tracked.UID == uid
+	if dropped {
+		delete(p.vmsByPod, key)
+		delete(p.pods, key)
+		delete(p.macosVNC, key)
+		delete(p.lifecycleIntent, key)
+		delete(p.deleting, key)
+		metrics.VMTableSize.Set(float64(len(p.vmsByPod)))
 	}
 	p.mu.Unlock()
 	if dropped && p.Probes != nil {
@@ -764,14 +802,6 @@ func (p *Provider) deletePodWithRetry(ctx context.Context, pod *corev1.Pod) erro
 	return lastErr
 }
 
-func (p *Provider) patchPodAnnotations(ctx context.Context, namespace, name string, annos map[string]any) error {
-	patch, err := commonk8s.AnnotationsMergePatch(annos)
-	if err != nil {
-		return fmt.Errorf("marshal annotations %s/%s: %w", namespace, name, err)
-	}
-	return p.patchPod(ctx, namespace, name, patch)
-}
-
 // patchIncarnationAnnotations carries metadata.uid so the apiserver rejects the patch once another incarnation owns the name.
 func (p *Provider) patchIncarnationAnnotations(ctx context.Context, namespace, name string, uid types.UID, annos map[string]any) error {
 	patch, err := json.Marshal(map[string]any{
@@ -797,12 +827,17 @@ func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch [
 
 // clearRuntimeAnnotations drops VMID, IP and the post-clone marker in memory (under p.mu) and on the apiserver.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
+	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
+		p.mu.Unlock()
+		return nil
+	}
 	delete(pod.Annotations, meta.AnnotationVMID)
 	delete(pod.Annotations, meta.AnnotationIP)
 	delete(pod.Annotations, annotationPostCloneState)
 	p.mu.Unlock()
-	return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{
+	return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{
 		meta.AnnotationVMID:      nil,
 		meta.AnnotationIP:        nil,
 		annotationPostCloneState: nil,
@@ -835,6 +870,9 @@ func patchWithRetry(ctx context.Context, fn func() error) error {
 	for i := range lifecyclePatchAttempts {
 		if lastErr = fn(); lastErr == nil {
 			return nil
+		}
+		if patchSuperseded(lastErr) {
+			return lastErr
 		}
 		if i == lifecyclePatchAttempts-1 {
 			break

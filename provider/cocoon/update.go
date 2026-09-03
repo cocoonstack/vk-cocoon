@@ -235,8 +235,9 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 		return err
 	}
 	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
-	p.applyRuntime(ctx, pod, v)
-	p.trackPod(pod, v)
+	if !p.applyRuntime(ctx, pod, v) {
+		return nil
+	}
 	p.startProbeIfEnabled(pod)
 	p.dispatchHibernateRestore(pod, spec, v, "update")
 	p.emitNormalf(pod, "Woken", "cloned from %s", src.label())

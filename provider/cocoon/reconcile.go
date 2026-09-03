@@ -252,8 +252,9 @@ func (p *Provider) adoptByVMName(ctx context.Context, pod *corev1.Pod, idx map[s
 	}
 	logger.Infof(ctx, "adopting VM %s by name for pod %s/%s (annotation missing)",
 		v.Name, pod.Namespace, pod.Name)
-	p.applyRuntime(ctx, pod, v)
-	p.trackPod(pod, v)
+	if !p.applyRuntime(ctx, pod, v) {
+		return nil
+	}
 	p.seedLifecycleIntentFromPod(pod)
 	metrics.ReconcileAdoptByNameTotal.Inc()
 	return v

@@ -67,8 +67,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// A macOS-owned name must not be adopted through the CH path (its probe
 	// and lifecycle verbs would misfire); only createMacosPod may bind it.
 	if existing := p.vmByName(spec.VMName); existing != nil && !isMacosVM(existing) {
-		p.applyRuntime(ctx, pod, existing)
-		p.trackPod(pod, existing)
+		if !p.applyRuntime(ctx, pod, existing) {
+			return nil
+		}
 		p.startProbeIfEnabled(pod)
 		p.markReadyPublished(ctx, pod)
 		metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "adopted").Inc()
@@ -103,11 +104,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 	}
 
-	p.applyRuntime(ctx, pod, v)
+	if !p.applyRuntime(ctx, pod, v) {
+		return nil
+	}
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
-	// trackPod first: goroutines below call markLifecycleState, which reads p.pods[key].
-	p.trackPod(pod, v)
 	willRunSAC := p.willRunSAC(spec, v)
 	if restoring {
 		p.dispatchHibernateRestore(pod, spec, v, "create")
@@ -490,16 +491,26 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-// applyRuntime writes VMID/IP annotations onto the in-memory pod (under
-// p.mu against GetPod's DeepCopy) and patches them back to the API server.
-func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) {
-	p.applyVMRuntime(ctx, pod, meta.VMRuntime{VMID: v.ID, IP: v.IP})
+// applyRuntime binds the VM and publishes VMID/IP only while this pod incarnation owns the key.
+func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) bool {
+	if !p.trackPodIncarnation(pod, v) {
+		return false
+	}
+	if p.applyVMRuntime(ctx, pod, meta.VMRuntime{VMID: v.ID, IP: v.IP}) {
+		return true
+	}
+	p.detachIncarnation(meta.PodKey(pod.Namespace, pod.Name), pod.UID)
+	return false
 }
 
-// applyVMRuntime is the shared write path for the runtime-annotation
-// contract; a zero VNCPort is omitted in memory and from the patch.
-func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.VMRuntime) {
+// applyVMRuntime writes the runtime-annotation contract with an API-level UID fence.
+func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.VMRuntime) bool {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
+	if tracked := p.pods[key]; tracked != nil && tracked.UID != pod.UID {
+		p.mu.Unlock()
+		return false
+	}
 	rt.Apply(pod)
 	p.mu.Unlock()
 	annos := map[string]any{
@@ -509,12 +520,14 @@ func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.
 	if rt.VNCPort != 0 {
 		annos[meta.AnnotationVNCPort] = strconv.Itoa(int(rt.VNCPort))
 	}
-	if err := patchWithRetry(ctx, func() error {
-		return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, annos)
-	}); err != nil {
+	err := patchWithRetry(ctx, func() error {
+		return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, annos)
+	})
+	if err != nil && !patchSuperseded(err) {
 		log.WithFunc("Provider.applyVMRuntime").
 			Errorf(ctx, err, "annotation patch failed after retries for %s/%s, will reconcile on restart", pod.Namespace, pod.Name)
 	}
+	return !patchSuperseded(err)
 }
 
 func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) bool {

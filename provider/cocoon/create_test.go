@@ -279,6 +279,84 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	}
 }
 
+func TestCreatePodDoesNotReclaimSupersededIncarnationAfterBringUp(t *testing.T) {
+	p := newTestProvider(t)
+
+	podA := newPodWithSpec(meta.VMSpec{
+		VMName: "vk-ns-demo-0",
+		Image:  "registry.example/cocoon/ubuntu:24.04",
+		Mode:   "run",
+		OS:     "linux",
+	})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p.Runtime = &fakeRuntime{
+		runVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"},
+		runHook: func() {
+			p.trackPod(podB, nil)
+		},
+	}
+
+	if err := p.CreatePod(t.Context(), podA); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := p.GetPod(t.Context(), "ns", "demo-0")
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if got.UID != podB.UID {
+		t.Errorf("tracked UID = %q, want %q", got.UID, podB.UID)
+	}
+	if tracked := p.vmForPod("ns", "demo-0"); tracked != nil {
+		t.Errorf("successor acquired stale VM tracking: %#v", tracked)
+	}
+	if err := p.CreatePod(t.Context(), podB); err != nil {
+		t.Fatalf("create successor: %v", err)
+	}
+	if adopted := p.vmForPod("ns", "demo-0"); adopted == nil || adopted.ID != "vmid-a" {
+		t.Errorf("successor VM = %#v, want adopted vmid-a", adopted)
+	}
+}
+
+func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	p.trackPod(podA, nil)
+
+	if p.applyRuntime(t.Context(), podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}) {
+		t.Fatal("runtime write accepted after the API pod incarnation changed")
+	}
+	got, err := client.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if vmID := got.Annotations[meta.AnnotationVMID]; vmID != "" {
+		t.Errorf("successor VMID = %q, want unset", vmID)
+	}
+	if err := p.CreatePod(t.Context(), podB); err != nil {
+		t.Fatalf("create successor: %v", err)
+	}
+	tracked, err := p.GetPod(t.Context(), "ns", "demo-0")
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if tracked.UID != podB.UID {
+		t.Errorf("tracked UID = %q, want %q", tracked.UID, podB.UID)
+	}
+	if adopted := p.vmForPod("ns", "demo-0"); adopted == nil || adopted.ID != "vmid-a" {
+		t.Errorf("successor VM = %#v, want adopted vmid-a", adopted)
+	}
+}
+
 func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	rt := &fakeRuntime{runErr: errors.New("boot failed")}
 	p := newTestProvider(t)

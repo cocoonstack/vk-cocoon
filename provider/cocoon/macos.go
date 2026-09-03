@@ -161,7 +161,9 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		logger.Infof(ctx, "%s: launched macOS VM %s (net=cni, vnc=%d)", key, spec.VMName, port)
 		rec = p.macosInspect(ctx, spec.VMName)
 	}
-	p.registerMacosVM(ctx, pod, spec, rec, port)
+	if !p.registerMacosVM(ctx, pod, spec, rec, port) {
+		return nil
+	}
 
 	p.mu.Lock()
 	pod.Status.Phase = corev1.PodRunning
@@ -182,7 +184,8 @@ func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 }
 
 // registerMacosVM tracks the guest, publishes VMID/IP/VNC annotations, and starts the macOS readiness probe.
-func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) {
+func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, rec *macosVMRecord, vncPort int) bool {
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	v := &vm.VM{
 		ID:         macosVMID(spec.VMName),
 		Name:       spec.VMName,
@@ -190,7 +193,9 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		State:      vm.StateRunning,
 	}
 	applyMacosRecord(v, rec)
-	p.trackPod(pod, v)
+	if !p.trackPodIncarnation(pod, v) {
+		return false
+	}
 
 	rt := meta.VMRuntime{
 		VMID:    v.ID,
@@ -203,11 +208,15 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		rt.IP = pod.Annotations[meta.AnnotationIP]
 		p.mu.RUnlock()
 	}
-	p.applyVMRuntime(ctx, pod, rt)
+	if !p.applyVMRuntime(ctx, pod, rt) {
+		p.detachIncarnation(key, pod.UID)
+		return false
+	}
 	if current, err := p.GetPod(ctx, pod.Namespace, pod.Name); err == nil {
 		p.reconcileRuntimeEndpoints(ctx, current, rt.IP)
 	}
 	p.startMacosProbe(pod)
+	return true
 }
 
 func (p *Provider) startMacosProbe(pod *corev1.Pod) {

@@ -423,6 +423,26 @@ func TestSetPodAnnotationDropsStaleIncarnation(t *testing.T) {
 	}
 }
 
+func TestPostClonePatchRejectsRecreatedAPIPod(t *testing.T) {
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	p.trackPod(podA, nil)
+
+	p.markPostCloneState(t.Context(), podA, postCloneStateDone)
+
+	got, err := client.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if state := got.Annotations[annotationPostCloneState]; state != "" {
+		t.Errorf("successor post-clone state = %q, want unset", state)
+	}
+}
+
 func waitOrFatal(t *testing.T, ch <-chan struct{}, what string) {
 	t.Helper()
 	select {

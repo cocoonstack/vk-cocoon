@@ -194,7 +194,9 @@ func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, stat
 	}
 	target.Annotations[annotationPostCloneState] = state
 	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{annotationPostCloneState: state}); err != nil {
+	if err := p.patchIncarnationAnnotations(
+		ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{annotationPostCloneState: state},
+	); err != nil {
 		log.WithFunc("Provider.markPostCloneState").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", annotationPostCloneState, pod.Namespace, pod.Name)
 	}
@@ -224,7 +226,9 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	}
 	pod.Annotations[key] = val
 	p.mu.Unlock()
-	if err := p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, map[string]any{key: val}); err != nil {
+	if err := p.patchIncarnationAnnotations(
+		ctx, pod.Namespace, pod.Name, pod.UID, map[string]any{key: val},
+	); err != nil {
 		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}
