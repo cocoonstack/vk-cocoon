@@ -151,6 +151,34 @@ func TestDeletePodSkipsASupersededIncarnation(t *testing.T) {
 	}
 }
 
+func TestDeletePodSkipsASupersededIncarnationWhileAnotherDeleteIsInFlight(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.Lock()
+	p.deleting[key] = struct{}{}
+	p.mu.Unlock()
+
+	if err := p.DeletePod(t.Context(), podA); err != nil {
+		t.Fatalf("DeletePod of the superseded incarnation: %v", err)
+	}
+	if rt.removedID != "" {
+		t.Fatalf("removed VM = %q, want the successor's VM kept", rt.removedID)
+	}
+	p.mu.Lock()
+	held := p.deletingLocked(key)
+	p.mu.Unlock()
+	if !held {
+		t.Fatal("superseded delete released the fence held by the in-flight delete")
+	}
+}
+
 func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	rt := &fakeRuntime{}
 	releaser := &recordingLeaseReleaser{}

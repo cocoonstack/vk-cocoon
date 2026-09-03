@@ -50,6 +50,10 @@ const (
 	evictDeleteAttempts  = 2
 	evictDeleteBaseDelay = 200 * time.Millisecond
 
+	deleteClaimed deleteClaim = iota
+	deleteInFlight
+	deleteSuperseded
+
 	// inlineInspectAttempts covers one CLI hiccup; the deferred recheck takes over beyond it.
 	inlineInspectAttempts = 2
 
@@ -69,6 +73,8 @@ const (
 type podNotifier func(*corev1.Pod)
 
 // Provider maps Kubernetes pods to cocoon MicroVMs.
+type deleteClaim int
+
 type Provider struct {
 	NodeName                   string
 	SnapshotCompatibilityClass string
@@ -456,14 +462,17 @@ func (p *Provider) claimDeletingIncarnation(key string, uid types.UID, vmID stri
 	return true
 }
 
-func (p *Provider) claimDeleting(key string) bool {
+func (p *Provider) claimDeleting(key string, uid types.UID) deleteClaim {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.supersededLocked(key, uid) {
+		return deleteSuperseded
+	}
 	if p.deletingLocked(key) {
-		return false
+		return deleteInFlight
 	}
 	p.deleting[key] = struct{}{}
-	return true
+	return deleteClaimed
 }
 
 func (p *Provider) finishDeleting(key string) {

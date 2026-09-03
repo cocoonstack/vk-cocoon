@@ -19,14 +19,14 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	if !p.claimDeleting(key) {
+	switch p.claimDeleting(key, pod.UID) {
+	case deleteSuperseded:
+		p.skipSuperseded(ctx, pod, "delete")
+		return nil
+	case deleteInFlight:
 		return errDeleteInFlight(pod)
 	}
 	defer p.finishDeleting(key)
-	if uid, tracked := p.trackedPodUID(key); tracked && uid != pod.UID {
-		p.skipSuperseded(ctx, pod, "delete")
-		return nil
-	}
 
 	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
 		return err
