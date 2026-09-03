@@ -453,7 +453,7 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	return awaitFlight(ctx, ch, (*vm.Snapshot)(nil))
 }
 
-// ensureForkSnapshot creates the fork snapshot once and reuses it; `snapshot save` pauses the VM at ~2s/GiB, too costly per sub-agent.
+// ensureForkSnapshot creates the fork snapshot once and reuses it; `snapshot save` pauses the VM at ~2s/GiB, 4-5× on hot-scale if paid per sub-agent.
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
