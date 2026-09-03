@@ -664,6 +664,33 @@ func TestWakeClearsStalePostCloneMarker(t *testing.T) {
 	}
 }
 
+func TestWakeSupersededSkipsNotify(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	podA := newPodWithSpec(meta.VMSpec{VMName: vmName, Mode: "clone"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) { notified <- updated }
+
+	if err := p.UpdatePod(t.Context(), podA); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	p.Close()
+
+	select {
+	case got := <-notified:
+		t.Errorf("superseded wake published status for uid %q, want no notify", got.UID)
+	default:
+	}
+}
+
 func TestUpdatePodReadsPodBeforeTracking(t *testing.T) {
 	p := newTestProvider(t)
 	base := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Backend: string(cocoonv1.BackendCloudHypervisor)})
