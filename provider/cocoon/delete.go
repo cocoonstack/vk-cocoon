@@ -19,14 +19,10 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	p.mu.Lock()
-	p.deleting[key] = struct{}{}
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		delete(p.deleting, key)
-		p.mu.Unlock()
-	}()
+	if !p.claimDeleting(key) {
+		return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+	}
+	defer p.finishDeleting(key)
 
 	if err := p.backoffIfResuming(pod.Namespace, pod.Name); err != nil {
 		return err

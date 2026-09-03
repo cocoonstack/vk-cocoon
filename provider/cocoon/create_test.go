@@ -18,6 +18,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1942,6 +1943,56 @@ func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
 	}
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
 		t.Errorf("successor pod untracked: %v", err)
+	}
+}
+
+func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleteAction := action.(k8stesting.DeleteAction)
+		opts := deleteAction.GetDeleteOptions()
+		if opts.Preconditions == nil || opts.Preconditions.UID == nil || *opts.Preconditions.UID != podA.UID {
+			t.Fatalf("delete precondition = %#v, want UID %q", opts.Preconditions, podA.UID)
+		}
+		return true, nil, apierrors.NewConflict(corev1.Resource("pods"), podB.Name, errors.New("UID precondition failed"))
+	})
+	p.Clientset = client
+	base := &fakeRuntime{
+		inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: "stopped"},
+		runVM:     &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0", State: vm.StateRunning},
+	}
+	var replacementErr error
+	base.onRemove = func() {
+		replacementErr = p.UpdatePod(t.Context(), podB)
+	}
+	p.Runtime = base
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.mu.Lock()
+	p.lastRestart["vmid-a"] = time.Now()
+	p.mu.Unlock()
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+
+	if replacementErr == nil || !strings.Contains(replacementErr.Error(), "delete operation still in flight") {
+		t.Fatalf("replacement update error = %v, want in-flight deletion", replacementErr)
+	}
+	if base.removedID != "vmid-a" {
+		t.Fatalf("removed VM = %q, want vmid-a", base.removedID)
+	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
+		t.Fatal("superseded incarnation remained tracked after its VM was removed")
+	}
+	if err := p.UpdatePod(t.Context(), podB); err != nil {
+		t.Fatalf("retry replacement update: %v", err)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Errorf("replacement VM = %#v, want vmid-b", got)
 	}
 }
 

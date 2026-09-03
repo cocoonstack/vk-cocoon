@@ -59,9 +59,15 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	v := p.vmForPod(pod.Namespace, pod.Name)
+	trackedUID, tracked := p.trackedPodUID(key)
+	if !tracked {
+		return p.CreatePod(ctx, pod)
+	}
 	// a same-name recreate reaches the provider as an update while the old incarnation is still tracked
-	if old := p.trackedPodUID(key); old != "" && old != pod.UID {
-		p.detachIncarnation(key, old, v)
+	if trackedUID != pod.UID {
+		if !p.detachIncarnation(key, trackedUID, v) {
+			return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+		}
 		return p.CreatePod(ctx, pod)
 	}
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.

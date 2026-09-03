@@ -55,7 +55,9 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	// Claim this incarnation before the long bring-up so a forgotten predecessor's stale writers hit the UID guards.
-	p.trackPod(pod, nil)
+	if !p.trackPodUnlessDeleting(pod, nil) {
+		return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
 	// Dispatch before any cloud-hypervisor machinery (adopt-by-name, hibernate
