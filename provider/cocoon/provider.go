@@ -405,6 +405,15 @@ func (p *Provider) vmForPod(namespace, name string) *vm.VM {
 	return p.vmsByPod[meta.PodKey(namespace, name)]
 }
 
+func (p *Provider) trackedPodUID(key string) types.UID {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if tracked := p.pods[key]; tracked != nil {
+		return tracked.UID
+	}
+	return ""
+}
+
 func (p *Provider) trackedPodMatches(key string, uid types.UID) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

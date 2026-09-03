@@ -357,6 +357,38 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 	}
 }
 
+func TestUpdatePodRoutesARecreatedPodThroughCreate(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset(podB)
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+
+	if err := p.UpdatePod(t.Context(), podB); err != nil {
+		t.Fatalf("update with the successor: %v", err)
+	}
+	tracked, err := p.GetPod(t.Context(), "ns", "demo-0")
+	if err != nil {
+		t.Fatalf("GetPod: %v", err)
+	}
+	if tracked.UID != podB.UID {
+		t.Errorf("tracked UID = %q, want %q", tracked.UID, podB.UID)
+	}
+	if adopted := p.vmForPod("ns", "demo-0"); adopted == nil || adopted.ID != "vmid-a" {
+		t.Errorf("successor VM = %#v, want adopted vmid-a", adopted)
+	}
+	got, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if vmID := got.Annotations[meta.AnnotationVMID]; vmID != "vmid-a" {
+		t.Errorf("successor VMID annotation = %q, want vmid-a", vmID)
+	}
+}
+
 func TestApplyRuntimeKeepsTheBindingWhenThePodIsGone(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.UID = "a"

@@ -57,7 +57,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	spec := meta.ParseVMSpec(pod)
 	wantHibernate := bool(meta.ReadHibernateState(pod))
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	v := p.vmForPod(pod.Namespace, pod.Name)
+	// a same-name recreate reaches the provider as an update while the old incarnation is still tracked
+	if old := p.trackedPodUID(key); old != "" && old != pod.UID {
+		p.detachIncarnation(key, old, v)
+		return p.CreatePod(ctx, pod)
+	}
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	p.trackPod(pod, nil)
 
