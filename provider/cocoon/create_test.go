@@ -2042,6 +2042,9 @@ func TestCreatePodRetriesWhenTheIndexedVMInspectIsInconclusive(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Fatalf("bound VM = %#v, want none", got)
 	}
+	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
+		t.Fatal("the failed create kept its provisional pod claim")
+	}
 	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-old" {
 		t.Fatalf("VM by name = %#v, want the index kept for the retry", got)
 	}

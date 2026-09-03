@@ -70,7 +70,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// and lifecycle verbs would misfire); only createMacosPod may bind it.
 	existing, adoptErr := p.adoptableVM(ctx, spec.VMName)
 	if adoptErr != nil {
-		return adoptErr
+		return p.failCreate(ctx, pod, false, "CreateAdoptInspectFailed", adoptErr)
 	}
 	if existing != nil {
 		if !p.applyRuntime(ctx, pod, existing) {
