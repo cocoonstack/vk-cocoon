@@ -42,7 +42,6 @@ const (
 
 var errStaleLocalSnapshot = errors.New("local snapshot does not match registry tag")
 
-// UpdatePod applies a pod spec update; non-hibernate changes stay no-ops since patching re-enters UpdatePod.
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.UpdatePod")
 	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)

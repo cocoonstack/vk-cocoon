@@ -18,6 +18,6 @@ func (*NodeProvider) Ping(_ context.Context) error {
 	return nil
 }
 
-// NotifyNodeStatus is a no-op; the controller drives refresh via Ping.
 func (*NodeProvider) NotifyNodeStatus(_ context.Context, _ func(*corev1.Node)) {
+	// the node controller drives status refresh via Ping.
 }

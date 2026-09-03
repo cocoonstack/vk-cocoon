@@ -190,9 +190,7 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 	return true, nil
 }
 
-// hibernateEvidence reports whether a hibernate snapshot owns vmName's guest
-// state, plus the pod image recorded at push time ("" on legacy pushes).
-// Registry errors fail closed: never fresh-boot on uncertainty.
+// hibernateEvidence reports snapshot ownership of vmName plus the image recorded at push time; registry errors fail closed.
 func (p *Provider) hibernateEvidence(ctx context.Context, vmName string) (bool, string, error) {
 	if p.Registry == nil {
 		if _, err := p.Runtime.Snapshot(ctx, vmName); err != nil {
@@ -375,8 +373,7 @@ func (p *Provider) detachedImportContext() (context.Context, context.CancelFunc)
 	return context.WithTimeout(p.lifecycleCtx, importDetachTimeout)
 }
 
-// ensureRunImage materializes the base image locally and returns the ref `cocoon vm run` should be invoked with.
-// A cloud-image artifact is imported into the local store and booted from there (repo:tag), not the registry.
+// ensureRunImage returns the ref `cocoon vm run` must use: a cloud-image artifact is imported and booted from the local store, not the registry.
 func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool) (string, error) {
 	if image == "" {
 		return image, nil
@@ -421,8 +418,7 @@ func (p *Provider) resolveRunImage(ctx context.Context, image string, force bool
 	}
 }
 
-// ensureSnapshot returns the local snapshot, pulling from the registry if needed.
-// Local name includes the tag so myvm:v1 and myvm:v2 stay separate.
+// ensureSnapshot returns the local snapshot, pulling from the registry when absent; local carries the tag so myvm:v1 and myvm:v2 stay separate.
 func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) (*vm.Snapshot, error) {
 	if repo == "" {
 		return nil, nil
@@ -457,9 +453,7 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	return awaitFlight(ctx, ch, (*vm.Snapshot)(nil))
 }
 
-// ensureForkSnapshot returns the fork snapshot for a source VM, creating
-// once and reusing thereafter; `snapshot save` pauses the VM and costs
-// ~2s/GiB, which would multiply hot-scale by 4-5× if paid per sub-agent.
+// ensureForkSnapshot creates the fork snapshot once and reuses it; `snapshot save` pauses the VM at ~2s/GiB, too costly per sub-agent.
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
@@ -683,9 +677,7 @@ func forkSnapshotName(sourceVMName string) string {
 	return "fork-" + sourceVMName
 }
 
-// vmResourceOverrides translates pod resources into cocoon CLI args. vCPU
-// rounds the CPU limit up (requests when unset): the count is a hard cap
-// under cocoon's cgroup scope, so it must bound at the limit.
+// vmResourceOverrides translates pod resources into cocoon CLI args; vCPU rounds the limit up (requests when unset) because the count is a hard cap.
 func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	if len(pod.Spec.Containers) == 0 {
 		return 0, ""

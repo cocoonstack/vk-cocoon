@@ -194,7 +194,6 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-// NotifyPods stores the kubelet's status callback; the initial push is deferred because one before WaitForCacheSync is dropped.
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
