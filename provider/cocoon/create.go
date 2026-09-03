@@ -68,7 +68,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// A macOS-owned name must not be adopted through the CH path (its probe
 	// and lifecycle verbs would misfire); only createMacosPod may bind it.
-	if existing := p.adoptableVM(ctx, spec.VMName); existing != nil {
+	existing, adoptErr := p.adoptableVM(ctx, spec.VMName)
+	if adoptErr != nil {
+		return adoptErr
+	}
+	if existing != nil {
 		if !p.applyRuntime(ctx, pod, existing) {
 			p.skipSuperseded(ctx, pod, "create")
 			return nil
@@ -492,21 +496,25 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	return p.vmsByName[name]
 }
 
-func (p *Provider) adoptableVM(ctx context.Context, name string) *vm.VM {
+func (p *Provider) adoptableVM(ctx context.Context, name string) (*vm.VM, error) {
 	existing := p.vmByName(name)
 	if existing == nil || isMacosVM(existing) {
-		return nil
+		return nil, nil
 	}
-	if _, err := p.Runtime.Inspect(ctx, existing.ID); !errors.Is(err, vm.ErrVMNotFound) {
-		return existing
+	_, err := p.inspectWithRetry(ctx, existing.ID)
+	switch {
+	case err == nil:
+		return existing, nil
+	case errors.Is(err, vm.ErrVMNotFound):
+		p.mu.Lock()
+		if p.vmsByName[name] == existing {
+			delete(p.vmsByName, name)
+		}
+		p.mu.Unlock()
+		log.WithFunc("Provider.adoptableVM").Infof(ctx, "vm %s indexed as %s is gone, creating afresh", existing.ID, name)
+		return nil, nil
 	}
-	p.mu.Lock()
-	if p.vmsByName[name] == existing {
-		delete(p.vmsByName, name)
-	}
-	p.mu.Unlock()
-	log.WithFunc("Provider.adoptableVM").Infof(ctx, "vm %s indexed as %s is gone, creating afresh", existing.ID, name)
-	return nil
+	return nil, fmt.Errorf("inspect vm %s indexed as %s: %w", existing.ID, name, err)
 }
 
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) bool {

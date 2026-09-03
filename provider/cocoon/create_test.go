@@ -2022,6 +2022,31 @@ func TestCreatePodCreatesAfreshWhenTheIndexedVMIsGone(t *testing.T) {
 	}
 }
 
+func TestCreatePodRetriesWhenTheIndexedVMInspectIsInconclusive(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	rt := &fakeRuntime{inspectErr: errors.New("cocoon: transient"), runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.inlineInspectBaseDelay = time.Millisecond
+	p.mu.Lock()
+	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-old", Name: "vk-ns-demo-0"})
+	p.mu.Unlock()
+
+	if err := p.CreatePod(t.Context(), pod); err == nil {
+		t.Fatal("an inconclusive inspect of the indexed VM must fail the create for a retry")
+	}
+	if rt.ran != nil {
+		t.Fatalf("ran a VM on an inconclusive inspect: %#v", rt.ran)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Fatalf("bound VM = %#v, want none", got)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-old" {
+		t.Fatalf("VM by name = %#v, want the index kept for the retry", got)
+	}
+}
+
 func TestCreatePodAdoptsTheIndexedVMWhileItLives(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
 	live := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", State: vm.StateRunning}
