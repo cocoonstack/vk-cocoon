@@ -36,16 +36,16 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
-	seeded := []vmSample{{vmSnapshot: vmSnapshot{VMName: "vk-ns-demo-0"}, cpuSeconds: 7}}
+	seeded := []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}
 	p.statsVMs, p.statsNode, p.statsAt = seeded, provider.NodeStats{CPUSeconds: 42}, time.Now()
 
-	vms, node := p.sampleStats()
-	if len(vms) != 1 || vms[0].cpuSeconds != 7 || node.CPUSeconds != 42 {
+	vms, node := p.CollectVMStats()
+	if len(vms) != 1 || vms[0].CPUSeconds != 7 || node.CPUSeconds != 42 {
 		t.Fatalf("within TTL must serve the cached sample, got %+v node %+v", vms, node)
 	}
 
 	p.statsAt = time.Now().Add(-2 * statsSampleTTL)
-	vms, _ = p.sampleStats()
+	vms, _ = p.CollectVMStats()
 	if len(vms) != 0 {
 		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", vms)
 	}

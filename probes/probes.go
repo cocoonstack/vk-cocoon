@@ -20,7 +20,7 @@ const (
 	defaultFailureThreshold = 3
 )
 
-// Probe is the per-tick health check; returns (ready, message).
+// Probe is the per-tick health check.
 type Probe func(ctx context.Context) (ready bool, message string)
 
 // Result is the latest probe outcome.
@@ -78,7 +78,6 @@ func (m *Manager) Get(key string) Result {
 	return m.results[key]
 }
 
-// Forget drops the pod entry and cancels its agent.
 func (m *Manager) Forget(key string) {
 	m.mu.Lock()
 	ag := m.agents[key]

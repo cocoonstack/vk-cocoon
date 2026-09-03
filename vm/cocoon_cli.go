@@ -122,7 +122,6 @@ func (c *CocoonCLI) Inspect(ctx context.Context, vmID string) (*VM, error) {
 	return parseInspectJSON(out)
 }
 
-// List runs `cocoon vm list`.
 func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 	out, err := c.runJSON(ctx, "vm", "list", "-o", "json")
 	if err != nil {
@@ -131,7 +130,6 @@ func (c *CocoonCLI) List(ctx context.Context) ([]VM, error) {
 	return parseVMListJSON(out)
 }
 
-// ReconcileStaleCreate runs `cocoon vm reconcile-stale-create`.
 func (c *CocoonCLI) ReconcileStaleCreate(ctx context.Context, vmID string) (StaleCreateOutcome, error) {
 	out, err := c.runJSON(ctx, "vm", "reconcile-stale-create", vmID, "-o", "json")
 	if err != nil {
@@ -264,7 +262,6 @@ func (c *CocoonCLI) SnapshotRemoveIfExists(ctx context.Context, name string) err
 	return wrapped
 }
 
-// Start runs `cocoon vm start`.
 func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	out, err := c.command(ctx, "vm", "start", vmID).CombinedOutput()
 	if err != nil {
@@ -273,7 +270,6 @@ func (c *CocoonCLI) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// NetResize runs `cocoon vm net --nics N`.
 func (c *CocoonCLI) NetResize(ctx context.Context, vmID string, target int) error {
 	out, err := c.command(ctx, "vm", "net", "--nics", strconv.Itoa(target), vmID).CombinedOutput()
 	if err != nil {

@@ -16,6 +16,7 @@ type VMStats struct {
 	PodName   string
 	Namespace string
 	Backend   string
+	Tap       string
 
 	CPUSeconds          float64 // cumulative CPU seconds
 	CPUThrottledSeconds float64

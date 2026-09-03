@@ -128,10 +128,10 @@ type Provider struct {
 	lifecycleIntent map[string]lifecycleEntry
 	deleting        map[string]struct{}
 
-	// Shared scrape sample; see sampleStats.
+	// Shared scrape sample; see CollectVMStats.
 	statsMu   sync.Mutex
 	statsAt   time.Time
-	statsVMs  []vmSample
+	statsVMs  []provider.VMStats
 	statsNode provider.NodeStats
 
 	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
@@ -344,7 +344,6 @@ func (p *Provider) setVMLocked(key string, v *vm.VM) {
 	}
 }
 
-// dropVMLocked removes the VM record for key. Caller must hold p.mu for writing.
 func (p *Provider) dropVMLocked(key string) {
 	v, ok := p.vmsByPod[key]
 	if !ok {
@@ -501,7 +500,6 @@ func (p *Provider) updateTrackedVM(namespace, name, vmID string, mutate func(*vm
 	return &updated
 }
 
-// setVMIP updates the tracked VM's IP (copy-on-write for concurrency safety).
 func (p *Provider) setVMIP(namespace, name, vmID, ip string) bool {
 	return p.updateTrackedVM(namespace, name, vmID, func(v *vm.VM) { v.IP = ip }) != nil
 }

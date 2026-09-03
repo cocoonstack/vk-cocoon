@@ -30,36 +30,20 @@ var cgroupParent = sync.OnceValue(func() string {
 type vmSnapshot struct {
 	ID         string
 	PID        int
-	Tap        string
 	DiskPath   string
 	Hypervisor string
-	Backend    string
-	Namespace  string
-	PodName    string
-	VMName     string
-}
-
-// vmSample is one cached stats reading for a tracked VM.
-type vmSample struct {
-	vmSnapshot
-	cpuSeconds       float64
-	throttledSeconds float64
-	nrThrottled      int64
-	memBytes         int64
-	diskCOW          int64
-	rxBytes          uint64
-	txBytes          uint64
+	provider.VMStats
 }
 
 // metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
-	samples, node := p.sampleStats()
+	samples, node := p.CollectVMStats()
 	nodeCPU, nodeMemory := cpuMemStats(node.CPUSeconds, node.MemoryUsedBytes)
 
 	podStats := make([]statsv1alpha1.PodStats, 0, len(samples))
 	for _, s := range samples {
-		cpu, mem := cpuMemStats(s.cpuSeconds, s.memBytes)
+		cpu, mem := cpuMemStats(s.CPUSeconds, s.MemoryRSS)
 		ps := statsv1alpha1.PodStats{
 			PodRef:    statsv1alpha1.PodReference{Name: s.PodName, Namespace: s.Namespace},
 			StartTime: now,
@@ -86,7 +70,7 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 
 func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	nowMs := time.Now().UnixMilli()
-	samples, node := p.sampleStats()
+	samples, node := p.CollectVMStats()
 
 	families := []*dto.MetricFamily{
 		newCounterFamily("node_cpu_usage_seconds_total",
@@ -99,8 +83,8 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 
 	var containerCPU, containerMem, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
 	for _, s := range samples {
-		cpuSec := s.cpuSeconds
-		memBytes := float64(s.memBytes)
+		cpuSec := s.CPUSeconds
+		memBytes := float64(s.MemoryRSS)
 
 		containerLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
@@ -109,8 +93,8 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 		}
 		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
 		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
-		throttledSec = append(throttledSec, newCounter(s.throttledSeconds, nowMs, containerLabels))
-		throttledPeriods = append(throttledPeriods, newCounter(float64(s.nrThrottled), nowMs, containerLabels))
+		throttledSec = append(throttledSec, newCounter(s.CPUThrottledSeconds, nowMs, containerLabels))
+		throttledPeriods = append(throttledPeriods, newCounter(float64(s.CPUThrottledPeriods), nowMs, containerLabels))
 
 		podLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
@@ -141,31 +125,31 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 	return families, nil
 }
 
-// sampleStats returns the shared short-TTL scrape sample: three consumers (stats summary, metrics, Prometheus) land independently on it.
-func (p *Provider) sampleStats() ([]vmSample, provider.NodeStats) {
+// CollectVMStats returns the shared short-TTL scrape sample: three consumers (stats summary, metrics, Prometheus) land independently on it.
+func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
 	if time.Since(p.statsAt) < statsSampleTTL {
 		return p.statsVMs, p.statsNode
 	}
 	snaps := p.snapshotTrackedVMs()
-	vms := make([]vmSample, 0, len(snaps))
+	vms := make([]provider.VMStats, 0, len(snaps))
 	for _, s := range snaps {
-		sample := vmSample{vmSnapshot: s}
+		sample := s.VMStats
 		if s.Hypervisor == macosHypervisor {
 			// qemu runs outside cocoon's cgroup slice and run-dir.
 			stat := readProcStat(s.PID)
-			sample.cpuSeconds = parseProcStatCPUSeconds(stat)
-			sample.memBytes = parseProcStatRSS(stat, os.Getpagesize())
-			sample.diskCOW = fileSize(s.DiskPath)
+			sample.CPUSeconds = parseProcStatCPUSeconds(stat)
+			sample.MemoryRSS = parseProcStatRSS(stat, os.Getpagesize())
+			sample.DiskCOW = fileSize(s.DiskPath)
 		} else {
-			sample.memBytes = readProcRSS(s.PID)
+			sample.MemoryRSS = readProcRSS(s.PID)
 			// CPU from the cgroup scope, not /proc: the VMM's utime/stime never sees the virtio and io_uring kernel workers.
-			sample.cpuSeconds, sample.throttledSeconds, sample.nrThrottled = vm.ScopeCPUStat(cgroupParent(), s.ID)
-			sample.diskCOW = vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
+			sample.CPUSeconds, sample.CPUThrottledSeconds, sample.CPUThrottledPeriods = vm.ScopeCPUStat(cgroupParent(), s.ID)
+			sample.DiskCOW = vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
 		}
 		if s.Tap != "" {
-			sample.rxBytes, sample.txBytes = readProcNetDev(s.PID, s.Tap)
+			sample.NetRxBytes, sample.NetTxBytes = readProcNetDev(s.PID, s.Tap)
 		}
 		vms = append(vms, sample)
 	}
@@ -191,9 +175,8 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 			continue
 		}
 		snap := vmSnapshot{
-			ID: v.ID, PID: v.PID, DiskPath: v.DiskPath,
-			Hypervisor: v.Hypervisor, Backend: spec.Backend,
-			VMName: spec.VMName, Namespace: pod.Namespace, PodName: pod.Name,
+			ID: v.ID, PID: v.PID, DiskPath: v.DiskPath, Hypervisor: v.Hypervisor,
+			VMName: spec.VMName, PodName: pod.Name, Namespace: pod.Namespace, Backend: spec.Backend,
 		}
 		if len(v.NetworkConfigs) > 0 {
 			snap.Tap = v.NetworkConfigs[0].Tap
@@ -203,11 +186,11 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 	return out
 }
 
-func buildNetworkStats(s vmSample) *statsv1alpha1.NetworkStats {
-	if s.rxBytes == 0 && s.txBytes == 0 {
+func buildNetworkStats(s provider.VMStats) *statsv1alpha1.NetworkStats {
+	if s.NetRxBytes == 0 && s.NetTxBytes == 0 {
 		return nil
 	}
-	rx, tx := s.rxBytes, s.txBytes
+	rx, tx := s.NetRxBytes, s.NetTxBytes
 	return &statsv1alpha1.NetworkStats{
 		Name: s.Tap, RxBytes: &rx, TxBytes: &tx,
 	}

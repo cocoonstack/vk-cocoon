@@ -26,7 +26,6 @@ type VMCollector struct {
 	nodeStorTotal      *prometheus.Desc
 }
 
-// NewVMCollector creates a collector. collectFn is called on every scrape.
 func NewVMCollector(collectFn CollectFunc) *VMCollector {
 	labels := []string{"vm", "pod", "namespace", "backend"}
 	name := func(n string) string { return prometheus.BuildFQName(metricNamespace, metricSubsystem, n) }

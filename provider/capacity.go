@@ -127,11 +127,9 @@ func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	if len(result) != len(want) {
-		for _, n := range names {
-			if _, ok := result[n]; !ok {
-				return nil, fmt.Errorf("%s: %s not found", path, n)
-			}
+	for _, n := range names {
+		if _, ok := result[n]; !ok {
+			return nil, fmt.Errorf("%s: %s not found", path, n)
 		}
 	}
 	return result, nil
