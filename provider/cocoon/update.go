@@ -73,13 +73,13 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	// a same-name recreate reaches the provider as an update while the old incarnation is still tracked
 	if tracked && trackedUID != pod.UID {
 		if !p.detachIncarnation(key, trackedUID, v) {
-			return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+			return errDeleteInFlight(pod)
 		}
 		return p.CreatePod(ctx, pod)
 	}
 	// Pod only: re-asserting v could resurrect a row a resume just dropped.
 	if !p.trackPodUnlessDeleting(pod, nil) {
-		return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+		return errDeleteInFlight(pod)
 	}
 
 	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.

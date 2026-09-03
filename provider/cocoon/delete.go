@@ -20,7 +20,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	if !p.claimDeleting(key) {
-		return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
+		return errDeleteInFlight(pod)
 	}
 	defer p.finishDeleting(key)
 

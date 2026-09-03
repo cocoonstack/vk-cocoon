@@ -301,7 +301,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 func (p *Provider) trackPodUnlessDeleting(pod *corev1.Pod, v *vm.VM) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, deleting := p.deleting[meta.PodKey(pod.Namespace, pod.Name)]; deleting {
+	if p.deletingLocked(meta.PodKey(pod.Namespace, pod.Name)) {
 		return false
 	}
 	p.trackPodLocked(pod, v)
@@ -312,7 +312,7 @@ func (p *Provider) trackPodIncarnation(pod *corev1.Pod, v *vm.VM) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	if _, deleting := p.deleting[key]; deleting || p.supersededLocked(key, pod.UID) {
+	if p.deletingLocked(key) || p.supersededLocked(key, pod.UID) {
 		p.indexOrphanByNameLocked(v)
 		return false
 	}
@@ -383,7 +383,7 @@ func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 
 func (p *Provider) detachIncarnation(key string, uid types.UID, v *vm.VM) bool {
 	p.mu.Lock()
-	if _, deleting := p.deleting[key]; deleting {
+	if p.deletingLocked(key) {
 		p.mu.Unlock()
 		return false
 	}
@@ -444,7 +444,7 @@ func (p *Provider) supersededLocked(key string, uid types.UID) bool {
 func (p *Provider) claimDeletingIncarnation(key string, uid types.UID, vmID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, deleting := p.deleting[key]; deleting {
+	if p.deletingLocked(key) {
 		return false
 	}
 	tracked := p.pods[key]
@@ -459,7 +459,7 @@ func (p *Provider) claimDeletingIncarnation(key string, uid types.UID, vmID stri
 func (p *Provider) claimDeleting(key string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, deleting := p.deleting[key]; deleting {
+	if p.deletingLocked(key) {
 		return false
 	}
 	p.deleting[key] = struct{}{}
@@ -470,6 +470,11 @@ func (p *Provider) finishDeleting(key string) {
 	p.mu.Lock()
 	delete(p.deleting, key)
 	p.mu.Unlock()
+}
+
+func (p *Provider) deletingLocked(key string) bool {
+	_, deleting := p.deleting[key]
+	return deleting
 }
 
 // updateTrackedVM applies mutate copy-on-write and returns nil when the pod's VM changed underneath the caller.
@@ -625,7 +630,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	}
 
 	p.mu.RLock()
-	_, midDelete := p.deleting[affectedKey]
+	midDelete := p.deletingLocked(affectedKey)
 	p.mu.RUnlock()
 	if midDelete {
 		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
@@ -696,6 +701,8 @@ func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, po
 
 func (p *Provider) evictGoneIncarnation(ctx context.Context, key string, pod *corev1.Pod, v *vm.VM, reason, message string) {
 	if !p.claimDeletingIncarnation(key, pod.UID, v.ID) {
+		log.WithFunc("Provider.evictGoneIncarnation").Infof(ctx, "vm %s tracking changed before %s eviction of pod %s/%s, skipping",
+			v.ID, reason, pod.Namespace, pod.Name)
 		return
 	}
 	defer p.finishDeleting(key)
@@ -806,7 +813,7 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) 
 	return "", nil, nil
 }
 
-// evictPod clears the in-memory tables only after the apiserver delete succeeds, so a live pod never loses its provider record.
+// evictPod clears the in-memory tables only once the apiserver delete succeeds or another incarnation owns the name, so a live pod never loses its provider record.
 func (p *Provider) evictPod(ctx context.Context, key string, pod *corev1.Pod, reason, message string) {
 	logger := log.WithFunc("Provider.evictPod")
 
@@ -920,6 +927,10 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 		}
 		p.refreshAndNotify(ctx, pod)
 	}
+}
+
+func errDeleteInFlight(pod *corev1.Pod) error {
+	return fmt.Errorf("delete operation still in flight for pod %s/%s", pod.Namespace, pod.Name)
 }
 
 func patchSuperseded(err error) bool {
