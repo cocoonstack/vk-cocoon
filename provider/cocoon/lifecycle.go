@@ -80,8 +80,14 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		}
 		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
 	}
-	cur, sameIncarnation := p.lifecycleIntent[key]
-	sameIncarnation = sameIncarnation && cur.uid == pod.UID
+	cur, hasIntent := p.lifecycleIntent[key]
+	sameIncarnation := hasIntent && cur.uid == pod.UID
+	if hasIntent && !sameIncarnation && tracked == nil {
+		logger.Infof(ctx,
+			"drop %s/%s %s from uid %s: untracked lifecycle intent belongs to uid %s",
+			pod.Namespace, pod.Name, state, pod.UID, cur.uid)
+		return status, false
+	}
 	if sameIncarnation && status.ObservedGeneration < cur.status.ObservedGeneration {
 		logger.Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",

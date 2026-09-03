@@ -780,6 +780,7 @@ func TestReconcileRepairsIncarnationReusingFlushedSnapshot(t *testing.T) {
 		return false, nil, nil
 	})
 
+	p.trackPod(podB, nil)
 	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateCreating, "")
 
 	transient = false
@@ -789,8 +790,8 @@ func TestReconcileRepairsIncarnationReusingFlushedSnapshot(t *testing.T) {
 	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateCreating) {
 		t.Errorf("apiserver state = %q, want creating (a predecessor's flushed marker must not mask B's drift)", got)
 	}
-	if last := patched[len(patched)-1]; !strings.Contains(last, `"uid":"b"`) {
-		t.Errorf("repair patch = %s, want metadata.uid b", last)
+	if len(patched) == 0 || !strings.Contains(patched[len(patched)-1], `"uid":"b"`) {
+		t.Errorf("patches = %q, want a repair patch carrying uid b", patched)
 	}
 
 	p.mu.RLock()
@@ -843,5 +844,61 @@ func TestTrackPodDropsPredecessorLifecycleMarkers(t *testing.T) {
 	}
 	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "1" {
 		t.Errorf("apiserver observed-generation = %q, want 1", got)
+	}
+}
+
+func TestUntrackedIntentRejectsPredecessorWrite(t *testing.T) {
+	t.Parallel()
+
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(podB.DeepCopy())
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(podB, nil)
+
+	var patched []string
+	transient := true
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		body := string(action.(k8stesting.PatchAction).GetPatch())
+		patched = append(patched, body)
+		switch {
+		case transient:
+			return true, nil, apierrors.NewInternalError(errors.New("apiserver unavailable"))
+		case !strings.Contains(body, `"uid":"b"`):
+			return true, nil, apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "demo-0", nil)
+		}
+		return false, nil, nil
+	})
+
+	if err := p.failCreate(t.Context(), podB, false, "CreateBringUpFailed", errors.New("boot failed")); err == nil {
+		t.Fatal("failCreate must return the create error")
+	}
+
+	transient = false
+	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "post-clone exec failed")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	entry, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || entry.uid != "b" || entry.status.Message != "boot failed" {
+		t.Fatalf("entry after the predecessor's write = %+v present=%v, want B's own failed intent", entry, ok)
+	}
+
+	p.reconcileAllLifecycle(t.Context())
+
+	if len(patched) == 0 || !strings.Contains(patched[len(patched)-1], `"uid":"b"`) {
+		t.Errorf("patches = %q, want a repair patch carrying uid b", patched)
+	}
+	p.mu.RLock()
+	entry = p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if entry.flushed != entry.status.Snapshot() {
+		t.Errorf("flushed = %q, want the repaired snapshot %q", entry.flushed, entry.status.Snapshot())
+	}
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleStateMessage]; got != "boot failed" {
+		t.Errorf("apiserver message = %q, want boot failed", got)
 	}
 }
