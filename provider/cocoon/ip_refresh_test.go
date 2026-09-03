@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/network"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -75,6 +75,33 @@ func TestOnUpdateRepublishesRenewedIPAnnotation(t *testing.T) {
 	}
 	if ip := got.Annotations[meta.AnnotationIP]; ip != "172.20.0.88" {
 		t.Fatalf("apiserver ip annotation = %q after probe update, want the renewed 172.20.0.88", ip)
+	}
+}
+
+func TestOnUpdateSkipsNotifyWhenEndpointsSuperseded(t *testing.T) {
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA.UID = "a"
+	podA.Annotations[meta.AnnotationIP] = "172.20.0.42"
+
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "172.20.0.88"})
+
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) {
+		notified <- updated
+	}
+	p.buildOnUpdate("ns", "demo-0")(t.Context())
+
+	select {
+	case updated := <-notified:
+		t.Errorf("queued status of superseded incarnation %q", updated.UID)
+	default:
 	}
 }
 

@@ -19,7 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/snapshots"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -126,7 +125,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	if p.Pusher != nil {
 		pushStart := time.Now()
 		// spec.Image rides as the baseimage annotation for hibernateEvidence's identity guard.
-		if _, err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
+		if err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
 			p.rollbackHibernateNIC(ctx, v, dropNIC)
@@ -289,7 +288,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
 	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 	return applied
 }

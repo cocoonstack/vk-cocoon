@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/vk-cocoon/probes"
 )
 
 func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*corev1.PodStatus, error) {
@@ -29,7 +30,11 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 
 	ready := corev1.ConditionFalse
 	lifecycleReady := meta.ReadLifecycleState(pod) == meta.LifecycleStateReady
-	if p.Probes != nil && p.Probes.Get(meta.PodKey(namespace, name)).Ready && lifecycleReady {
+	var probe probes.Result
+	if p.Probes != nil {
+		probe = p.Probes.Get(meta.PodKey(namespace, name))
+	}
+	if probe.Ready && lifecycleReady {
 		ready = corev1.ConditionTrue
 	}
 
@@ -39,7 +44,7 @@ func (p *Provider) GetPodStatus(ctx context.Context, namespace, name string) (*c
 		PodIP:     podIP,
 		StartTime: pod.Status.StartTime,
 		Conditions: []corev1.PodCondition{
-			{Type: corev1.PodReady, Status: ready, LastTransitionTime: now},
+			{Type: corev1.PodReady, Status: ready, LastTransitionTime: now, Message: probe.Message},
 			{Type: corev1.PodInitialized, Status: corev1.ConditionTrue, LastTransitionTime: now},
 		},
 		ContainerStatuses: []corev1.ContainerStatus{
@@ -62,7 +67,10 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error 
 	}
 	logger := log.WithFunc("Provider.publishPodStatus")
 	p.mu.RLock()
-	patch, err := json.Marshal(map[string]any{"status": pod.Status})
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"uid": pod.UID},
+		"status":   pod.Status,
+	})
 	p.mu.RUnlock()
 	if err != nil {
 		logger.Errorf(ctx, err, "marshal status for %s/%s", pod.Namespace, pod.Name)
@@ -73,7 +81,12 @@ func (p *Provider) publishPodStatus(ctx context.Context, pod *corev1.Pod) error 
 			ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
 		return patchErr
 	})
-	if err != nil {
+	switch {
+	case err == nil:
+	case patchSuperseded(err):
+		logger.Infof(ctx, "status publish for %s/%s superseded by a newer incarnation, skipping",
+			pod.Namespace, pod.Name)
+	default:
 		logger.Errorf(ctx, err,
 			"status publish failed after retries for %s/%s, lifecycle Ready remains pending", pod.Namespace, pod.Name)
 	}
@@ -92,18 +105,21 @@ func podStatusMatches(current, expected corev1.PodStatus) bool {
 }
 
 func conditionMatches(current, expected []corev1.PodCondition, conditionType corev1.PodConditionType) bool {
-	currentStatus, currentFound := conditionStatus(current, conditionType)
-	expectedStatus, expectedFound := conditionStatus(expected, conditionType)
-	return currentFound == expectedFound && currentStatus == expectedStatus
+	currentCondition, currentFound := findCondition(current, conditionType)
+	expectedCondition, expectedFound := findCondition(expected, conditionType)
+	if currentFound != expectedFound || currentCondition.Status != expectedCondition.Status {
+		return false
+	}
+	return conditionType != corev1.PodReady || currentCondition.Message == expectedCondition.Message
 }
 
-func conditionStatus(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.ConditionStatus, bool) {
+func findCondition(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.PodCondition, bool) {
 	for _, condition := range conditions {
 		if condition.Type == conditionType {
-			return condition.Status, true
+			return condition, true
 		}
 	}
-	return "", false
+	return corev1.PodCondition{}, false
 }
 
 func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {

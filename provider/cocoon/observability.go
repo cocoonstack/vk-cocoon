@@ -8,7 +8,6 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 )
 
@@ -39,5 +38,5 @@ func (p *Provider) lifecycleAlreadyFailed(pod *corev1.Pod) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	cur, ok := p.lifecycleIntent[meta.PodKey(pod.Namespace, pod.Name)]
-	return ok && cur.State == meta.LifecycleStateFailed
+	return ok && cur.uid == pod.UID && cur.status.State == meta.LifecycleStateFailed
 }

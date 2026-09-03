@@ -15,7 +15,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 

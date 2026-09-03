@@ -18,7 +18,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-
+	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -263,6 +263,52 @@ func TestReconcileMacosPodPublishesReadiness(t *testing.T) {
 	}
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateReady {
 		t.Fatalf("adopted reachable macOS pod stuck at lifecycle %q, want ready", state)
+	}
+}
+
+func TestPublishMacosReadinessSkipsSupersededIncarnation(t *testing.T) {
+	spec := macosSpec()
+	podA := newPodWithSpec(spec)
+	podA.UID = "a"
+	podA.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	podA.Annotations[meta.AnnotationIP] = "192.0.2.10"
+
+	podB := podA.DeepCopy()
+	podB.UID = "b"
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(podB)
+	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
+	p.Clientset = client
+	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
+	p.trackPod(podA, &vm.VM{
+		ID:         macosVMID(spec.VMName),
+		Name:       spec.VMName,
+		Hypervisor: macosHypervisor,
+		State:      vm.StateRunning,
+		IP:         "192.0.2.10",
+	})
+
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) {
+		notified <- updated
+	}
+	p.publishMacosReadiness(t.Context(), podA.Namespace, podA.Name)
+
+	live, err := client.CoreV1().Pods(podB.Namespace).Get(t.Context(), podB.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if state := meta.ReadLifecycleState(live); state == meta.LifecycleStateReady {
+		t.Error("successor incarnation was marked ready by its predecessor")
+	}
+	if live.Status.Phase != "" {
+		t.Errorf("successor status phase = %q, want untouched", live.Status.Phase)
+	}
+	select {
+	case updated := <-notified:
+		t.Errorf("queued status of superseded incarnation %q", updated.UID)
+	default:
 	}
 }
 

@@ -61,7 +61,7 @@ Prometheus endpoint with vk-cocoon-specific metrics:
 | `cocoon_vk_postclone_retry_attempts{result}` | Histogram | Attempts consumed before post-clone exec succeeded or failed (`result=ok\|failed`) |
 | `cocoon_vk_vm_table_size` | Gauge | Tracked VM count |
 | `cocoon_vk_orphan_vm_total` | Counter | Orphan VMs at startup |
-| `cocoon_vk_vm_inspect_transient_fail_total` | Counter | Transient VM inspect failures tolerated by the status refresher |
+| `cocoon_vk_vm_inspect_transient_fail_total` | Counter | Transient VM inspect failures retried by the VM-gone handler |
 | `cocoon_vk_pod_evict_failure_total` | Counter | Failed pod evictions |
 | `cocoon_vk_reconcile_adopt_by_name_total` | Counter | Startup reconcile adoptions matched by VM name |
 | `cocoon_vk_stale_create_reconcile_total{outcome}` | Counter | Stale-create verb attempts by startup reconcile and its bounded watcher (`outcome=collected\|busy\|not-creating\|not-found\|error`) |
@@ -88,7 +88,7 @@ they are input-validation noise rather than runtime-lifecycle failures,
 and the rejection is already visible to the caller as the synchronous
 error return.
 
-- **Warning reasons**: `CreateBringUpFailed`, `HibernateEvidenceFailed`,
+- **Warning reasons**: `CreateBringUpFailed`, `HibernateUnsupported`, `HibernateEvidenceFailed`,
   `HibernateEvidenceUnavailable`, `HibernateSnapshotExists`,
   `HibernateNetResizeFailed`,
   `HibernateSnapshotFailed`, `HibernatePushFailed`,

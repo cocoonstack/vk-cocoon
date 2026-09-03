@@ -19,7 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/ociutil"
-
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -359,9 +358,7 @@ func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
 	return digest != "" && p.Runtime.Image(ctx, digest) == nil
 }
 
-// cocoon's `vm clone --pull` only fetches http(s) bases, so an OCI-ref base
-// must be imported here. Dedup by digest — the same bytes may be local under
-// another name (epoch→AR ref migration).
+// ensureSnapshotBaseImage imports an OCI-ref base that `vm clone --pull` cannot fetch, deduplicated by digest.
 func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
 	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
 		return nil
@@ -526,7 +523,7 @@ func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.
 	}
 }
 
-func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) {
+func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) bool {
 	annos := map[string]any{}
 	addAnnotationPatch(annos, meta.AnnotationIP, pod.Annotations[meta.AnnotationIP], ip)
 
@@ -543,14 +540,22 @@ func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Po
 		addAnnotationPatch(annos, meta.AnnotationVNCPort, pod.Annotations[meta.AnnotationVNCPort], vnc)
 	}
 	if len(annos) == 0 {
-		return
+		return true
 	}
-	if err := patchWithRetry(ctx, func() error {
-		return p.patchPodAnnotations(ctx, pod.Namespace, pod.Name, annos)
-	}); err != nil {
-		log.WithFunc("Provider.reconcileRuntimeEndpoints").
-			Errorf(ctx, err, "runtime endpoint annotation reconciliation failed for %s/%s", pod.Namespace, pod.Name)
+	logger := log.WithFunc("Provider.reconcileRuntimeEndpoints")
+	err := patchWithRetry(ctx, func() error {
+		return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, annos)
+	})
+	switch {
+	case err == nil:
+	case patchSuperseded(err):
+		logger.Infof(ctx, "runtime endpoints for %s/%s superseded by a newer incarnation, skipping",
+			pod.Namespace, pod.Name)
+		return false
+	default:
+		logger.Errorf(ctx, err, "runtime endpoint annotation reconciliation failed for %s/%s", pod.Namespace, pod.Name)
 	}
+	return true
 }
 
 func (p *Provider) startProbeIfEnabled(pod *corev1.Pod) {

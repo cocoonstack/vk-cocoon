@@ -64,7 +64,6 @@ func (m *Manager) Close() {
 	m.agentRootCancel()
 }
 
-// Set stores a probe result.
 func (m *Manager) Set(key string, r Result) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

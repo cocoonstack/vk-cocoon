@@ -1,7 +1,6 @@
 package network
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"os"
@@ -87,7 +86,7 @@ func TestCocoonNetLeaseReleaserErrors(t *testing.T) {
 		defer server.Close()
 
 		releaser := NewCocoonNetLeaseReleaser(socketPath)
-		if err := releaser.ReleaseByMAC(context.Background(), "aa:bb:cc:dd:ee:ff"); err == nil {
+		if err := releaser.ReleaseByMAC(t.Context(), "aa:bb:cc:dd:ee:ff"); err == nil {
 			t.Fatal("expected server error")
 		}
 	})

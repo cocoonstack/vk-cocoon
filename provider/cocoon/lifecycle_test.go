@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/vk-cocoon/probes"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -139,9 +139,9 @@ func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
 
 	key := meta.PodKey("ns", "demo-0")
 	intent := meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 4}
-	p.lifecycleIntent[key] = intent
+	p.lifecycleIntent[key] = lifecycleEntry{status: intent}
 	stale := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 3}
-	p.recordLifecycleFlushed(key, stale.Snapshot())
+	p.recordLifecycleFlushed(key, "", stale.Snapshot())
 
 	p.reconcileAllLifecycle(t.Context())
 
@@ -149,7 +149,7 @@ func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
 	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != "hibernated" {
 		t.Errorf("apiserver state after reconcile = %q, want hibernated", got)
 	}
-	if got := p.lifecycleFlushed[key]; got != intent.Snapshot() {
+	if got := p.lifecycleIntent[key].flushed; got != intent.Snapshot() {
 		t.Errorf("flushed snapshot after reconcile = %q, want %q", got, intent.Snapshot())
 	}
 }
@@ -183,7 +183,7 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo", IP: "192.0.2.10"})
 	readyNotifications := 0
 	p.notifyHook = func(notified *corev1.Pod) {
-		if ready, _ := conditionStatus(notified.Status.Conditions, corev1.PodReady); ready == corev1.ConditionTrue {
+		if ready, _ := findCondition(notified.Status.Conditions, corev1.PodReady); ready.Status == corev1.ConditionTrue {
 			readyNotifications++
 		}
 	}
@@ -222,13 +222,13 @@ func TestReadyPublicationNotifiesWhenLifecycleTransitionIsRejected(t *testing.T)
 	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
 	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
 	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "demo", IP: "192.0.2.10"})
-	p.lifecycleIntent[meta.PodKey("ns", "demo-0")] = failed
+	p.lifecycleIntent[meta.PodKey("ns", "demo-0")] = lifecycleEntry{status: failed}
 
 	notified := false
 	p.notifyHook = func(updated *corev1.Pod) {
 		notified = true
-		if ready, _ := conditionStatus(updated.Status.Conditions, corev1.PodReady); ready != corev1.ConditionFalse {
-			t.Fatalf("Ready = %s, want False while lifecycle remains failed", ready)
+		if ready, _ := findCondition(updated.Status.Conditions, corev1.PodReady); ready.Status != corev1.ConditionFalse {
+			t.Fatalf("Ready = %s, want False while lifecycle remains failed", ready.Status)
 		}
 	}
 
@@ -243,7 +243,7 @@ func TestReconcileDropsReadyIntentForDeletedPod(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 	key := meta.PodKey("ns", "gone-0")
 	p.mu.Lock()
-	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.lifecycleIntent[key] = lifecycleEntry{status: meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}}
 	p.mu.Unlock()
 
 	p.reconcileAllLifecycle(t.Context())
@@ -273,7 +273,7 @@ func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 
 	key := meta.PodKey("ns", "demo-0")
 	intent := meta.LifecycleStatus{State: meta.LifecycleStateHibernating, ObservedGeneration: 4}
-	p.lifecycleIntent[key] = intent
+	p.lifecycleIntent[key] = lifecycleEntry{status: intent}
 
 	p.reconcileAllLifecycle(t.Context())
 
@@ -306,8 +306,8 @@ func TestMarkLifecycleStateUsesLatestTrackedGen(t *testing.T) {
 	p.mu.RLock()
 	got := p.lifecycleIntent[key]
 	p.mu.RUnlock()
-	if got.ObservedGeneration != 5 {
-		t.Errorf("intent gen = %d, want 5 (tracked pod's gen)", got.ObservedGeneration)
+	if got.status.ObservedGeneration != 5 {
+		t.Errorf("intent gen = %d, want 5 (tracked pod's gen)", got.status.ObservedGeneration)
 	}
 }
 
@@ -381,8 +381,8 @@ func TestMarkLifecycleStateRejectsStaleObservedGeneration(t *testing.T) {
 	p.mu.RLock()
 	got := p.lifecycleIntent[key]
 	p.mu.RUnlock()
-	if got.State != meta.LifecycleStateHibernating || got.ObservedGeneration != 5 {
-		t.Errorf("intent must keep newer hibernating/5, got %s/%d", got.State, got.ObservedGeneration)
+	if got.status.State != meta.LifecycleStateHibernating || got.status.ObservedGeneration != 5 {
+		t.Errorf("intent must keep newer hibernating/5, got %s/%d", got.status.State, got.status.ObservedGeneration)
 	}
 }
 
@@ -391,10 +391,10 @@ func TestRecordLifecycleFlushedSkipsForgottenPod(t *testing.T) {
 
 	p := newTestProvider(t)
 	key := meta.PodKey("ns", "demo-0")
-	p.recordLifecycleFlushed(key, "stale-snapshot")
+	p.recordLifecycleFlushed(key, "", "stale-snapshot")
 
 	p.mu.RLock()
-	_, present := p.lifecycleFlushed[key]
+	_, present := p.lifecycleIntent[key]
 	p.mu.RUnlock()
 	if present {
 		t.Errorf("recordLifecycleFlushed must not resurrect entries for forgotten pods")
@@ -406,13 +406,13 @@ func TestRecordLifecycleFlushedSkipsAdvancedIntent(t *testing.T) {
 
 	p := newTestProvider(t)
 	key := meta.PodKey("ns", "demo-0")
-	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 5}
+	p.lifecycleIntent[key] = lifecycleEntry{status: meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 5}}
 
 	older := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 4}
-	p.recordLifecycleFlushed(key, older.Snapshot())
+	p.recordLifecycleFlushed(key, "", older.Snapshot())
 
 	p.mu.RLock()
-	got := p.lifecycleFlushed[key]
+	got := p.lifecycleIntent[key].flushed
 	p.mu.RUnlock()
 	if got != "" {
 		t.Errorf("flushed snapshot must not be set when intent advanced, got %q", got)
@@ -428,7 +428,7 @@ func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 	p.Clientset = cs
 	key := meta.PodKey("ns", "demo-0")
 	advanced := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 5}
-	p.lifecycleIntent[key] = advanced
+	p.lifecycleIntent[key] = lifecycleEntry{status: advanced}
 
 	patches := 0
 	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
@@ -436,7 +436,7 @@ func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 		return false, nil, nil
 	})
 	stale := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 4}
-	p.flushLifecycle(t.Context(), "ns", "demo-0", stale)
+	p.flushLifecycle(t.Context(), "ns", "demo-0", "", stale)
 	if patches != 0 {
 		t.Errorf("flushLifecycle must skip stale snapshot, got %d patches", patches)
 	}
@@ -450,17 +450,16 @@ func TestFlushLifecycleDropsTrackingOnNotFound(t *testing.T) {
 	p.Clientset = cs
 	key := meta.PodKey("ns", "demo-0")
 	status := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
-	p.lifecycleIntent[key] = status
-	p.recordLifecycleFlushed(key, status.Snapshot())
+	p.lifecycleIntent[key] = lifecycleEntry{status: status}
+	p.recordLifecycleFlushed(key, "", status.Snapshot())
 
-	p.flushLifecycle(t.Context(), "ns", "demo-0", status)
+	p.flushLifecycle(t.Context(), "ns", "demo-0", "", status)
 
 	p.mu.RLock()
-	_, intentStill := p.lifecycleIntent[key]
-	_, flushedStill := p.lifecycleFlushed[key]
+	entry, intentStill := p.lifecycleIntent[key]
 	p.mu.RUnlock()
-	if intentStill || flushedStill {
-		t.Errorf("NotFound must drop tracking, intent=%v flushed=%v", intentStill, flushedStill)
+	if intentStill {
+		t.Errorf("NotFound must drop tracking, entry=%+v", entry)
 	}
 }
 
@@ -502,12 +501,11 @@ func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
 	key := meta.PodKey("ns", "demo-0")
 	p.mu.RLock()
 	intent := p.lifecycleIntent[key]
-	flushed := p.lifecycleFlushed[key]
 	p.mu.RUnlock()
-	if intent.State != meta.LifecycleStateReady || intent.ObservedGeneration != 3 {
-		t.Errorf("intent = %s/%d, want ready/3", intent.State, intent.ObservedGeneration)
+	if intent.status.State != meta.LifecycleStateReady || intent.status.ObservedGeneration != 3 {
+		t.Errorf("intent = %s/%d, want ready/3", intent.status.State, intent.status.ObservedGeneration)
 	}
-	if flushed != intent.Snapshot() {
+	if intent.flushed != intent.status.Snapshot() {
 		t.Errorf("flushed must match intent on seed to avoid spurious reconcile")
 	}
 }
@@ -573,8 +571,8 @@ func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.
 	p.mu.RLock()
 	got := p.lifecycleIntent[key]
 	p.mu.RUnlock()
-	if got.State != meta.LifecycleStateReady {
-		t.Errorf("intent state = %q, want ready (write from a recreated pod's stale goroutine must drop)", got.State)
+	if got.status.State != meta.LifecycleStateReady {
+		t.Errorf("intent state = %q, want ready (write from a recreated pod's stale goroutine must drop)", got.status.State)
 	}
 	if annoState := podA.Annotations[meta.AnnotationLifecycleState]; annoState != string(meta.LifecycleStateReady) {
 		t.Errorf("pod A annotation = %q, want ready (must not be overwritten by the other incarnation)", annoState)
@@ -628,20 +626,16 @@ func TestForgetPodDropsLifecycleState(t *testing.T) {
 	p := newTestProvider(t)
 	key := meta.PodKey("ns", "demo-0")
 	status := meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
-	p.lifecycleIntent[key] = status
-	p.recordLifecycleFlushed(key, status.Snapshot())
+	p.lifecycleIntent[key] = lifecycleEntry{status: status}
+	p.recordLifecycleFlushed(key, "", status.Snapshot())
 
 	p.forgetPod("ns", "demo-0")
 
 	p.mu.RLock()
-	flushed := p.lifecycleFlushed[key]
-	_, intentStill := p.lifecycleIntent[key]
+	entry, intentStill := p.lifecycleIntent[key]
 	p.mu.RUnlock()
-	if flushed != "" {
-		t.Errorf("forgetPod must drop flushed entry, got %q", flushed)
-	}
 	if intentStill {
-		t.Errorf("forgetPod must drop intent entry")
+		t.Errorf("forgetPod must drop the lifecycle entry, got %+v", entry)
 	}
 }
 
@@ -651,7 +645,7 @@ func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 	const ns, name = "ns", "demo-0"
 	key := meta.PodKey(ns, name)
 	p := newTestProvider(t)
-	p.lifecycleIntent[key] = meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}
+	p.lifecycleIntent[key] = lifecycleEntry{status: meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}}
 
 	stale := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: name, Namespace: ns,
@@ -664,5 +658,247 @@ func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 
 	if got := p.pods[key].Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateReady) {
 		t.Errorf("tracked lifecycle-state = %q, want ready (intent must win over stale UpdatePod)", got)
+	}
+}
+
+func TestFlushLifecycleKeepsIntentStagedByNewerIncarnation(t *testing.T) {
+	t.Parallel()
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(podA)
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	key := meta.PodKey("ns", "demo-0")
+	statusA := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}
+	statusB := meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 2}
+	p.mu.Lock()
+	p.lifecycleIntent[key] = lifecycleEntry{uid: "a", status: statusA}
+	p.mu.Unlock()
+
+	var patched []string
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patched = append(patched, string(action.(k8stesting.PatchAction).GetPatch()))
+		if len(patched) > 1 {
+			return false, nil, nil
+		}
+		p.mu.Lock()
+		p.lifecycleIntent[key] = lifecycleEntry{uid: "b", status: statusB}
+		p.mu.Unlock()
+		return true, nil, apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "demo-0", nil)
+	})
+
+	p.flushLifecycle(t.Context(), "ns", "demo-0", "a", statusA)
+
+	p.mu.RLock()
+	got, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || got.uid != "b" || got.status != statusB {
+		t.Fatalf("intent after superseded flush = %+v present=%v, want uid b with %+v", got, ok, statusB)
+	}
+
+	p.reconcileAllLifecycle(t.Context())
+
+	if len(patched) != 2 || !strings.Contains(patched[1], `"uid":"b"`) {
+		t.Fatalf("patches = %q, want a second one carrying uid b", patched)
+	}
+}
+
+func TestFailCreateRepairsLifecycleWithOriginatingUID(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(pod.DeepCopy())
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(pod, nil)
+
+	var patched []string
+	transient := true
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		body := string(action.(k8stesting.PatchAction).GetPatch())
+		patched = append(patched, body)
+		switch {
+		case transient:
+			return true, nil, apierrors.NewInternalError(errors.New("apiserver unavailable"))
+		case !strings.Contains(body, `"uid":"a"`):
+			return true, nil, apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "demo-0", nil)
+		}
+		return false, nil, nil
+	})
+
+	if err := p.failCreate(t.Context(), pod, false, "CreateBringUpFailed", errors.New("boot failed")); err == nil {
+		t.Fatal("failCreate must return the create error")
+	}
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	entry, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || entry.uid != "a" {
+		t.Fatalf("intent after failCreate = %+v present=%v, want it retained with uid a", entry, ok)
+	}
+
+	transient = false
+	p.reconcileAllLifecycle(t.Context())
+
+	p.mu.RLock()
+	entry, ok = p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok {
+		t.Fatal("repair intent must survive reconciliation, or the failure never reaches the pod")
+	}
+	if last := patched[len(patched)-1]; !strings.Contains(last, `"uid":"a"`) {
+		t.Errorf("repair patch = %s, want metadata.uid a", last)
+	}
+	if entry.flushed != entry.status.Snapshot() {
+		t.Errorf("flushed = %q, want the repaired snapshot %q", entry.flushed, entry.status.Snapshot())
+	}
+}
+
+func TestReconcileRepairsIncarnationReusingFlushedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	cs := fake.NewSimpleClientset(podB.DeepCopy())
+	p := newTestProvider(t)
+	p.Clientset = cs
+
+	key := meta.PodKey("ns", "demo-0")
+	status := meta.LifecycleStatus{State: meta.LifecycleStateCreating}
+	p.mu.Lock()
+	p.lifecycleIntent[key] = lifecycleEntry{uid: "a", status: status, flushed: status.Snapshot()}
+	p.mu.Unlock()
+
+	var patched []string
+	transient := true
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patched = append(patched, string(action.(k8stesting.PatchAction).GetPatch()))
+		if transient {
+			return true, nil, apierrors.NewInternalError(errors.New("apiserver unavailable"))
+		}
+		return false, nil, nil
+	})
+
+	p.trackPod(podB, nil)
+	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateCreating, "")
+
+	transient = false
+	p.reconcileAllLifecycle(t.Context())
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateCreating) {
+		t.Errorf("apiserver state = %q, want creating (a predecessor's flushed marker must not mask B's drift)", got)
+	}
+	if len(patched) == 0 || !strings.Contains(patched[len(patched)-1], `"uid":"b"`) {
+		t.Errorf("patches = %q, want a repair patch carrying uid b", patched)
+	}
+
+	p.mu.RLock()
+	entry := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if entry.uid != "b" || entry.flushed != status.Snapshot() {
+		t.Errorf("entry after repair = %+v, want uid b flushed %q", entry, status.Snapshot())
+	}
+}
+
+func TestTrackPodDropsPredecessorLifecycleMarkers(t *testing.T) {
+	t.Parallel()
+
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns", UID: "a",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
+	}}
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns", UID: "b",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "1"},
+	}}
+	cs := fake.NewSimpleClientset(podB.DeepCopy())
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(podA, nil)
+	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "predecessor boom")
+
+	p.trackPod(podB, nil)
+	if got := podB.Annotations[meta.AnnotationLifecycleState]; got != "" {
+		t.Errorf("tracked pod B carries the predecessor's state %q", got)
+	}
+
+	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateCreating, "")
+	if p.lifecycleAlreadyFailed(podB) {
+		t.Error("B must not inherit the predecessor's Failed gate")
+	}
+	p.markReadyPublished(t.Context(), podB)
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	entry := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if entry.uid != "b" || entry.status.State != meta.LifecycleStateReady || entry.status.ObservedGeneration != 1 {
+		t.Errorf("entry = %+v, want uid b with ready at generation 1", entry)
+	}
+
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateReady) {
+		t.Errorf("apiserver state = %q, want ready", got)
+	}
+	if got := updated.Annotations[meta.AnnotationLifecycleObservedGeneration]; got != "1" {
+		t.Errorf("apiserver observed-generation = %q, want 1", got)
+	}
+}
+
+func TestUntrackedIntentRejectsPredecessorWrite(t *testing.T) {
+	t.Parallel()
+
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	cs := fake.NewSimpleClientset(podB.DeepCopy())
+	p := newTestProvider(t)
+	p.Clientset = cs
+	p.trackPod(podB, nil)
+
+	var patched []string
+	transient := true
+	cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		body := string(action.(k8stesting.PatchAction).GetPatch())
+		patched = append(patched, body)
+		switch {
+		case transient:
+			return true, nil, apierrors.NewInternalError(errors.New("apiserver unavailable"))
+		case !strings.Contains(body, `"uid":"b"`):
+			return true, nil, apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "demo-0", nil)
+		}
+		return false, nil, nil
+	})
+
+	if err := p.failCreate(t.Context(), podB, false, "CreateBringUpFailed", errors.New("boot failed")); err == nil {
+		t.Fatal("failCreate must return the create error")
+	}
+
+	transient = false
+	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "post-clone exec failed")
+
+	key := meta.PodKey("ns", "demo-0")
+	p.mu.RLock()
+	entry, ok := p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if !ok || entry.uid != "b" || entry.status.Message != "boot failed" {
+		t.Fatalf("entry after the predecessor's write = %+v present=%v, want B's own failed intent", entry, ok)
+	}
+
+	p.reconcileAllLifecycle(t.Context())
+
+	if len(patched) == 0 || !strings.Contains(patched[len(patched)-1], `"uid":"b"`) {
+		t.Errorf("patches = %q, want a repair patch carrying uid b", patched)
+	}
+	p.mu.RLock()
+	entry = p.lifecycleIntent[key]
+	p.mu.RUnlock()
+	if entry.flushed != entry.status.Snapshot() {
+		t.Errorf("flushed = %q, want the repaired snapshot %q", entry.flushed, entry.status.Snapshot())
+	}
+	updated, _ := cs.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if got := updated.Annotations[meta.AnnotationLifecycleStateMessage]; got != "boot failed" {
+		t.Errorf("apiserver message = %q, want boot failed", got)
 	}
 }

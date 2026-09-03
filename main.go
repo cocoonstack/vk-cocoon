@@ -38,7 +38,6 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
-
 	"github.com/cocoonstack/vk-cocoon/guest/sac"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/network"
@@ -67,6 +66,7 @@ const (
 	defaultKubeletAPIPort = 10250
 	endpointPatchWait     = 5 * time.Second
 	endpointPatchRetry    = 2 * time.Second
+	nodePatchAttempts     = 10
 	shutdownTimeout       = 10 * time.Second
 )
 
@@ -176,6 +176,7 @@ func main() {
 	p.StartLifecycleReconciler()
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
+		p.Pods = cfg.Pods
 		if cfg.Node != nil {
 			applyNodeLabels(cfg.Node, nodePool, snapshotCompatibilityClass)
 			cfg.Node.Status.NodeInfo.KubeletVersion = version.VERSION
@@ -358,10 +359,10 @@ func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interf
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}
-	for attempt := range 10 {
+	for attempt := range nodePatchAttempts {
 		nodeObj, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
-			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+			if attempt == nodePatchAttempts-1 || !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue
@@ -370,7 +371,7 @@ func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interf
 		updated, err := clientset.CoreV1().Nodes().Update(ctx, nodeObj, metav1.UpdateOptions{})
 		if err != nil {
 			logger.Errorf(ctx, err, "re-assert node labels attempt %d", attempt)
-			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+			if attempt == nodePatchAttempts-1 || !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue
@@ -380,7 +381,7 @@ func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interf
 		}
 		if _, err := clientset.CoreV1().Nodes().UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 			logger.Errorf(ctx, err, "patch daemon endpoints attempt %d", attempt)
-			if !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
+			if attempt == nodePatchAttempts-1 || !commonk8s.SleepCtx(ctx, endpointPatchRetry) {
 				return
 			}
 			continue

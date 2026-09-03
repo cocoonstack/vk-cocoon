@@ -82,11 +82,11 @@ backoff from 1 s to 60 s, reset on successful connect). Normal stream
 closes (cocoon restart) use a fixed 2 s reconnect delay. When an event
 arrives:
 
-| Event | Inspect result | Action |
-|---|---|---|
-| `DELETED` | VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
-| `MODIFIED` (state ≠ running) | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
-| `MODIFIED` (state ≠ running) | state = running | False alarm — ignore |
+| Inspect result (after a `DELETED` or non-running `MODIFIED` event) | Action |
+|---|---|
+| VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
+| state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
+| state = running | False alarm — ignore |
 
 A 30-second **restart cooldown** (`restartCooldown`) prevents tight
 restart loops when a VM keeps crashing. If the cooldown has not elapsed

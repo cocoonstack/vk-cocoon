@@ -7,7 +7,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -19,6 +19,12 @@ const (
 	lifecycleReconcileInterval = 15 * time.Second
 )
 
+type lifecycleEntry struct {
+	uid     types.UID
+	status  meta.LifecycleStatus
+	flushed string
+}
+
 // StartLifecycleReconciler runs the annotation re-flush loop; NotifyPods only pushes pod.Status.
 func (p *Provider) StartLifecycleReconciler() {
 	p.goBackground(func() {
@@ -29,7 +35,7 @@ func (p *Provider) StartLifecycleReconciler() {
 func (p *Provider) markLifecycleState(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) {
 	status, applied := p.setLifecycleState(ctx, pod, state, message)
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 }
 
@@ -55,7 +61,7 @@ func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, s
 	if err := p.publishPodStatus(ctx, pod); err != nil {
 		return
 	}
-	p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	p.notify(pod)
 }
 
@@ -74,25 +80,33 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 		}
 		status.ObservedGeneration = max(gen, meta.ReadCocoonSetGeneration(tracked))
 	}
-	if cur, ok := p.lifecycleIntent[key]; ok && status.ObservedGeneration < cur.ObservedGeneration {
+	cur, hasIntent := p.lifecycleIntent[key]
+	sameIncarnation := hasIntent && cur.uid == pod.UID
+	if hasIntent && !sameIncarnation && tracked == nil {
+		logger.Infof(ctx,
+			"drop %s/%s %s from uid %s: untracked lifecycle intent belongs to uid %s",
+			pod.Namespace, pod.Name, state, pod.UID, cur.uid)
+		return status, false
+	}
+	if sameIncarnation && status.ObservedGeneration < cur.status.ObservedGeneration {
 		logger.Infof(ctx,
 			"drop stale lifecycle write for %s/%s: %s/gen=%d < intent %s/gen=%d",
 			pod.Namespace, pod.Name, status.State, status.ObservedGeneration,
-			cur.State, cur.ObservedGeneration)
+			cur.status.State, cur.status.ObservedGeneration)
 		return status, false
 	}
 	// same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
-	if cur, ok := p.lifecycleIntent[key]; ok &&
-		cur.State == meta.LifecycleStateFailed &&
+	if sameIncarnation &&
+		cur.status.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateCreating &&
 		state != meta.LifecycleStateHibernating &&
-		status.ObservedGeneration == cur.ObservedGeneration {
+		status.ObservedGeneration == cur.status.ObservedGeneration {
 		logger.Infof(ctx,
 			"drop %s/%s %s at gen=%d over sticky Failed", pod.Namespace, pod.Name, state, gen)
 		return status, false
 	}
-	p.lifecycleIntent[key] = status
+	p.lifecycleIntent[key] = lifecycleEntry{uid: pod.UID, status: status}
 	status.Apply(pod)
 	if tracked != nil && tracked != pod {
 		// keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
@@ -101,34 +115,33 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	return status, true
 }
 
-func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, status meta.LifecycleStatus) {
+func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, uid types.UID, status meta.LifecycleStatus) {
 	logger := log.WithFunc("Provider.flushLifecycle")
 	annos := status.Annotations()
 	key := meta.PodKey(namespace, name)
 	snap := status.Snapshot()
 	var lastErr error
-	for range lifecyclePatchAttempts {
-		// skip if intent advanced or pod was forgotten — a newer flush owns the write.
+	for attempt := range lifecyclePatchAttempts {
+		// skip if intent advanced, another incarnation staged one, or the pod was forgotten — a newer flush owns the write.
 		p.mu.RLock()
-		cur, ok := p.lifecycleIntent[key]
+		_, owned := p.lifecycleOwnedLocked(key, uid, snap)
 		p.mu.RUnlock()
-		if !ok || cur.Snapshot() != snap {
+		if !owned {
 			return
 		}
-		err := p.patchPodAnnotations(ctx, namespace, name, annos)
+		err := p.patchIncarnationAnnotations(ctx, namespace, name, uid, annos)
 		if err == nil {
-			p.recordLifecycleFlushed(key, snap)
+			p.recordLifecycleFlushed(key, uid, snap)
 			return
 		}
-		if apierrors.IsNotFound(err) {
-			// pod deleted on apiserver; drop tracking so reconciler stops retrying.
-			p.mu.Lock()
-			delete(p.lifecycleIntent, key)
-			delete(p.lifecycleFlushed, key)
-			p.mu.Unlock()
+		if patchSuperseded(err) {
+			p.dropSupersededLifecycle(key, uid, snap)
 			return
 		}
 		lastErr = err
+		if attempt == lifecyclePatchAttempts-1 {
+			break
+		}
 		if !commonk8s.SleepCtx(ctx, lifecyclePatchInterval) {
 			return
 		}
@@ -144,29 +157,30 @@ func (p *Provider) runLifecycleReconciler(ctx context.Context) {
 func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 	type lcDrift struct {
 		ns, name string
+		uid      types.UID
 		status   meta.LifecycleStatus
 	}
 
 	p.mu.RLock()
 	drifts := make([]lcDrift, 0, len(p.lifecycleIntent))
 	for key, intent := range p.lifecycleIntent {
-		if p.lifecycleFlushed[key] == intent.Snapshot() {
+		if intent.flushed == intent.status.Snapshot() {
 			continue
 		}
 		ns, name := splitPodKey(key)
-		drifts = append(drifts, lcDrift{ns: ns, name: name, status: intent})
+		drifts = append(drifts, lcDrift{ns: ns, name: name, uid: intent.uid, status: intent.status})
 	}
 	p.mu.RUnlock()
 
 	fanOut(statusReconcileFanOut, drifts, func(d lcDrift) {
 		if d.status.State != meta.LifecycleStateReady {
-			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			p.flushLifecycle(ctx, d.ns, d.name, d.uid, d.status)
 			return
 		}
 		if pod, err := p.GetPod(ctx, d.ns, d.name); err == nil {
 			p.publishReadyLifecycle(ctx, pod, d.status)
 		} else {
-			p.flushLifecycle(ctx, d.ns, d.name, d.status)
+			p.flushLifecycle(ctx, d.ns, d.name, d.uid, d.status)
 		}
 	})
 }
@@ -179,8 +193,7 @@ func (p *Provider) seedLifecycleIntentFromPod(pod *corev1.Pod) {
 	status := meta.ReadLifecycleStatus(pod)
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	p.lifecycleIntent[key] = status
-	p.lifecycleFlushed[key] = status.Snapshot()
+	p.lifecycleIntent[key] = lifecycleEntry{uid: pod.UID, status: status, flushed: status.Snapshot()}
 	p.mu.Unlock()
 }
 
@@ -189,26 +202,54 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
 	cur, ok := p.lifecycleIntent[key]
-	if !ok || meta.ReadCocoonSetGeneration(pod) <= cur.ObservedGeneration {
+	if !ok || cur.uid != pod.UID || meta.ReadCocoonSetGeneration(pod) <= cur.status.ObservedGeneration {
 		p.mu.Unlock()
 		return
 	}
 	// read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
-	status, applied := p.applyLifecycleLocked(ctx, pod, cur.State, cur.Message)
+	status, applied := p.applyLifecycleLocked(ctx, pod, cur.status.State, cur.status.Message)
 	p.mu.Unlock()
 	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, status)
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	}
 }
 
-func (p *Provider) recordLifecycleFlushed(key, snap string) {
+func (p *Provider) recordLifecycleFlushed(key string, uid types.UID, snap string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	cur, ok := p.lifecycleIntent[key]
-	if !ok || cur.Snapshot() != snap {
+	cur, owned := p.lifecycleOwnedLocked(key, uid, snap)
+	if !owned {
 		return
 	}
-	p.lifecycleFlushed[key] = snap
+	cur.flushed = snap
+	p.lifecycleIntent[key] = cur
+}
+
+func (p *Provider) dropSupersededLifecycle(key string, uid types.UID, snap string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, owned := p.lifecycleOwnedLocked(key, uid, snap); !owned {
+		return
+	}
+	delete(p.lifecycleIntent, key)
+}
+
+// reassertLifecycleLocked re-stamps this incarnation's intent: the framework's snapshot can carry a stale state it would sync back to the apiserver.
+func (p *Provider) reassertLifecycleLocked(key string, pod *corev1.Pod) {
+	cur, ok := p.lifecycleIntent[key]
+	if !ok {
+		return
+	}
+	if cur.uid != pod.UID {
+		delete(p.lifecycleIntent, key)
+		return
+	}
+	cur.status.Apply(pod)
+}
+
+func (p *Provider) lifecycleOwnedLocked(key string, uid types.UID, snap string) (lifecycleEntry, bool) {
+	cur, ok := p.lifecycleIntent[key]
+	return cur, ok && cur.uid == uid && cur.status.Snapshot() == snap
 }
 
 func splitPodKey(key string) (string, string) {

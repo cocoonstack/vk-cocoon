@@ -10,7 +10,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-common/snapshot"
-
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
@@ -29,13 +28,13 @@ type Pusher struct {
 }
 
 // PushSnapshot uploads a snapshot to the registry at the given repo/tag.
-func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) (*snapshot.PushResult, error) {
+func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) error {
 	repo = cmp.Or(repo, vmName)
 	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
 
 	if p.Transfer.ZstdLevel > 0 || p.Transfer.ChunkSizeMiB > 0 {
 		if err := pushGate.Acquire(ctx, 1); err != nil {
-			return nil, err
+			return err
 		}
 		defer pushGate.Release(1)
 	}
@@ -49,7 +48,7 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 	if p.NodeName != "" {
 		annotations = map[string]string{AnnotationFromNode: p.NodeName}
 	}
-	res, err := pusher.Push(ctx, snapshot.PushOptions{
+	if err := pusher.Push(ctx, snapshot.PushOptions{
 		Name:            repo,
 		Tag:             tag,
 		BaseImage:       baseImage,
@@ -58,9 +57,8 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 		ChunkSizeMiB:    p.Transfer.ChunkSizeMiB,
 		Concurrency:     p.Transfer.Concurrency,
 		MemoryBudgetMiB: p.Transfer.MemoryBudgetMiB,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("push snapshot %s:%s: %w", repo, tag, err)
+	}); err != nil {
+		return fmt.Errorf("push snapshot %s:%s: %w", repo, tag, err)
 	}
-	return res, nil
+	return nil
 }
