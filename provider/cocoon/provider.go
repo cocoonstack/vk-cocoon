@@ -117,9 +117,8 @@ type Provider struct {
 	macosExecFn         func(context.Context, ...string) (string, error)
 	macosProcessAliveFn func(int) bool
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
-	lifecycleIntent  map[string]lifecycleEntry
-	lifecycleFlushed map[string]string
-	deleting         map[string]struct{}
+	lifecycleIntent map[string]lifecycleEntry
+	deleting        map[string]struct{}
 
 	// Shared scrape sample; see sampleStats.
 	statsMu   sync.Mutex
@@ -143,22 +142,21 @@ type Provider struct {
 func NewProvider(ctx context.Context) *Provider {
 	lifecycleCtx, lifecycleStop := context.WithCancel(ctx)
 	return &Provider{
-		startTime:        time.Now(),
-		lifecycleCtx:     lifecycleCtx,
-		lifecycleStop:    lifecycleStop,
-		OrphanPolicy:     provider.OrphanDestroy,
-		RestoreMode:      vm.RestoreMmap,
-		Pinger:           network.NopPinger{},
-		pods:             map[string]*corev1.Pod{},
-		vmsByPod:         map[string]*vm.VM{},
-		vmsByName:        map[string]*vm.VM{},
-		macosVNC:         map[string]int{},
-		lastRestart:      map[string]time.Time{},
-		pendingRecheck:   map[string]struct{}{},
-		resumedOps:       map[string]struct{}{},
-		lifecycleIntent:  map[string]lifecycleEntry{},
-		lifecycleFlushed: map[string]string{},
-		deleting:         map[string]struct{}{},
+		startTime:       time.Now(),
+		lifecycleCtx:    lifecycleCtx,
+		lifecycleStop:   lifecycleStop,
+		OrphanPolicy:    provider.OrphanDestroy,
+		RestoreMode:     vm.RestoreMmap,
+		Pinger:          network.NopPinger{},
+		pods:            map[string]*corev1.Pod{},
+		vmsByPod:        map[string]*vm.VM{},
+		vmsByName:       map[string]*vm.VM{},
+		macosVNC:        map[string]int{},
+		lastRestart:     map[string]time.Time{},
+		pendingRecheck:  map[string]struct{}{},
+		resumedOps:      map[string]struct{}{},
+		lifecycleIntent: map[string]lifecycleEntry{},
+		deleting:        map[string]struct{}{},
 	}
 }
 
@@ -297,10 +295,7 @@ func (p *Provider) trackPod(pod *corev1.Pod, v *vm.VM) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	// re-assert the lifecycle intent: the framework's snapshot can carry a stale state it would sync back to the apiserver
-	if intent, ok := p.lifecycleIntent[key]; ok {
-		intent.status.Apply(pod)
-	}
+	p.reassertLifecycleLocked(key, pod)
 	p.pods[key] = pod
 	if v != nil {
 		p.setVMLocked(key, v)
@@ -368,7 +363,6 @@ func (p *Provider) untrackLocked(key string) {
 	delete(p.pods, key)
 	delete(p.macosVNC, key)
 	delete(p.lifecycleIntent, key)
-	delete(p.lifecycleFlushed, key)
 	delete(p.deleting, key)
 }
 
