@@ -118,10 +118,21 @@ func (m *Manager) Start(key string, probe Probe, onUpdate OnUpdate) {
 	}
 	m.mu.Unlock()
 
-	go m.run(ctx, key, probe, onUpdate, ready)
+	go m.run(ctx, key, ag, probe, onUpdate, ready)
 }
 
-func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnUpdate, lastReady bool) {
+func (m *Manager) setOwned(key string, ag *agent, r Result) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, ok := m.agents[key]; !ok || current != ag {
+		return false
+	}
+	r.LastSeen = time.Now().UTC()
+	m.results[key] = r
+	return true
+}
+
+func (m *Manager) run(ctx context.Context, key string, ag *agent, probe Probe, onUpdate OnUpdate, lastReady bool) {
 	defer func() {
 		m.mu.Lock()
 		if _, ok := m.agents[key]; !ok {
@@ -141,7 +152,9 @@ func (m *Manager) run(ctx context.Context, key string, probe Probe, onUpdate OnU
 		}
 
 		ready, message := runProbe(ctx, probe)
-		m.Set(key, Result{Ready: ready, Message: message})
+		if !m.setOwned(key, ag, Result{Ready: ready, Message: message}) {
+			return
+		}
 
 		switch {
 		case ready && !lastReady:
