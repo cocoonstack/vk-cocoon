@@ -363,11 +363,7 @@ func (p *Provider) untrackPod(key string) {
 
 func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 	p.mu.Lock()
-	tracked, ok := p.pods[key]
-	dropped := ok && tracked.UID == uid
-	if dropped {
-		p.untrackLocked(key)
-	}
+	dropped := p.untrackIncarnationLocked(key, uid)
 	p.mu.Unlock()
 	if dropped && p.Probes != nil {
 		p.Probes.Forget(key)
@@ -375,10 +371,24 @@ func (p *Provider) untrackIncarnation(key string, uid types.UID) {
 }
 
 func (p *Provider) detachIncarnation(key string, uid types.UID, v *vm.VM) {
-	p.untrackIncarnation(key, uid)
 	p.mu.Lock()
-	p.indexOrphanByNameLocked(v)
+	dropped := p.untrackIncarnationLocked(key, uid)
+	if bound := p.vmsByPod[key]; bound == nil || bound.Name != v.Name {
+		p.indexOrphanByNameLocked(v)
+	}
 	p.mu.Unlock()
+	if dropped && p.Probes != nil {
+		p.Probes.Forget(key)
+	}
+}
+
+func (p *Provider) untrackIncarnationLocked(key string, uid types.UID) bool {
+	tracked, ok := p.pods[key]
+	if !ok || tracked.UID != uid {
+		return false
+	}
+	p.untrackLocked(key)
+	return true
 }
 
 func (p *Provider) untrackLocked(key string) {

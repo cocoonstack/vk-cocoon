@@ -357,6 +357,22 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 	}
 }
 
+func TestDetachIncarnationKeepsSuccessorBinding(t *testing.T) {
+	p := newTestProvider(t)
+	podB := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podB.UID = "b"
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+
+	p.detachIncarnation(meta.PodKey("ns", "demo-0"), "a", &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Errorf("name index = %#v, want the successor's vmid-b", got)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
+		t.Errorf("successor binding = %#v, want vmid-b", got)
+	}
+}
+
 func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	rt := &fakeRuntime{runErr: errors.New("boot failed")}
 	p := newTestProvider(t)
