@@ -21,7 +21,6 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -167,11 +166,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		return nil
 	}
 
-	p.mu.Lock()
-	pod.Status.Phase = corev1.PodRunning
-	now := metav1.Now()
-	pod.Status.StartTime = &now
-	p.mu.Unlock()
+	p.markPodRunning(pod)
 	// ready defers to the probe; onUpdate only fires on transitions, so a reachable adoption needs this explicit publish.
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()

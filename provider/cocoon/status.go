@@ -115,11 +115,7 @@ func conditionMatches(current, expected []corev1.PodCondition, conditionType cor
 }
 
 func findCondition(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.PodCondition, bool) {
-	i := slices.IndexFunc(conditions, func(c corev1.PodCondition) bool { return c.Type == conditionType })
-	if i < 0 {
-		return corev1.PodCondition{}, false
-	}
-	return conditions[i], true
+	return findBy(conditions, func(c corev1.PodCondition) bool { return c.Type == conditionType })
 }
 
 func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {
@@ -138,9 +134,13 @@ func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {
 }
 
 func findContainerStatus(statuses []corev1.ContainerStatus, name string) (corev1.ContainerStatus, bool) {
-	i := slices.IndexFunc(statuses, func(s corev1.ContainerStatus) bool { return s.Name == name })
-	if i < 0 {
-		return corev1.ContainerStatus{}, false
+	return findBy(statuses, func(s corev1.ContainerStatus) bool { return s.Name == name })
+}
+
+func findBy[T any](items []T, match func(T) bool) (T, bool) {
+	if i := slices.IndexFunc(items, match); i >= 0 {
+		return items[i], true
 	}
-	return statuses[i], true
+	var zero T
+	return zero, false
 }

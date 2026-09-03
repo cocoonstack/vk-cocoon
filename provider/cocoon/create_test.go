@@ -2089,7 +2089,7 @@ func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
 	if p.trackPodIncarnation(podB, vmB) {
 		t.Fatal("bind during an in-flight delete must be rejected")
 	}
-	p.untrackPod(key)
+	p.forgetPod("ns", "demo-0")
 
 	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-b" {
 		t.Fatalf("orphan by name = %#v, want vmid-b kept for adoption", got)

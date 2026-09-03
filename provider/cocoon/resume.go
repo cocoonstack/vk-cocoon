@@ -139,16 +139,13 @@ func (p *Provider) releaseResume(key string) {
 	delete(p.resumedOps, key)
 }
 
-func (p *Provider) resumeBusy(key string) bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	_, held := p.resumedOps[key]
-	return held
-}
-
 // backoffIfResuming rejects a pod-mutating callback while a resumed op holds the claim; claims only shrink after startup, so check-then-act is safe.
 func (p *Provider) backoffIfResuming(namespace, name string) error {
-	if key := meta.PodKey(namespace, name); p.resumeBusy(key) {
+	key := meta.PodKey(namespace, name)
+	p.mu.RLock()
+	_, held := p.resumedOps[key]
+	p.mu.RUnlock()
+	if held {
 		return fmt.Errorf("resumed operation still in flight for %s", key)
 	}
 	return nil

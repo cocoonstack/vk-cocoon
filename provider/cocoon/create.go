@@ -134,13 +134,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// First probe is synchronous so refreshStatus below sees its result.
 	p.startProbeIfEnabled(pod)
 
-	// startProbeIfEnabled launches a background goroutine that reads the tracked
-	// pod via GetPod; guard the status writes so they don't race its DeepCopy.
-	p.mu.Lock()
-	pod.Status.Phase = corev1.PodRunning
-	now := metav1.Now()
-	pod.Status.StartTime = &now
-	p.mu.Unlock()
+	p.markPodRunning(pod)
 	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP;
 	// restore defers to dispatchHibernateRestore.
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
@@ -515,6 +509,15 @@ func (p *Provider) adoptableVM(ctx context.Context, name string) (*vm.VM, error)
 		return nil, nil
 	}
 	return nil, fmt.Errorf("inspect vm %s indexed as %s: %w", existing.ID, name, err)
+}
+
+// markPodRunning guards the status writes against the probe goroutine's DeepCopy.
+func (p *Provider) markPodRunning(pod *corev1.Pod) {
+	p.mu.Lock()
+	pod.Status.Phase = corev1.PodRunning
+	now := metav1.Now()
+	pod.Status.StartTime = &now
+	p.mu.Unlock()
 }
 
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) bool {

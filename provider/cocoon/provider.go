@@ -368,10 +368,7 @@ func (p *Provider) gcStaleRestarts() {
 }
 
 func (p *Provider) forgetPod(namespace, name string) {
-	p.untrackPod(meta.PodKey(namespace, name))
-}
-
-func (p *Provider) untrackPod(key string) {
+	key := meta.PodKey(namespace, name)
 	p.mu.Lock()
 	p.untrackLocked(key)
 	p.mu.Unlock()
