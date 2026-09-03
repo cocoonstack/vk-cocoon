@@ -331,6 +331,7 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 	client := fake.NewSimpleClientset(podB)
 	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
 	p.Clientset = client
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: vm.StateRunning}}
 	p.trackPod(podA, nil)
 
 	if p.applyRuntime(t.Context(), podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}) {
@@ -366,6 +367,7 @@ func TestUpdatePodRoutesARecreatedPodThroughCreate(t *testing.T) {
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(podB)
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: vm.StateRunning}}
 	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
 
 	if err := p.UpdatePod(t.Context(), podB); err != nil {
@@ -1996,6 +1998,52 @@ func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
 	}
 }
 
+func TestCreatePodCreatesAfreshWhenTheIndexedVMIsGone(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0", State: vm.StateRunning}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.mu.Lock()
+	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-gone", Name: "vk-ns-demo-0"})
+	p.mu.Unlock()
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+	if rt.ran == nil {
+		t.Fatal("a fresh VM must be run when the indexed VM is gone")
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-new" {
+		t.Fatalf("tracked VM = %#v, want vmid-new", got)
+	}
+	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-new" {
+		t.Fatalf("VM by name = %#v, want vmid-new", got)
+	}
+}
+
+func TestCreatePodAdoptsTheIndexedVMWhileItLives(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	live := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", State: vm.StateRunning}
+	rt := &fakeRuntime{inspectVM: live, runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.mu.Lock()
+	p.indexOrphanByNameLocked(live)
+	p.mu.Unlock()
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+	if rt.ran != nil {
+		t.Fatalf("ran a VM instead of adopting: %#v", rt.ran)
+	}
+	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-live" {
+		t.Fatalf("tracked VM = %#v, want vmid-live", got)
+	}
+}
+
 func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
 	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	podA.UID = "a"
@@ -2125,6 +2173,7 @@ func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	client := fake.NewSimpleClientset(pod)
 	p.Clientset = client
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-adopt", Name: "vk-ns-demo-0", IP: "192.0.2.10", State: vm.StateRunning}}
 	p.trackPod(pod, &vm.VM{ID: "vmid-adopt", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
 
 	var mu sync.Mutex

@@ -68,7 +68,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	// A macOS-owned name must not be adopted through the CH path (its probe
 	// and lifecycle verbs would misfire); only createMacosPod may bind it.
-	if existing := p.vmByName(spec.VMName); existing != nil && !isMacosVM(existing) {
+	if existing := p.adoptableVM(ctx, spec.VMName); existing != nil {
 		if !p.applyRuntime(ctx, pod, existing) {
 			p.skipSuperseded(ctx, pod, "create")
 			return nil
@@ -490,6 +490,23 @@ func (p *Provider) vmByName(name string) *vm.VM {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.vmsByName[name]
+}
+
+func (p *Provider) adoptableVM(ctx context.Context, name string) *vm.VM {
+	existing := p.vmByName(name)
+	if existing == nil || isMacosVM(existing) {
+		return nil
+	}
+	if _, err := p.Runtime.Inspect(ctx, existing.ID); !errors.Is(err, vm.ErrVMNotFound) {
+		return existing
+	}
+	p.mu.Lock()
+	if p.vmsByName[name] == existing {
+		delete(p.vmsByName, name)
+	}
+	p.mu.Unlock()
+	log.WithFunc("Provider.adoptableVM").Infof(ctx, "vm %s indexed as %s is gone, creating afresh", existing.ID, name)
+	return nil
 }
 
 func (p *Provider) applyRuntime(ctx context.Context, pod *corev1.Pod, v *vm.VM) bool {
