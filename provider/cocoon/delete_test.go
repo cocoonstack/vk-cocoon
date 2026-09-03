@@ -146,7 +146,7 @@ func TestDeletePodSkipsASupersededIncarnation(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
 		t.Fatalf("tracked VM = %#v, want the successor's vmid-b", got)
 	}
-	if uid, tracked := p.trackedPodUID(meta.PodKey("ns", "demo-0")); !tracked || uid != podB.UID {
+	if _, uid, tracked := p.trackedIncarnation(meta.PodKey("ns", "demo-0")); !tracked || uid != podB.UID {
 		t.Fatalf("tracked UID = %q (%v), want %q", uid, tracked, podB.UID)
 	}
 }

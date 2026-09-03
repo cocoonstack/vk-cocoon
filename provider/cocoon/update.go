@@ -58,8 +58,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	spec := meta.ParseVMSpec(pod)
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	v := p.vmForPod(pod.Namespace, pod.Name)
-	trackedUID, tracked := p.trackedPodUID(key)
+	v, trackedUID, tracked := p.trackedIncarnation(key)
 	// an untracked pod with nothing to wake from is a recreate, not a wake
 	if !tracked && v == nil && !wantHibernate {
 		hasSource, err := p.hasWakeSource(ctx, spec)
