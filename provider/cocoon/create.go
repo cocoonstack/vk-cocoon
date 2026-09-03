@@ -153,9 +153,10 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 	}
 	p.failOp(ctx, pod, reason, "create", err)
+	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
-	if tracked := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; tracked != nil && tracked.UID == pod.UID {
-		delete(p.pods, meta.PodKey(pod.Namespace, pod.Name))
+	if !p.supersededLocked(key, pod.UID) {
+		delete(p.pods, key)
 	}
 	p.mu.Unlock()
 	return err
@@ -529,7 +530,7 @@ func (p *Provider) applyVMRuntime(ctx context.Context, pod *corev1.Pod, rt meta.
 		log.WithFunc("Provider.applyVMRuntime").
 			Errorf(ctx, err, "annotation patch failed after retries for %s/%s, will reconcile on restart", pod.Namespace, pod.Name)
 	}
-	return !patchSuperseded(err)
+	return !nameTaken(err)
 }
 
 func (p *Provider) reconcileRuntimeEndpoints(ctx context.Context, pod *corev1.Pod, ip string) bool {

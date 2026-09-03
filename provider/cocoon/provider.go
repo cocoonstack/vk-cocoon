@@ -869,7 +869,11 @@ func (p *Provider) buildOnUpdate(namespace, name string) probes.OnUpdate {
 }
 
 func patchSuperseded(err error) bool {
-	return apierrors.IsInvalid(err) || apierrors.IsConflict(err) || apierrors.IsNotFound(err)
+	return nameTaken(err) || apierrors.IsNotFound(err)
+}
+
+func nameTaken(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsConflict(err)
 }
 
 // patchWithRetry retries fn lifecyclePatchAttempts times; a canceled ctx returns nil since nothing is left to log against.

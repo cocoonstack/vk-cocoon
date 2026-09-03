@@ -357,6 +357,22 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 	}
 }
 
+func TestApplyRuntimeKeepsTheBindingWhenThePodIsGone(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod.UID = "a"
+
+	p := newTestProvider(t)
+	p.Clientset = fake.NewSimpleClientset()
+	p.trackPod(pod, nil)
+
+	if !p.applyRuntime(t.Context(), pod, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}) {
+		t.Fatal("runtime write dropped the binding because the API pod was already deleted")
+	}
+	if bound := p.vmForPod("ns", "demo-0"); bound == nil || bound.ID != "vmid-a" {
+		t.Errorf("VM bound to the deleted pod = %#v, want vmid-a so DeletePod can remove it", bound)
+	}
+}
+
 func TestDetachIncarnationKeepsSuccessorBinding(t *testing.T) {
 	p := newTestProvider(t)
 	podB := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
