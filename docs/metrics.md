@@ -28,7 +28,8 @@ CPU quota.
 
 ## `:9091/metrics` — vk-cocoon metrics
 
-Prometheus endpoint with vk-cocoon-specific metrics:
+Prometheus endpoint with vk-cocoon-specific metrics; the same listener
+also serves `/debug/pprof/` and `/debug/pprof/profile`:
 
 | Metric | Type | Description |
 |---|---|---|

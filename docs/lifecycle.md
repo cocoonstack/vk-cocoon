@@ -67,7 +67,8 @@ cannot wedge node registration. Rejected create/update calls count on
      source of truth for "vk-cocoon owns this VM's lifecycle".
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot
      locally using a **tag-aware name** (`repo:tag`, or bare `repo` when
-     the tag is `latest` for backward compatibility). If the local
+     the tag is `latest` for backward compatibility; a name over 63
+     characters is truncated to a sha256-suffixed form). If the local
      snapshot does not exist, pull it from the registry via
      `Puller.PullSnapshot`. Before cloning, `assertSnapshotBackend`
      validates the snapshot's recorded hypervisor matches `spec.Backend`
@@ -86,7 +87,9 @@ cannot wedge node registration. Rejected create/update calls count on
      `--cpu-quota-us` with `--cpu-period-us`; without a limit cocoon's
      Guaranteed-at-N quota applies. Only the `vm run` path additionally
      translates pod resources into guest resources: vCPU count rounds
-     the CPU limit up (requests when no limit is set).
+     the CPU limit up (requests when no limit is set), and `--memory`
+     is taken from the pod's memory request, falling back to the limit
+     when no request is set.
    - **Mode `run`** (`Managed=true`): `ensureRunImage` makes the image
      available locally before launching the VM. It peeks the OCI
      manifest via `Puller.Registry`: cocoonstack cloud-image artifacts
@@ -168,7 +171,7 @@ save/restore.
 | Transition | Behavior |
 |---|---|
 | `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure runs before any release). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
-| `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
+| `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. CH+Windows snapshots are NIC-less, so the clone hot-adds a fresh NIC; vk-cocoon then waits up to 45 s for a DHCP lease, nudging a renew at 30 s if none has landed yet. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.

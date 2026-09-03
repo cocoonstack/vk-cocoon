@@ -47,9 +47,11 @@ The `probes/` package owns that loop:
 3. A background goroutine re-runs the probe — pre-Ready on exponential
    backoff (100 ms growing ×1.5 up to a 1 s cap, so a fast guest flips to
    Ready within ~100 ms), then a steady 5 s interval once Ready — and
-   invokes `onUpdate` after 3 consecutive failures flip readiness back to
-   false. `onUpdate` re-reads the pod, rebuilds the status, and calls
-   `notify` so the kubelet observes the change.
+   invokes `onUpdate` on every readiness flip: the not-ready → ready
+   transition (delivering the first Ready when the synchronous probe in
+   step 2 was not yet ready), and again after 3 consecutive failures flip
+   readiness back to false. `onUpdate` re-reads the pod, rebuilds the
+   status, and calls `notify` so the kubelet observes the change.
 4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod
    goroutine; `Manager.Close` is called once at shutdown to tear every
    remaining agent down.

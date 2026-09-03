@@ -11,12 +11,15 @@ is entered when a static-IP NIC is present, and unconditionally for every
 | CH + cloudimg + static IP | snapshot restore does not re-trigger cloud-init | `cloud-init clean + init` |
 | CH + OCI + static IP | guest retains old IP config | write MAC-based networkd files |
 | FC (any) | guest MAC frozen in vmstate | `ip link set address` + networkd reconfig |
+| Windows (any) | guest NIC needs a Plug-and-Play re-enumerate to come up cleanly | PowerShell `Disable-PnpDevice` + `Enable-PnpDevice` on Class Net |
 
 vk-cocoon first applies the fixup itself over `cocoon vm exec`, retrying
 every 3 s within a 180 s budget and flipping the pod Ready on success. Only
 once that budget is exhausted does it base64-encode the required shell
-commands into `vm.cocoonstack.io/post-clone-hint` on the pod and emit a
-warning, leaving the pod Running but Not Ready. To retrieve the commands:
+commands into `vm.cocoonstack.io/post-clone-hint` on the pod, record the
+joined per-attempt error chain in `vm.cocoonstack.io/post-clone-errors`,
+and emit a warning, leaving the pod Running but Not Ready. To retrieve the
+commands:
 
 ```bash
 kubectl get pod <name> \
@@ -24,7 +27,7 @@ kubectl get pod <name> \
   | base64 -d
 ```
 
-After executing via `cocoon vm console`, the probe detects connectivity
+After executing via `cocoon vm exec`, the probe detects connectivity
 and flips Ready automatically.
 
 Classification uses the snapshot's original image URL (normal clone) or

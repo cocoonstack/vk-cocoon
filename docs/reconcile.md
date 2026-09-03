@@ -29,7 +29,8 @@ On every restart vk-cocoon:
    counted on
    `cocoon_vk_stale_create_reconcile_total`.
 4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
-   the VMID against the runtime list.
+   the VMID against the runtime list. A pod with no VMID annotation is
+   instead adopted by matching its `spec.VMName` against the runtime list.
 5. Walks unmatched VMs through the configured `VK_ORPHAN_POLICY`:
    - `destroy` (default): remove the VM and release its DHCP leases so pod-less VMs don't accumulate
      after restart or pod chaos.
@@ -42,7 +43,7 @@ On every restart vk-cocoon:
 6. Dispatches the work a restart interrupted (`dispatchOwedWork`),
    derived per tracked pod from persisted facts only: a hibernate
    annotation with a VM re-enters `hibernate()` (booting a crashed VM
-   first); `lifecycle=creating` splits on `post-clone-state` (`running`
+   first); `lifecycle=creating` (or unset) splits on `post-clone-state` (`running`
    re-runs the fixup, `done` re-checks SAC then holds Ready until the
    lease lands, absent derives the plan — for CH+Windows drop-NIC specs
    hibernate evidence decides restore vs fresh, retried under the
@@ -52,8 +53,9 @@ On every restart vk-cocoon:
    `cocoon_vk_startup_resume_total` and emit `ResumedAfterRestart`.
 
 A pod whose annotated VMID does **not** appear in the local runtime list
-logs a warning and is left to `CreatePod` to recreate on the next
-reconcile.
+is, if hibernated, handled by clearing its VMID/IP annotations and
+tracking it without a VM so a wake retry starts clean; otherwise it logs
+a warning and is left to `CreatePod` to recreate on the next reconcile.
 
 Right after the listing and before the stale-create sweep, every
 non-terminal pod on the node is checked against the node's snapshot CPU
@@ -85,13 +87,15 @@ arrives:
 | Inspect result (after a `DELETED` or non-running `MODIFIED` event) | Action |
 |---|---|
 | VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
-| state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network) |
+| Inspect inconclusive (transient error) | Deferred recheck loop; on budget exhaustion (30 min) removes the VM and evicts the pod (phase=`Failed`, reason=`VMInspectTimeout`) |
+| state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network); on failure removes the VM and evicts the pod (phase=`Failed`, reason=`RestartFailed`) |
 | state = running | False alarm — ignore |
 
 A 30-second **restart cooldown** (`restartCooldown`) prevents tight
 restart loops when a VM keeps crashing. If the cooldown has not elapsed
-since the last restart, the pod is evicted (phase=`Failed`,
-reason=`RestartCooldown`) so the operator can do a clean recreation.
+since the last restart, vk-cocoon removes the VM, evicts the pod
+(phase=`Failed`, reason=`RestartCooldown`), and releases its DHCP leases
+so the operator can do a clean recreation.
 Stale cooldown entries are garbage-collected on each event stream
 reconnect.
 
