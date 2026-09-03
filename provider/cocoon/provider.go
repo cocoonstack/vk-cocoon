@@ -66,6 +66,8 @@ const (
 	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
+type podNotifier func(*corev1.Pod)
+
 // Provider maps Kubernetes pods to cocoon MicroVMs.
 type Provider struct {
 	NodeName                   string
@@ -111,7 +113,7 @@ type Provider struct {
 	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
 	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
 	macosImageSF   singleflight.Group   // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
-	notifyHook     func(*corev1.Pod)
+	notifyHook     podNotifier
 
 	// macOS test seams; production leaves them nil (real exec / real signal-0 probe).
 	macosExecFn         func(context.Context, ...string) (string, error)
@@ -192,7 +194,6 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-// NotifyPods stores the kubelet's status callback; the initial push is deferred because one before WaitForCacheSync is dropped.
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier

@@ -85,7 +85,7 @@ func TestPeerRestoreChecksumMismatchFails(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if strings.HasPrefix(req.URL.Path, slicePath) {
 			buf := new(bytes.Buffer)
 			if _, err := buf.ReadFrom(resp.Body); err != nil {
@@ -96,12 +96,12 @@ func TestPeerRestoreChecksumMismatchFails(t *testing.T) {
 			b[0] ^= 0xff
 			w.Header().Set("Trailer", sliceChecksumTrailer)
 			w.WriteHeader(http.StatusOK)
-			w.Write(b) //nolint:errcheck,gosec
+			w.Write(b)
 			w.Header().Set(sliceChecksumTrailer, resp.Trailer.Get(sliceChecksumTrailer))
 			return
 		}
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body) //nolint:errcheck,gosec
+		io.Copy(w, resp.Body)
 	}))
 	t.Cleanup(proxy.Close)
 
@@ -127,7 +127,7 @@ func TestPeerServerRejectsTraversal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close() //nolint:errcheck,gosec
+		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			t.Errorf("%s: status %d, want a rejection", path, resp.StatusCode)
 		}
@@ -173,7 +173,7 @@ func TestPeerRestoreSparseSourceFile(t *testing.T) {
 	if err := f.Truncate(4 << 20); err != nil {
 		t.Fatal(err)
 	}
-	f.Close() //nolint:errcheck,gosec
+	f.Close()
 
 	srv := httptest.NewServer((&PeerServer{
 		Snapshots: stubResolver{"vm-sp": {Name: "vm-sp", ID: "SNAP-SP"}},
@@ -225,7 +225,7 @@ func TestWriteSkippingZerosPreservesContentAndHoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()
 	if err := f.Truncate(6 * zeroSkipBytes); err != nil {
 		t.Fatal(err)
 	}

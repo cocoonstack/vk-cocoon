@@ -3,6 +3,7 @@ package cocoon
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -114,12 +115,11 @@ func conditionMatches(current, expected []corev1.PodCondition, conditionType cor
 }
 
 func findCondition(conditions []corev1.PodCondition, conditionType corev1.PodConditionType) (corev1.PodCondition, bool) {
-	for _, condition := range conditions {
-		if condition.Type == conditionType {
-			return condition, true
-		}
+	i := slices.IndexFunc(conditions, func(c corev1.PodCondition) bool { return c.Type == conditionType })
+	if i < 0 {
+		return corev1.PodCondition{}, false
 	}
-	return corev1.PodCondition{}, false
+	return conditions[i], true
 }
 
 func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {
@@ -138,10 +138,9 @@ func containerStatusMatches(current, expected []corev1.ContainerStatus) bool {
 }
 
 func findContainerStatus(statuses []corev1.ContainerStatus, name string) (corev1.ContainerStatus, bool) {
-	for _, status := range statuses {
-		if status.Name == name {
-			return status, true
-		}
+	i := slices.IndexFunc(statuses, func(s corev1.ContainerStatus) bool { return s.Name == name })
+	if i < 0 {
+		return corev1.ContainerStatus{}, false
 	}
-	return corev1.ContainerStatus{}, false
+	return statuses[i], true
 }

@@ -37,6 +37,8 @@ const (
 	// staleSnapshotRmBudget / staleSnapshotRmDelay bound the wait for a killed save's orphaned child to release the snapshot flock.
 	staleSnapshotRmBudget = 30 * time.Second
 	staleSnapshotRmDelay  = 500 * time.Millisecond
+
+	execFixedArgs = 5
 )
 
 var (
@@ -473,7 +475,7 @@ func appendCPUPolicyArgs(args []string, policy CPUPolicy) []string {
 
 // buildExecArgs assembles `cocoon vm exec [-i] [-e KEY=VAL...] <vmID> -- <argv>...`, sorting env keys for a deterministic argv.
 func buildExecArgs(vmID string, argv []string, env map[string]string, interactive bool) []string {
-	args := make([]string, 0, 5+2*len(env)+len(argv)) //nolint:mnd
+	args := make([]string, 0, execFixedArgs+2*len(env)+len(argv))
 	args = append(args, "vm", "exec")
 	if interactive {
 		args = append(args, "-i")
