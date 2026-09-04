@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cocoonstack/vk-cocoon/metrics"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 const snapshotCleanupTimeout = 10 * time.Second
@@ -21,24 +23,24 @@ func (p *Provider) removeSnapshotDetached(ctx context.Context, funcLabel, name s
 }
 
 // saveAndPushSnapshot saves and pushes a snapshot; errors are logged and counted but not returned since the delete path treats them as non-fatal.
-func (p *Provider) saveAndPushSnapshot(ctx context.Context, vmName, vmID, tag, image string) {
+func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *vm.VM, tag, image string) {
 	logger := log.WithFunc("Provider.saveAndPushSnapshot")
 
 	saveStart := time.Now()
-	if err := p.Runtime.SnapshotSave(ctx, vmName, vmID); err != nil {
-		logger.Errorf(ctx, err, "snapshot save %s", vmName)
+	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
+		logger.Errorf(ctx, err, "snapshot save %s", v.Name)
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
 		return
 	}
-	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
+	metrics.SnapshotSaveDuration.WithLabelValues(pod.Namespace).Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 
 	pushStart := time.Now()
-	if err := p.Pusher.PushSnapshot(ctx, vmName, "", tag, image); err != nil {
-		logger.Errorf(ctx, err, "push snapshot %s", vmName)
+	if err := p.Pusher.PushSnapshot(ctx, v.Name, "", tag, image); err != nil {
+		logger.Errorf(ctx, err, "push snapshot %s", v.Name)
 		metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 		return
 	}
-	metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
+	metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 	metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 }

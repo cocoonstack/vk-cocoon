@@ -217,7 +217,7 @@ func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
@@ -238,9 +238,13 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	if _, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0"); err == nil {
+	if _, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
+}
+
+func testWakePod() *corev1.Pod {
+	return newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
 }
 
 func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {

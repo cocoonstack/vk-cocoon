@@ -128,7 +128,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
-		if err := p.dropNICForHibernate(ctx, v); err != nil {
+		if err := p.dropNICForHibernate(ctx, pod, v); err != nil {
 			p.failOp(ctx, pod, "HibernateNetResizeFailed", "update", err)
 			return err
 		}
@@ -136,29 +136,29 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
-		metrics.HibernateTotal.WithLabelValues("snapshot", "failed").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "snapshot", "failed").Inc()
 		p.rollbackHibernateNIC(ctx, v, dropNIC)
 		err = fmt.Errorf("save snapshot %s: %w", v.Name, err)
 		p.failOp(ctx, pod, "HibernateSnapshotFailed", "update", err)
 		return err
 	}
-	metrics.SnapshotSaveDuration.Observe(time.Since(saveStart).Seconds())
+	metrics.SnapshotSaveDuration.WithLabelValues(pod.Namespace).Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
-	metrics.HibernateTotal.WithLabelValues("snapshot", "ok").Inc()
+	metrics.HibernateTotal.WithLabelValues(pod.Namespace, "snapshot", "ok").Inc()
 	if p.Pusher != nil {
 		pushStart := time.Now()
 		// spec.Image rides as the baseimage annotation for hibernateEvidence's identity guard.
 		if err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-			metrics.HibernateTotal.WithLabelValues("push", "failed").Inc()
+			metrics.HibernateTotal.WithLabelValues(pod.Namespace, "push", "failed").Inc()
 			p.rollbackHibernateNIC(ctx, v, dropNIC)
 			err = fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 			p.failOp(ctx, pod, "HibernatePushFailed", "update", err)
 			return err
 		}
-		metrics.SnapshotPushDuration.Observe(time.Since(pushStart).Seconds())
+		metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
-		metrics.HibernateTotal.WithLabelValues("push", "ok").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "push", "ok").Inc()
 	}
 	preCleared := true
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
@@ -166,7 +166,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		logger.Errorf(ctx, err, "clear pre-remove annotations %s/%s", pod.Namespace, pod.Name)
 	}
 	if err := p.removeVM(ctx, v); err != nil {
-		metrics.HibernateTotal.WithLabelValues("remove", "failed").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "remove", "failed").Inc()
 		if p.Registry != nil {
 			if delErr := p.Registry.DeleteManifest(ctx, v.Name, meta.HibernateSnapshotTag); delErr != nil {
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
@@ -179,7 +179,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
 		return err
 	}
-	metrics.HibernateTotal.WithLabelValues("remove", "ok").Inc()
+	metrics.HibernateTotal.WithLabelValues(pod.Namespace, "remove", "ok").Inc()
 	if !preCleared {
 		// VM is gone; reconcileStaleHibernate is the last fallback if this also fails.
 		if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
@@ -197,23 +197,23 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 }
 
 // dropNICForHibernate releases the lease and detaches the NIC so restored clones DISCOVER, not NAK; best-effort.
-func (p *Provider) dropNICForHibernate(ctx context.Context, v *vm.VM) error {
+func (p *Provider) dropNICForHibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM) error {
 	logger := log.WithFunc("Provider.dropNICForHibernate")
 	if err := p.execGuestIpconfig(ctx, v.ID, "release"); err != nil {
-		metrics.HibernateTotal.WithLabelValues("dhcp_release", "failed").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "dhcp_release", "failed").Inc()
 		logger.Warnf(ctx, "dhcp release before hibernate %s: %v (proceeding)", v.Name, err)
 	} else {
-		metrics.HibernateTotal.WithLabelValues("dhcp_release", "ok").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "dhcp_release", "ok").Inc()
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
-		metrics.HibernateTotal.WithLabelValues("netresize", "failed").Inc()
+		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "netresize", "failed").Inc()
 		// renew regardless, detached from ctx: an exec error doesn't prove the guest skipped the release.
 		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
 			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}
 		return fmt.Errorf("drop NIC pre-hibernate %s: %w", v.Name, err)
 	}
-	metrics.HibernateTotal.WithLabelValues("netresize", "ok").Inc()
+	metrics.HibernateTotal.WithLabelValues(pod.Namespace, "netresize", "ok").Inc()
 	return nil
 }
 
@@ -245,7 +245,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}
-	src, err := p.resolveWakeSource(ctx, spec.VMName)
+	src, err := p.resolveWakeSource(ctx, pod, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
@@ -258,7 +258,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 		p.failOp(ctx, pod, "WakeCloneFailed", "update", err)
 		return false, err
 	}
-	metrics.VMBootDuration.WithLabelValues("clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
+	metrics.VMBootDuration.WithLabelValues(pod.Namespace, "clone", spec.Backend).Observe(time.Since(cloneStart).Seconds())
 	if !p.applyRuntime(ctx, pod, v) {
 		p.skipSuperseded(ctx, pod, "update")
 		return false, nil
@@ -492,7 +492,7 @@ type wakeSource struct {
 func (s wakeSource) label() string { return cmp.Or(s.localName, s.origin) }
 
 // resolveWakeSource picks the source in order: verified local snapshot, peer raw-file transfer, then registry pull.
-func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSource, error) {
+func (p *Provider) resolveWakeSource(ctx context.Context, pod *corev1.Pod, vmName string) (wakeSource, error) {
 	var (
 		m         *manifest.OCIManifest
 		cfg       *manifest.SnapshotConfig
@@ -520,7 +520,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 		return wakeSource{}, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
 	if !tagAbsent {
-		if src, ok := p.tryPeerRestore(ctx, vmName, m, cfg); ok {
+		if src, ok := p.tryPeerRestore(ctx, pod, vmName, m, cfg); ok {
 			return src, nil
 		}
 	}
@@ -552,7 +552,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, vmName string) (wakeSo
 }
 
 // tryPeerRestore stages raw files from the manifest's peer node; best-effort, falls back to registry pull.
-func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
+func (p *Provider) tryPeerRestore(ctx context.Context, pod *corev1.Pod, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
 	if p.PeerRestorer == nil {
 		return wakeSource{}, false
 	}
@@ -590,7 +590,7 @@ func (p *Provider) tryPeerRestore(ctx context.Context, vmName string, m *manifes
 		logger.Warnf(ctx, "peer restore %s from %s: %v (falling back to registry)", vmName, peerNode, err)
 		return wakeSource{}, false
 	}
-	metrics.PeerRestoreDuration.Observe(time.Since(start).Seconds())
+	metrics.PeerRestoreDuration.WithLabelValues(pod.Namespace).Observe(time.Since(start).Seconds())
 	metrics.PeerRestoreTotal.WithLabelValues("ok").Inc()
 	logger.Infof(ctx, "peer restore %s from %s in %.1fs", vmName, peerNode, time.Since(start).Seconds())
 	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true

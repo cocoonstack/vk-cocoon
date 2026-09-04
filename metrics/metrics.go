@@ -10,7 +10,8 @@ const (
 	metricNamespace = "cocoon"
 	metricSubsystem = "vk"
 
-	labelResult = "result"
+	labelNamespace = "namespace"
+	labelResult    = "result"
 )
 
 var (
@@ -75,13 +76,14 @@ var (
 		[]string{labelResult},
 	)
 
-	VMTableSize = prometheus.NewGauge(
+	VMTableSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "vm_table_size",
-			Help:      "Number of VMs vk-cocoon currently tracks.",
+			Help:      "Number of VMs vk-cocoon currently tracks by Kubernetes namespace.",
 		},
+		[]string{labelNamespace},
 	)
 
 	OrphanVMTotal = prometheus.NewCounter(
@@ -158,10 +160,10 @@ var (
 			Help:      "Time to create a VM (run or clone), from start to Running.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		},
-		[]string{"mode", "backend"}, // mode=run|clone, backend=cloud-hypervisor|firecracker
+		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone, backend=cloud-hypervisor|firecracker
 	)
 
-	SnapshotSaveDuration = prometheus.NewHistogram(
+	SnapshotSaveDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
@@ -169,9 +171,10 @@ var (
 			Help:      "Time to save a VM snapshot (cocoon snapshot save).",
 			Buckets:   []float64{1, 2, 5, 10, 30, 60, 120},
 		},
+		[]string{labelNamespace},
 	)
 
-	SnapshotPushDuration = prometheus.NewHistogram(
+	SnapshotPushDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
@@ -179,6 +182,7 @@ var (
 			Help:      "Time to push a snapshot to the registry.",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
 		},
+		[]string{labelNamespace},
 	)
 
 	SnapshotPullDuration = prometheus.NewHistogram(
@@ -201,7 +205,7 @@ var (
 		[]string{labelResult}, // ok|failed
 	)
 
-	PeerRestoreDuration = prometheus.NewHistogram(
+	PeerRestoreDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
@@ -210,16 +214,18 @@ var (
 			// Healthy local-ssd transfers land ~5s; long tail for degraded links.
 			Buckets: []float64{1, 2.5, 5, 7.5, 10, 15, 30, 60, 120},
 		},
+		[]string{labelNamespace},
 	)
 
-	ProbeDuration = prometheus.NewHistogram(
+	ProbeDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "probe_duration_seconds",
-			Help:      "Time taken by a single readiness probe (ICMP ping).",
+			Help:      "Time taken by a single readiness probe (ICMP or TCP).",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
 		},
+		[]string{labelNamespace},
 	)
 
 	HibernateTotal = prometheus.NewCounterVec(
@@ -229,7 +235,7 @@ var (
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
-		[]string{"phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
+		[]string{labelNamespace, "phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
 	)
 
 	LeaseReleaseTotal = prometheus.NewCounterVec(
@@ -239,7 +245,7 @@ var (
 			Name:      "lease_release_total",
 			Help:      "Cocoon-net DHCP lease releases after VM destruction, by result.",
 		},
-		[]string{"result"},
+		[]string{labelResult},
 	)
 
 	WakeTotal = prometheus.NewCounterVec(
@@ -259,7 +265,7 @@ var (
 			Name:      "wake_ip_wait_total",
 			Help:      "Outcomes of the post-clone and wake DHCP lease wait.",
 		},
-		[]string{labelResult}, // result=ok|timeout
+		[]string{labelNamespace, labelResult}, // result=ok|timeout
 	)
 
 	WakeRenewNudgeTotal = prometheus.NewCounterVec(

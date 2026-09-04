@@ -103,7 +103,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	if restoring {
 		bootMode = "clone"
 	}
-	metrics.VMBootDuration.WithLabelValues(bootMode, spec.Backend).Observe(time.Since(bootStart).Seconds())
+	metrics.VMBootDuration.WithLabelValues(pod.Namespace, bootMode, spec.Backend).Observe(time.Since(bootStart).Seconds())
 
 	p.seedLeaseIP(v)
 
@@ -230,7 +230,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return nil, "", err
 	}
 	if meta.ReadRestoreFromHibernate(pod) {
-		src, err := p.resolveWakeSource(ctx, spec.VMName)
+		src, err := p.resolveWakeSource(ctx, pod, spec.VMName)
 		if err != nil {
 			return nil, "", err
 		}
