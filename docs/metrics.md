@@ -42,25 +42,25 @@ also serves `/debug/pprof/` and `/debug/pprof/profile`:
 | `cocoon_vk_node_cpu_seconds_total` | Counter | Node cumulative CPU |
 | `cocoon_vk_node_memory_used_bytes` | Gauge | Node used memory |
 | `cocoon_vk_node_storage_available_bytes` / `total_bytes` | Gauge | Cocoon root filesystem |
-| `cocoon_vk_vm_boot_duration_seconds{mode,backend}` | Histogram | VM creation time (run or clone) |
-| `cocoon_vk_snapshot_save_duration_seconds` | Histogram | Snapshot save time |
-| `cocoon_vk_snapshot_push_duration_seconds` | Histogram | Registry push time |
+| `cocoon_vk_vm_boot_duration_seconds{namespace,mode,backend}` | Histogram | VM creation time (run or clone) |
+| `cocoon_vk_snapshot_save_duration_seconds{namespace}` | Histogram | Snapshot save time |
+| `cocoon_vk_snapshot_push_duration_seconds{namespace}` | Histogram | Registry push time |
 | `cocoon_vk_snapshot_pull_duration_seconds` | Histogram | Registry pull time |
-| `cocoon_vk_snapshot_peer_restore_duration_seconds` | Histogram | Time to stage raw snapshot files from a peer node |
-| `cocoon_vk_probe_duration_seconds` | Histogram | Per-probe health check time (ICMP or TCP) |
+| `cocoon_vk_snapshot_peer_restore_duration_seconds{namespace}` | Histogram | Time to stage raw snapshot files from a peer node |
+| `cocoon_vk_probe_duration_seconds{namespace}` | Histogram | Per-probe health check time (ICMP or TCP) |
 | `cocoon_vk_pod_lifecycle_total{op,result,reason}` | Counter | Pod lifecycle operations (`result=ok\|failed\|skipped`, `reason` sub-classifies) |
 | `cocoon_vk_snapshot_pull_total{result}` / `save_total` / `push_total` | Counter | Snapshot pull/save/push counts |
 | `cocoon_vk_snapshot_peer_restore_total{result}` | Counter | Peer restore outcomes (`result=ok\|failed`); failures fall through to the registry pull |
 | `cocoon_vk_snapshot_verify_total{result}` | Counter | Wake-time verification of the local snapshot against the registry tag (`result=ok\|stale\|error`); `stale` discards the local copy and pulls, `error` fails the wake rather than trust an unverified copy |
 | `cocoon_vk_clone_from_dir_total{result}` | Counter | Annotation-driven `--from-dir` clone attempts |
 | `cocoon_vk_lease_release_total{result}` | Counter | cocoon-net DHCP lease releases after VM destruction (`result=ok\|failed`) |
-| `cocoon_vk_hibernate_total{phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`; `dhcp_release` is the guest-side `ipconfig /release` on the CH+Windows drop-NIC path — the host-side cocoon-net lease release is counted by `cocoon_vk_lease_release_total`) |
+| `cocoon_vk_hibernate_total{namespace,phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`; `dhcp_release` is the guest-side `ipconfig /release` on the CH+Windows drop-NIC path — the host-side cocoon-net lease release is counted by `cocoon_vk_lease_release_total`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
-| `cocoon_vk_wake_ip_wait_total{result}` | Counter | Post-clone and wake DHCP-lease-wait outcomes — both the CH+Windows dropNIC wake and every clone's post-clone IP wait (`result=ok\|timeout`) |
+| `cocoon_vk_wake_ip_wait_total{namespace,result}` | Counter | Post-clone and wake DHCP-lease-wait outcomes — both the CH+Windows dropNIC wake and every clone's post-clone IP wait (`result=ok\|timeout`) |
 | `cocoon_vk_wake_renew_nudge_total{result}` | Counter | `ipconfig /renew` nudges sent to Windows guests still lease-less mid lease-wait (`result=ok\|failed`; failed means the exec didn't confirm — the in-guest renew may still have taken effect, the lease re-check decides) |
 | `cocoon_vk_postclone_total{kind,result}` | Counter | Post-clone fixup outcomes (`kind=linux_static\|linux_fc\|windows\|sac`) |
 | `cocoon_vk_postclone_retry_attempts{result}` | Histogram | Attempts consumed before post-clone exec succeeded or failed (`result=ok\|failed`) |
-| `cocoon_vk_vm_table_size` | Gauge | Tracked VM count |
+| `cocoon_vk_vm_table_size{namespace}` | Gauge | Tracked VM count by Kubernetes namespace |
 | `cocoon_vk_orphan_vm_total` | Counter | Orphan VMs at startup |
 | `cocoon_vk_vm_inspect_transient_fail_total` | Counter | Transient VM inspect failures retried by the VM-gone handler |
 | `cocoon_vk_pod_evict_failure_total` | Counter | Failed pod evictions |
@@ -68,6 +68,13 @@ also serves `/debug/pprof/` and `/debug/pprof/profile`:
 | `cocoon_vk_stale_create_reconcile_total{outcome}` | Counter | Stale-create verb attempts by startup reconcile and its bounded watcher (`outcome=collected\|busy\|not-creating\|not-found\|error`) |
 | `cocoon_vk_hibernate_evidence_total{verdict}` | Counter | Fresh boots intercepted by hibernate evidence (`verdict=restored\|image_conflict\|source_conflict\|unavailable`) |
 | `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched by startup reconcile (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
+
+Metrics whose definitions include `namespace` allow the scrape pipeline to
+derive an environment label when multiple environments share a cluster.
+`cocoon_vk_snapshot_pull_duration_seconds` remains node-scoped because its
+create-path observations include singleflight registry pulls that can serve
+callers from multiple namespaces, so the family cannot be attributed
+consistently.
 
 All three metrics surfaces share one complete sample for two seconds,
 so reported values may trail the kernel by up to that interval. Per-VM

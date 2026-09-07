@@ -132,7 +132,7 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 	}
 	if gotIP {
 		if p.markReadyPublishedForWake(ctx, pod, v.ID) {
-			metrics.WakeIPWaitTotal.WithLabelValues("ok").Inc()
+			metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "ok").Inc()
 			if wake {
 				metrics.WakeTotal.WithLabelValues("ok").Inc()
 			}
@@ -147,7 +147,7 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 	err := fmt.Errorf("%s %s: dhcp lease not observed within %s", kind, v.Name, budget)
 	msg := err.Error()
 	if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
-		metrics.WakeIPWaitTotal.WithLabelValues("timeout").Inc()
+		metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "timeout").Inc()
 		if wake {
 			metrics.WakeTotal.WithLabelValues("failed").Inc()
 		}

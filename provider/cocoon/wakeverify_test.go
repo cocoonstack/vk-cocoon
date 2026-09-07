@@ -36,7 +36,7 @@ func TestResolveWakeSourceVerifiedLocalHit(t *testing.T) {
 	p.Runtime = rt
 	p.Registry = newWakeVerifyRegistry(t, "SNAP-1")
 
-	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestResolveWakeSourceStaleLocalDiscardsAndPulls(t *testing.T) {
 	p.Runtime = rt
 	p.Registry = newWakeVerifyRegistry(t, "SNAP-NEW")
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to pull path", err)
 	}
@@ -74,7 +74,7 @@ func TestResolveWakeSourceNoTagDiscardsLocal(t *testing.T) {
 	p.Runtime = rt
 	p.Registry = wakeVerifyRegistry{tagExists: false}
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to pull path", err)
 	}
@@ -91,7 +91,7 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	p.Runtime = rt
 	p.Registry = wakeVerifyRegistry{manifestErr: errors.New("registry down")}
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "registry down") {
 		t.Fatalf("err = %v, want fail-closed verification error", err)
 	}
@@ -103,7 +103,7 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
 
-	src, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	reg.manifestRaw = withManifestAnnotation(t, reg.manifestRaw, snapshots.AnnotationFromNode, "node-src")
 	p.Registry = reg
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
@@ -148,7 +148,7 @@ func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.PeerPort = "1"
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
@@ -158,7 +158,7 @@ func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.NodeName = "node-src"
 
-	_, err := p.resolveWakeSource(t.Context(), "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), testWakePod(), "vk-ns-demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
