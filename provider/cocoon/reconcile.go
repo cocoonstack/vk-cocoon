@@ -219,7 +219,8 @@ func (p *Provider) classifySettledCreate(ctx context.Context, vmID string) (*vm.
 		return nil, false
 	case fresh.State == vm.StateRunning:
 		return fresh, true
-	case inFlightCreate(fresh.State):
+	// vm run passes through created between the create-lock windows.
+	case fresh.State == vm.StateCreating || fresh.State == vm.StateCreated:
 		return nil, false
 	default:
 		logger.Warnf(ctx, "placeholder %s (%s) left creating as %s without running; applying orphan policy", vmID, fresh.Name, fresh.State)
@@ -303,11 +304,6 @@ func (p *Provider) indexOrphanByNameLocked(v *vm.VM) {
 		return
 	}
 	p.vmsByName[v.Name] = v
-}
-
-// inFlightCreate: vm run passes through created between the create-lock windows.
-func inFlightCreate(state string) bool {
-	return state == vm.StateCreating || state == vm.StateCreated
 }
 
 func recordStaleCreateOutcome(outcome vm.StaleCreateOutcome, err error) {
