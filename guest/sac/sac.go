@@ -5,6 +5,7 @@
 package sac
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ const (
 	defaultRWTimeout  = 5 * time.Second
 	defaultCmdTimeout = 5 * time.Second
 	retryInterval     = 2 * time.Second
+	drainTimeout      = 200 * time.Millisecond
 	readBufSize       = 4096
 	sacPrompt         = "SAC>"
 )
@@ -40,7 +42,7 @@ type Dialer struct {
 }
 
 func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error) {
-	deadline := time.Now().Add(d.waitReady())
+	deadline := time.Now().Add(cmp.Or(d.WaitReady, defaultWaitReady))
 	conn, err := dial(ctx, target, deadline)
 	if err != nil {
 		return nil, err
@@ -50,13 +52,6 @@ func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error)
 		return nil, fmt.Errorf("sac wait prompt: %w", promptErr)
 	}
 	return &Session{conn: conn}, nil
-}
-
-func (d *Dialer) waitReady() time.Duration {
-	if d.WaitReady > 0 {
-		return d.WaitReady
-	}
-	return defaultWaitReady
 }
 
 var _ guest.Session = (*Session)(nil)
@@ -184,12 +179,6 @@ func readUntilPrompt(ctx context.Context, conn net.Conn, timeout time.Duration, 
 }
 
 func drain(conn net.Conn) {
-	buf := make([]byte, readBufSize)
-	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	for {
-		_, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-	}
+	_ = conn.SetReadDeadline(time.Now().Add(drainTimeout))
+	_, _ = io.Copy(io.Discard, conn)
 }

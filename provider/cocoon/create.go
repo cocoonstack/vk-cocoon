@@ -255,15 +255,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if spec.ForkFrom != "" {
 			return nil, "", fmt.Errorf("annotation %s is incompatible with fork-from %q", meta.AnnotationCloneFromDir, spec.ForkFrom)
 		}
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			FromDir:     fromDir,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.FromDir = fromDir
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
 			return nil, "", fmt.Errorf("clone vm %s from dir %s: %w", spec.VMName, fromDir, err)
@@ -276,15 +270,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", err
 		}
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:        cloneFrom,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.From = cloneFrom
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
 		}
@@ -334,16 +322,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", baseErr
 		}
 
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:        local,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			Pull:        srcImage != "",
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.From, opts.Pull = local, srcImage != ""
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
 		}
@@ -351,14 +332,22 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 }
 
-// imagePresent reports whether an image with this digest is in the local store under any name.
-func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
-	return digest != "" && p.Runtime.Image(ctx, digest) == nil
+// cloneOptionsFor fills the fields every clone site shares; callers add the source, Pull and NICs.
+func (p *Provider) cloneOptionsFor(spec meta.VMSpec, policy vm.CPUPolicy) vm.CloneOptions {
+	return vm.CloneOptions{
+		To:          spec.VMName,
+		Network:     spec.Network,
+		Backend:     spec.Backend,
+		NoDirectIO:  spec.NoDirectIO,
+		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+		CPUPolicy:   policy,
+	}
 }
 
 // ensureSnapshotBaseImage imports an OCI-ref base that `vm clone --pull` cannot fetch, deduplicated by digest.
 func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
-	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
+	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) ||
+		(snapshot.ImageDigest != "" && p.Runtime.Image(ctx, snapshot.ImageDigest) == nil) {
 		return nil
 	}
 	if _, err := p.ensureRunImage(ctx, snapshot.Image, false); err != nil {

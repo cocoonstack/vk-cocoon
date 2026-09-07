@@ -51,9 +51,7 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 				Name: containerName, StartTime: now, CPU: cpu, Memory: mem,
 			}},
 		}
-		if net := buildNetworkStats(s); net != nil {
-			ps.Network = net
-		}
+		ps.Network = buildNetworkStats(s)
 		podStats = append(podStats, ps)
 	}
 
@@ -143,7 +141,7 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 			sample.MemoryRSS = parseProcStatRSS(stat, os.Getpagesize())
 			sample.DiskCOW = fileSize(s.DiskPath)
 		} else {
-			sample.MemoryRSS = readProcRSS(s.PID)
+			sample.MemoryRSS = parseProcStatRSS(readProcStat(s.PID), os.Getpagesize())
 			// CPU from the cgroup scope, not /proc: the VMM's utime/stime never sees the virtio and io_uring kernel workers.
 			sample.CPUSeconds, sample.CPUThrottledSeconds, sample.CPUThrottledPeriods = vm.ScopeCPUStat(cgroupParent(), s.ID)
 			sample.DiskCOW = vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
@@ -232,10 +230,6 @@ func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *
 	mem := uint64(max(memBytes, 0))     //nolint:gosec // clamped to non-negative via max
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
-}
-
-func readProcRSS(pid int) int64 {
-	return parseProcStatRSS(readProcStat(pid), os.Getpagesize())
 }
 
 func readProcStat(pid int) string {

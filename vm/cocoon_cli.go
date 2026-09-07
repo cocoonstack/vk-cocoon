@@ -204,7 +204,10 @@ func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadClo
 
 // SnapshotSave runs `cocoon snapshot save`, dropping a name a crashed hibernate still holds before retrying.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
-	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	save := func() ([]byte, error) {
+		return c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	}
+	out, err := save()
 	if err == nil {
 		return nil
 	}
@@ -215,7 +218,7 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	if rmErr := c.removeStaleSnapshot(ctx, holder); rmErr != nil {
 		return fmt.Errorf("cocoon snapshot save %s: name held by %s: %w", vmName, holder, rmErr)
 	}
-	out2, err2 := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	out2, err2 := save()
 	if err2 != nil {
 		return cocoonCmdError("snapshot save (after rm)", vmName, err2, out2)
 	}

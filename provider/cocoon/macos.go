@@ -553,7 +553,6 @@ func formatMacosArgsForLog(args []string) string {
 	for i := 0; i+1 < len(redacted); i++ {
 		if redacted[i] == "--vnc-password" {
 			redacted[i+1] = "<redacted>"
-			i++
 		}
 	}
 	return strings.Join(redacted, " ")

@@ -275,17 +275,8 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
 		return nil, err
 	}
-	opts := vm.CloneOptions{
-		From:        src.localName,
-		FromDir:     src.dir,
-		To:          spec.VMName,
-		Network:     spec.Network,
-		Backend:     spec.Backend,
-		NoDirectIO:  spec.NoDirectIO,
-		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-		Pull:        src.snapshot != nil && src.snapshot.Image != "",
-		CPUPolicy:   policy,
-	}
+	opts := p.cloneOptionsFor(spec, policy)
+	opts.From, opts.FromDir, opts.Pull = src.localName, src.dir, src.snapshot != nil && src.snapshot.Image != ""
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = new(1)
 	}
@@ -545,7 +536,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, namespace, vmName stri
 		// The import is a one-shot clone source; same-node wakes never get here.
 		release: func() {
 			p.goBackground(func() {
-				p.removeSnapshotDetached(ctx, "Provider.wakeImportCleanup", importName)
+				p.removeSnapshotDetached(ctx, importName)
 			})
 		},
 	}, nil

@@ -97,9 +97,6 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		case <-loopCtx.Done():
 			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, loopCtx.Err()))
 		}
-		if loopCtx.Err() != nil {
-			break
-		}
 		if !commonk8s.SleepCtx(loopCtx, postCloneRetryInterval) {
 			break
 		}

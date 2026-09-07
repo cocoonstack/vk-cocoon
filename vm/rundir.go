@@ -13,7 +13,11 @@ const (
 // COWSize returns the actual disk usage of a VM's writable overlay, or 0 when no overlay file exists.
 func COWSize(rootDir, hypervisor, vmID string) int64 {
 	dir := hypervisorRunDir(hypervisor)
-	for _, name := range cowFileNames(dir) {
+	names := []string{"overlay.qcow2", "cow.raw"}
+	if dir == runDirFC {
+		names = names[1:]
+	}
+	for _, name := range names {
 		if fi, err := os.Stat(runPath(rootDir, dir, vmID, name)); err == nil {
 			return fi.Size()
 		}
@@ -43,11 +47,4 @@ func hypervisorRunDir(hypervisor string) string {
 		return runDirFC
 	}
 	return runDirCH
-}
-
-func cowFileNames(dir string) []string {
-	if dir == runDirFC {
-		return []string{"cow.raw"}
-	}
-	return []string{"overlay.qcow2", "cow.raw"}
 }
