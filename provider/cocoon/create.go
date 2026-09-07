@@ -230,7 +230,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return nil, "", err
 	}
 	if meta.ReadRestoreFromHibernate(pod) {
-		src, err := p.resolveWakeSource(ctx, pod, spec.VMName)
+		src, err := p.resolveWakeSource(ctx, pod.Namespace, spec.VMName)
 		if err != nil {
 			return nil, "", err
 		}

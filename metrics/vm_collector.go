@@ -20,6 +20,7 @@ type VMCollector struct {
 	vmDiskDesc         *prometheus.Desc
 	vmNetRxDesc        *prometheus.Desc
 	vmNetTxDesc        *prometheus.Desc
+	vmTableDesc        *prometheus.Desc
 	nodeCPUDesc        *prometheus.Desc
 	nodeMemDesc        *prometheus.Desc
 	nodeStorAvail      *prometheus.Desc
@@ -38,6 +39,7 @@ func NewVMCollector(collectFn CollectFunc) *VMCollector {
 		vmDiskDesc:         prometheus.NewDesc(name("vm_disk_cow_bytes"), "Actual size of the VM COW overlay in bytes.", labels, nil),
 		vmNetRxDesc:        prometheus.NewDesc(name("vm_network_rx_bytes_total"), "Total bytes received by the VM TAP device.", labels, nil),
 		vmNetTxDesc:        prometheus.NewDesc(name("vm_network_tx_bytes_total"), "Total bytes transmitted by the VM TAP device.", labels, nil),
+		vmTableDesc:        prometheus.NewDesc(name("vm_table_size"), "Number of VMs vk-cocoon currently tracks by Kubernetes namespace.", []string{labelNamespace}, nil),
 		nodeCPUDesc:        prometheus.NewDesc(name("node_cpu_seconds_total"), "Cumulative CPU time consumed by the node in seconds.", nil, nil),
 		nodeMemDesc:        prometheus.NewDesc(name("node_memory_used_bytes"), "Memory used by the node (MemTotal - MemAvailable) in bytes.", nil, nil),
 		nodeStorAvail:      prometheus.NewDesc(name("node_storage_available_bytes"), "Available storage on the cocoon root filesystem in bytes.", nil, nil),
@@ -53,6 +55,7 @@ func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.vmDiskDesc
 	ch <- c.vmNetRxDesc
 	ch <- c.vmNetTxDesc
+	ch <- c.vmTableDesc
 	ch <- c.nodeCPUDesc
 	ch <- c.nodeMemDesc
 	ch <- c.nodeStorAvail
@@ -62,7 +65,9 @@ func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 	vms, node := c.collectFn()
 
+	perNamespace := map[string]int{}
 	for _, v := range vms {
+		perNamespace[v.Namespace]++
 		labels := []string{v.VMName, v.PodName, v.Namespace, v.Backend}
 		ch <- prometheus.MustNewConstMetric(c.vmCPUDesc, prometheus.CounterValue, v.CPUSeconds, labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmThrottledDesc, prometheus.CounterValue, v.CPUThrottledSeconds, labels...)
@@ -71,6 +76,9 @@ func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.vmDiskDesc, prometheus.GaugeValue, float64(v.DiskCOW), labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmNetRxDesc, prometheus.CounterValue, float64(v.NetRxBytes), labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmNetTxDesc, prometheus.CounterValue, float64(v.NetTxBytes), labels...)
+	}
+	for namespace, n := range perNamespace {
+		ch <- prometheus.MustNewConstMetric(c.vmTableDesc, prometheus.GaugeValue, float64(n), namespace)
 	}
 
 	ch <- prometheus.MustNewConstMetric(c.nodeCPUDesc, prometheus.CounterValue, node.CPUSeconds)

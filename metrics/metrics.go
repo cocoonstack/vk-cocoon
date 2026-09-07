@@ -76,16 +76,6 @@ var (
 		[]string{labelResult},
 	)
 
-	VMTableSize = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: metricNamespace,
-			Subsystem: metricSubsystem,
-			Name:      "vm_table_size",
-			Help:      "Number of VMs vk-cocoon currently tracks by Kubernetes namespace.",
-		},
-		[]string{labelNamespace},
-	)
-
 	OrphanVMTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metricNamespace,
@@ -235,7 +225,7 @@ var (
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
-		[]string{labelNamespace, "phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
+		[]string{labelNamespace, "phase", labelResult}, // phase=dhcp_release|netresize|snapshot|push|remove, result=ok|failed
 	)
 
 	LeaseReleaseTotal = prometheus.NewCounterVec(
@@ -309,7 +299,6 @@ func Register(reg prometheus.Registerer) {
 		SnapshotPushTotal,
 		SnapshotVerifyTotal,
 		CloneFromDirTotal,
-		VMTableSize,
 		OrphanVMTotal,
 		VMInspectTransientFailTotal,
 		PodEvictFailureTotal,
