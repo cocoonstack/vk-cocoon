@@ -52,7 +52,7 @@ type Manager struct {
 	agents  map[string]*agent
 }
 
-// NewManager constructs an empty Manager. Close or canceling ctx tears agents down.
+// NewManager returns a Manager whose agents stop when ctx is canceled or Close runs.
 func NewManager(ctx context.Context) *Manager {
 	agentCtx, cancel := context.WithCancel(ctx)
 	return &Manager{
@@ -177,7 +177,6 @@ func (m *Manager) run(ctx context.Context, key string, ag *agent, probe Probe, o
 	}
 }
 
-// nextInitialInterval grows the pre-Ready poll interval exponentially until it hits the cap.
 func nextInitialInterval(d time.Duration) time.Duration {
 	return min(time.Duration(float64(d)*defaultInitialBackoffStep), defaultInitialBackoffMax)
 }

@@ -22,7 +22,7 @@ var (
 			Name:      "pod_lifecycle_total",
 			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
-		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release
+		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release|snapshot_cpu_class_mismatch
 		[]string{"op", labelResult, "reason"},
 	)
 
@@ -150,7 +150,7 @@ var (
 			Help:      "Time to create a VM (run or clone), from start to Running.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		},
-		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone, backend=cloud-hypervisor|firecracker
+		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone|static, backend=cloud-hypervisor|firecracker
 	)
 
 	SnapshotSaveDuration = prometheus.NewHistogramVec(

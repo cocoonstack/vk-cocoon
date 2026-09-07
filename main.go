@@ -355,7 +355,7 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 // patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
 func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
 	logger := log.WithFunc("patchNodeLabelsAndEndpoint")
-	// Give v-k time to create the node object.
+	// give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}

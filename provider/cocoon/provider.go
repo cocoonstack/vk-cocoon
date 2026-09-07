@@ -86,8 +86,8 @@ type Provider struct {
 	Pods      corev1listers.PodLister
 	Runtime   vm.Runtime
 	// MacosBin is the cocoon-macos binary os=macos pods dispatch to.
+	MacosBin string
 	// MacosVNCPassword protects the node-exposed per-VM QEMU VNC ports.
-	MacosBin         string
 	MacosVNCPassword string
 	Puller           *snapshots.Puller
 	Pusher           *snapshots.Pusher
@@ -114,7 +114,7 @@ type Provider struct {
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
-	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
+	bgWG           sync.WaitGroup       // tracks background goroutines so Close can await them
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
 	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
 	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)

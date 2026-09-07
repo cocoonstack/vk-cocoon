@@ -56,7 +56,7 @@ type CocoonCLI struct {
 	binary string
 }
 
-// NewCocoonCLI returns a CocoonCLI; empty binary → defaultCocoonBinary. For non-root setups, point binary at a wrapper or setcap the cocoon binary.
+// NewCocoonCLI returns a CocoonCLI over binary, defaultCocoonBinary when empty.
 func NewCocoonCLI(binary string) *CocoonCLI {
 	return &CocoonCLI{binary: cmp.Or(binary, defaultCocoonBinary)}
 }
@@ -66,8 +66,8 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.runAndParseVM(ctx, "cocoon vm clone", opts.To, buildCloneArgs(opts))
 }
 
-// Run runs `cocoon vm run --output json`; if cocoon's post-start inspect failed
-// (State!="running", PID=0) this does a make-up Inspect so callers always see live state. Caller must have ensured the image locally.
+// Run runs `cocoon vm run --output json` on a locally present image; when cocoon's own post-start
+// inspect failed (State!=running, PID=0) it re-inspects so callers always see live state.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	v, err := c.runAndParseVM(ctx, "cocoon vm run", opts.Name, buildRunArgs(opts))
 	if err != nil {
@@ -170,7 +170,6 @@ func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env ma
 	return nil
 }
 
-// Remove runs `cocoon vm rm --force`.
 func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	cmd := c.command(ctx, "vm", "rm", "--force", vmID)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -246,7 +245,6 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCl
 	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon snapshot import")
 }
 
-// SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
 	return startCmdPipe(ctx, cmd, cmd.StdoutPipe, "cocoon snapshot export")

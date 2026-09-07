@@ -135,8 +135,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.startProbeIfEnabled(pod)
 
 	p.markPodRunning(pod)
-	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP;
-	// restore defers to dispatchHibernateRestore.
+	// Ready is deferred to the path that finishes the boot: post-clone setup, the Windows static-IP pass or the hibernate restore.
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markReadyPublished(ctx, pod)
 	} else {
@@ -367,9 +366,8 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	if image == "" {
 		return image, nil
 	}
-	// Raw ref, not ParseRef-normalized: fallback branches return the leader's
-	// spelling verbatim, so a joiner must share its exact ref.
-	// force keys separately so a force caller never coalesces onto a non-force flight.
+	// the key is the raw ref (fallback branches return the leader's spelling verbatim, so a joiner must share it)
+	// plus force, so a force caller never coalesces onto a non-force flight.
 	key := image
 	if force {
 		key = "force " + image
@@ -446,9 +444,8 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
-	// singleflight so concurrent sub-agents forking the same main don't race into
-	// SnapshotSave and all but one fail "snapshot name already in use". The shared
-	// save is cancel-detached so one caller's aborted CreatePod can't fail the rest.
+	// singleflight: sub-agents forking the same main would race SnapshotSave into "snapshot name already in use";
+	// the shared save is cancel-detached so one aborted CreatePod cannot fail the rest.
 	created, err, _ := p.forkSnapshotSF.Do(snapshotName, func() (any, error) {
 		shared := context.WithoutCancel(ctx)
 		if _, err := p.Runtime.Snapshot(shared, snapshotName); err == nil {
@@ -606,9 +603,8 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	if err != nil {
 		return
 	}
-	// The readiness probe reads the tracked pod via GetPod (DeepCopy under
-	// RLock); guard the write so it doesn't race that copy. GetPodStatus is
-	// called before the lock because it RLocks internally.
+	// the probe's GetPod DeepCopies the tracked pod under RLock, so the write takes the lock;
+	// GetPodStatus RLocks itself and therefore runs first.
 	p.mu.Lock()
 	pod.Status = *status
 	p.mu.Unlock()
@@ -666,8 +662,7 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 	return mode
 }
 
-// isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
-// is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
+// isClonedBoot reports a clone path; fromDir and ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
 }
@@ -676,9 +671,7 @@ func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" || spec.ForkFrom != ""
 }
 
-// assertSnapshotBackend rejects a clone when the target backend differs from
-// the backend that produced the snapshot. CH and FC store state incompatibly,
-// so letting this reach cocoon would fail with a harder-to-debug error.
+// assertSnapshotBackend rejects a clone whose backend differs from the snapshot's: CH and FC state is incompatible and cocoon's own error is harder to read.
 func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 	if snapshot == nil || snapshot.Hypervisor == "" || targetBackend == "" {
 		return nil
