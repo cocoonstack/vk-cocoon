@@ -38,11 +38,11 @@ type vmSnapshot struct {
 // metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
-	samples, node := p.CollectVMStats()
-	nodeCPU, nodeMemory := cpuMemStats(node.CPUSeconds, node.MemoryUsedBytes)
+	sample := p.CollectVMStats()
+	nodeCPU, nodeMemory := cpuMemStats(sample.Node.CPUSeconds, sample.Node.MemoryUsedBytes)
 
-	podStats := make([]statsv1alpha1.PodStats, 0, len(samples))
-	for _, s := range samples {
+	podStats := make([]statsv1alpha1.PodStats, 0, len(sample.VMs))
+	for _, s := range sample.VMs {
 		cpu, mem := cpuMemStats(s.CPUSeconds, s.MemoryRSS)
 		start := now
 		if !s.StartedAt.IsZero() {
@@ -72,19 +72,19 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 
 func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
 	nowMs := time.Now().UnixMilli()
-	samples, node := p.CollectVMStats()
+	sample := p.CollectVMStats()
 
 	families := []*dto.MetricFamily{
 		newCounterFamily("node_cpu_usage_seconds_total",
 			"Cumulative cpu time consumed by the node in core-seconds",
-			newCounter(node.CPUSeconds, nowMs, nil)),
+			newCounter(sample.Node.CPUSeconds, nowMs, nil)),
 		newGaugeFamily("node_memory_working_set_bytes",
 			"Current working set of the node in bytes",
-			newGauge(float64(node.MemoryUsedBytes), nowMs, nil)),
+			newGauge(float64(sample.Node.MemoryUsedBytes), nowMs, nil)),
 	}
 
 	var containerCPU, containerMem, containerStart, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
-	for _, s := range samples {
+	for _, s := range sample.VMs {
 		cpuSec := s.CPUSeconds
 		memBytes := float64(s.MemoryRSS)
 
@@ -135,11 +135,11 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 }
 
 // CollectVMStats returns the shared short-TTL scrape sample: three consumers (stats summary, metrics, Prometheus) land independently on it.
-func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
+func (p *Provider) CollectVMStats() provider.Sample {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
 	if time.Since(p.statsAt) < statsSampleTTL {
-		return p.statsVMs, p.statsNode
+		return p.stats
 	}
 	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
 	vms := make([]provider.VMStats, 0, len(snaps))
@@ -162,14 +162,10 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 		}
 		vms = append(vms, sample)
 	}
-	node := provider.NodeStats{
-		CPUSeconds:            readNodeCPUSeconds(),
-		MemoryUsedBytes:       readNodeMemoryWorkingSet(),
-		TrackedVMsByNamespace: trackedVMsByNamespace,
-	}
+	node := provider.NodeStats{CPUSeconds: readNodeCPUSeconds(), MemoryUsedBytes: readNodeMemoryWorkingSet()}
 	node.StorageTotal, node.StorageAvailable = provider.StorageBytes()
-	p.statsVMs, p.statsNode, p.statsAt = vms, node, time.Now()
-	return vms, node
+	p.stats, p.statsAt = provider.Sample{VMs: vms, Node: node, TrackedVMsByNamespace: trackedVMsByNamespace}, time.Now()
+	return p.stats
 }
 
 // snapshotTrackedVMs copies counts and resource-readable VM data under RLock so /proc reads do not block CreatePod/DeletePod.

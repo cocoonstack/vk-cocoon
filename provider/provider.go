@@ -34,12 +34,18 @@ type VMStats struct {
 	NetTxBytes          uint64
 }
 
-// NodeStats holds node-level data for metrics collection.
+// NodeStats holds node-level resource usage for metrics collection.
 type NodeStats struct {
-	CPUSeconds            float64
-	MemoryUsedBytes       int64
-	StorageAvailable      int64
-	StorageTotal          int64
+	CPUSeconds       float64
+	MemoryUsedBytes  int64
+	StorageAvailable int64
+	StorageTotal     int64
+}
+
+// Sample is one scrape's worth of stats: per-VM usage, node usage and the tracked-VM count per namespace.
+type Sample struct {
+	VMs                   []VMStats
+	Node                  NodeStats
 	TrackedVMsByNamespace map[string]int
 }
 

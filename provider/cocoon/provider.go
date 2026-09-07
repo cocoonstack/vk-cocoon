@@ -129,10 +129,9 @@ type Provider struct {
 	deleting        map[string]struct{}
 
 	// Shared scrape sample; see CollectVMStats.
-	statsMu   sync.Mutex
-	statsAt   time.Time
-	statsVMs  []provider.VMStats
-	statsNode provider.NodeStats
+	statsMu sync.Mutex
+	statsAt time.Time
+	stats   provider.Sample
 
 	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
 	inlineInspectBaseDelay      time.Duration

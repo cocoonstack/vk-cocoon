@@ -57,10 +57,11 @@ func TestWorkloadMetricsExposeNamespace(t *testing.T) {
 }
 
 func TestVMCollectorCountsTrackedVMsPerNamespace(t *testing.T) {
-	collector := NewVMCollector(func() ([]provider.VMStats, provider.NodeStats) {
-		return []provider.VMStats{
-			{VMName: "a", PodName: "a", Namespace: "staging", Backend: "cloud-hypervisor"},
-		}, provider.NodeStats{TrackedVMsByNamespace: map[string]int{"staging": 2, "testing": 1}}
+	collector := NewVMCollector(func() provider.Sample {
+		return provider.Sample{
+			VMs:                   []provider.VMStats{{VMName: "a", PodName: "a", Namespace: "staging", Backend: "cloud-hypervisor"}},
+			TrackedVMsByNamespace: map[string]int{"staging": 2, "testing": 1},
+		}
 	})
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(collector)

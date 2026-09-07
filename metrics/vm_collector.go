@@ -6,8 +6,8 @@ import (
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
-// CollectFunc returns the live VM and node stats for a single scrape.
-type CollectFunc func() ([]provider.VMStats, provider.NodeStats)
+// CollectFunc returns the live stats sample for a single scrape.
+type CollectFunc func() provider.Sample
 
 // VMCollector is a prometheus.Collector that reads live VM and node stats from a provider callback on each scrape.
 type VMCollector struct {
@@ -63,9 +63,9 @@ func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
-	vms, node := c.collectFn()
+	s := c.collectFn()
 
-	for _, v := range vms {
+	for _, v := range s.VMs {
 		labels := []string{v.VMName, v.PodName, v.Namespace, v.Backend}
 		ch <- prometheus.MustNewConstMetric(c.vmCPUDesc, prometheus.CounterValue, v.CPUSeconds, labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmThrottledDesc, prometheus.CounterValue, v.CPUThrottledSeconds, labels...)
@@ -75,12 +75,12 @@ func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.vmNetRxDesc, prometheus.CounterValue, float64(v.NetRxBytes), labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmNetTxDesc, prometheus.CounterValue, float64(v.NetTxBytes), labels...)
 	}
-	for namespace, n := range node.TrackedVMsByNamespace {
+	for namespace, n := range s.TrackedVMsByNamespace {
 		ch <- prometheus.MustNewConstMetric(c.vmTableDesc, prometheus.GaugeValue, float64(n), namespace)
 	}
 
-	ch <- prometheus.MustNewConstMetric(c.nodeCPUDesc, prometheus.CounterValue, node.CPUSeconds)
-	ch <- prometheus.MustNewConstMetric(c.nodeMemDesc, prometheus.GaugeValue, float64(node.MemoryUsedBytes))
-	ch <- prometheus.MustNewConstMetric(c.nodeStorAvail, prometheus.GaugeValue, float64(node.StorageAvailable))
-	ch <- prometheus.MustNewConstMetric(c.nodeStorTotal, prometheus.GaugeValue, float64(node.StorageTotal))
+	ch <- prometheus.MustNewConstMetric(c.nodeCPUDesc, prometheus.CounterValue, s.Node.CPUSeconds)
+	ch <- prometheus.MustNewConstMetric(c.nodeMemDesc, prometheus.GaugeValue, float64(s.Node.MemoryUsedBytes))
+	ch <- prometheus.MustNewConstMetric(c.nodeStorAvail, prometheus.GaugeValue, float64(s.Node.StorageAvailable))
+	ch <- prometheus.MustNewConstMetric(c.nodeStorTotal, prometheus.GaugeValue, float64(s.Node.StorageTotal))
 }

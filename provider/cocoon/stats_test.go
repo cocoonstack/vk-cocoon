@@ -43,7 +43,7 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 func TestStatsReportThePodStartTime(t *testing.T) {
 	p := newTestProvider(t)
 	started := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
-	p.statsVMs = []provider.VMStats{{VMName: "vk-ns-demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}
+	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}}
 	p.statsAt = time.Now()
 
 	summary, err := p.GetStatsSummary(t.Context())
@@ -86,17 +86,16 @@ func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
 
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
-	seeded := []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}
-	p.statsVMs, p.statsNode, p.statsAt = seeded, provider.NodeStats{CPUSeconds: 42}, time.Now()
+	seeded := provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}}
+	p.stats, p.statsAt = seeded, time.Now()
 
-	vms, node := p.CollectVMStats()
-	if len(vms) != 1 || vms[0].CPUSeconds != 7 || node.CPUSeconds != 42 {
-		t.Fatalf("within TTL must serve the cached sample, got %+v node %+v", vms, node)
+	s := p.CollectVMStats()
+	if len(s.VMs) != 1 || s.VMs[0].CPUSeconds != 7 || s.Node.CPUSeconds != 42 {
+		t.Fatalf("within TTL must serve the cached sample, got %+v", s)
 	}
 
 	p.statsAt = time.Now().Add(-2 * statsSampleTTL)
-	vms, _ = p.CollectVMStats()
-	if len(vms) != 0 {
-		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", vms)
+	if s = p.CollectVMStats(); len(s.VMs) != 0 {
+		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", s.VMs)
 	}
 }
