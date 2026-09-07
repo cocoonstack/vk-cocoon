@@ -288,6 +288,10 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	if err != nil {
 		return nil, fmt.Errorf("parse VK_RESTORE_MODE: %w", err)
 	}
+	orphanPolicy, err := provider.ParseOrphanPolicy(opts.orphanPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("parse VK_ORPHAN_POLICY: %w", err)
+	}
 	registry, err := buildRegistry(opts)
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
@@ -318,7 +322,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	}
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
-	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
+	p.OrphanPolicy = orphanPolicy
 	p.RestoreMode = restoreMode
 	return p, nil
 }

@@ -1,7 +1,11 @@
 // Package provider holds the virtual-kubelet scaffolding shared across cocoon backends: orphan policy, capacity, stats types.
 package provider
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	OrphanAlert   OrphanPolicy = "alert"
@@ -36,4 +40,14 @@ type NodeStats struct {
 	MemoryUsedBytes  int64
 	StorageAvailable int64
 	StorageTotal     int64
+}
+
+// ParseOrphanPolicy validates a configured orphan policy, normalizing case.
+func ParseOrphanPolicy(s string) (OrphanPolicy, error) {
+	switch p := OrphanPolicy(strings.ToLower(strings.TrimSpace(s))); p {
+	case OrphanAlert, OrphanDestroy, OrphanKeep:
+		return p, nil
+	default:
+		return "", fmt.Errorf("orphan policy must be %s, %s or %s, got %q", OrphanAlert, OrphanDestroy, OrphanKeep, s)
+	}
 }
