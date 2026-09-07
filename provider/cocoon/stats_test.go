@@ -1,10 +1,16 @@
 package cocoon
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 func TestParseProcStatRSS(t *testing.T) {
@@ -34,19 +40,62 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 	}
 }
 
+func TestStatsReportThePodStartTime(t *testing.T) {
+	p := newTestProvider(t)
+	started := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}}
+	p.statsAt = time.Now()
+
+	summary, err := p.GetStatsSummary(t.Context())
+	if err != nil {
+		t.Fatalf("GetStatsSummary: %v", err)
+	}
+	pod := summary.Pods[0]
+	if !pod.StartTime.Time.Equal(started) || !pod.Containers[0].StartTime.Time.Equal(started) {
+		t.Fatalf("pod start %v container start %v, want %v", pod.StartTime.Time, pod.Containers[0].StartTime.Time, started)
+	}
+
+	families, err := p.GetMetricsResource(t.Context())
+	if err != nil {
+		t.Fatalf("GetMetricsResource: %v", err)
+	}
+	i := slices.IndexFunc(families, func(f *dto.MetricFamily) bool { return f.GetName() == "container_start_time_seconds" })
+	if i < 0 {
+		t.Fatal("container_start_time_seconds family missing")
+	}
+	if got := families[i].Metric[0].GetGauge().GetValue(); got != float64(started.Unix()) {
+		t.Fatalf("container_start_time_seconds = %v, want %v", got, started.Unix())
+	}
+}
+
+func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false})
+	pod.Namespace = "ns"
+	pod.Name = "static"
+	p.trackPod(pod, &vm.VM{ID: "qemu-1", Name: "vk-ns-static"})
+
+	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
+	if len(snaps) != 0 {
+		t.Fatalf("resource samples = %d, want 0", len(snaps))
+	}
+	if want := map[string]int{"ns": 1}; !maps.Equal(trackedVMsByNamespace, want) {
+		t.Fatalf("tracked VMs = %v, want %v", trackedVMsByNamespace, want)
+	}
+}
+
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
-	seeded := []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}
-	p.statsVMs, p.statsNode, p.statsAt = seeded, provider.NodeStats{CPUSeconds: 42}, time.Now()
+	seeded := provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}}
+	p.stats, p.statsAt = seeded, time.Now()
 
-	vms, node := p.CollectVMStats()
-	if len(vms) != 1 || vms[0].CPUSeconds != 7 || node.CPUSeconds != 42 {
-		t.Fatalf("within TTL must serve the cached sample, got %+v node %+v", vms, node)
+	s := p.CollectVMStats()
+	if len(s.VMs) != 1 || s.VMs[0].CPUSeconds != 7 || s.Node.CPUSeconds != 42 {
+		t.Fatalf("within TTL must serve the cached sample, got %+v", s)
 	}
 
 	p.statsAt = time.Now().Add(-2 * statsSampleTTL)
-	vms, _ = p.CollectVMStats()
-	if len(vms) != 0 {
-		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", vms)
+	if s = p.CollectVMStats(); len(s.VMs) != 0 {
+		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", s.VMs)
 	}
 }

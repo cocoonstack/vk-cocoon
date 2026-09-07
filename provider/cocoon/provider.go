@@ -86,8 +86,8 @@ type Provider struct {
 	Pods      corev1listers.PodLister
 	Runtime   vm.Runtime
 	// MacosBin is the cocoon-macos binary os=macos pods dispatch to.
+	MacosBin string
 	// MacosVNCPassword protects the node-exposed per-VM QEMU VNC ports.
-	MacosBin         string
 	MacosVNCPassword string
 	Puller           *snapshots.Puller
 	Pusher           *snapshots.Pusher
@@ -109,13 +109,12 @@ type Provider struct {
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
 	vmsByName      map[string]*vm.VM
-	vmCountsByNS   map[string]int
 	macosVNC       map[string]int       // key=pod, node-unique VNC host-port reservations for macOS guests
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
 	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
-	bgWG           sync.WaitGroup       // tracks per-pod async goroutines (post-clone exec, static-IP) so Close can await them
+	bgWG           sync.WaitGroup       // tracks background goroutines so Close can await them
 	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
 	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
 	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
@@ -130,10 +129,9 @@ type Provider struct {
 	deleting        map[string]struct{}
 
 	// Shared scrape sample; see CollectVMStats.
-	statsMu   sync.Mutex
-	statsAt   time.Time
-	statsVMs  []provider.VMStats
-	statsNode provider.NodeStats
+	statsMu sync.Mutex
+	statsAt time.Time
+	stats   provider.Sample
 
 	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
 	inlineInspectBaseDelay      time.Duration
@@ -160,7 +158,6 @@ func NewProvider(ctx context.Context) *Provider {
 		pods:            map[string]*corev1.Pod{},
 		vmsByPod:        map[string]*vm.VM{},
 		vmsByName:       map[string]*vm.VM{},
-		vmCountsByNS:    map[string]int{},
 		macosVNC:        map[string]int{},
 		lastRestart:     map[string]time.Time{},
 		pendingRecheck:  map[string]struct{}{},
@@ -339,15 +336,9 @@ func (p *Provider) trackPodLocked(pod *corev1.Pod, v *vm.VM) {
 
 // setVMLocked writes v into both VM tables under p.mu; the write half of dropVMLocked.
 func (p *Provider) setVMLocked(key string, v *vm.VM) {
-	_, alreadyTracked := p.vmsByPod[key]
 	p.vmsByPod[key] = v
 	if v.Name != "" {
 		p.vmsByName[v.Name] = v
-	}
-	if !alreadyTracked {
-		namespace, _ := splitPodKey(key)
-		p.vmCountsByNS[namespace]++
-		metrics.VMTableSize.WithLabelValues(namespace).Set(float64(p.vmCountsByNS[namespace]))
 	}
 }
 
@@ -361,14 +352,6 @@ func (p *Provider) dropVMLocked(key string) {
 		delete(p.vmsByName, v.Name)
 	}
 	delete(p.vmsByPod, key)
-	namespace, _ := splitPodKey(key)
-	if p.vmCountsByNS[namespace] <= 1 {
-		delete(p.vmCountsByNS, namespace)
-		metrics.VMTableSize.DeleteLabelValues(namespace)
-		return
-	}
-	p.vmCountsByNS[namespace]--
-	metrics.VMTableSize.WithLabelValues(namespace).Set(float64(p.vmCountsByNS[namespace]))
 }
 
 func (p *Provider) gcStaleRestarts() {

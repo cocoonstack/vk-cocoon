@@ -56,7 +56,7 @@ type CocoonCLI struct {
 	binary string
 }
 
-// NewCocoonCLI returns a CocoonCLI; empty binary → defaultCocoonBinary. For non-root setups, point binary at a wrapper or setcap the cocoon binary.
+// NewCocoonCLI returns a CocoonCLI over binary, defaultCocoonBinary when empty.
 func NewCocoonCLI(binary string) *CocoonCLI {
 	return &CocoonCLI{binary: cmp.Or(binary, defaultCocoonBinary)}
 }
@@ -66,8 +66,8 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.runAndParseVM(ctx, "cocoon vm clone", opts.To, buildCloneArgs(opts))
 }
 
-// Run runs `cocoon vm run --output json`; if cocoon's post-start inspect failed
-// (State!="running", PID=0) this does a make-up Inspect so callers always see live state. Caller must have ensured the image locally.
+// Run runs `cocoon vm run --output json` on a locally present image; when cocoon's own post-start
+// inspect failed (State!=running, PID=0) it re-inspects so callers always see live state.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	v, err := c.runAndParseVM(ctx, "cocoon vm run", opts.Name, buildRunArgs(opts))
 	if err != nil {
@@ -170,7 +170,6 @@ func (c *CocoonCLI) Exec(ctx context.Context, vmID string, argv []string, env ma
 	return nil
 }
 
-// Remove runs `cocoon vm rm --force`.
 func (c *CocoonCLI) Remove(ctx context.Context, vmID string) error {
 	cmd := c.command(ctx, "vm", "rm", "--force", vmID)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -204,7 +203,10 @@ func (c *CocoonCLI) Logs(ctx context.Context, vmID string, tail int) (io.ReadClo
 
 // SnapshotSave runs `cocoon snapshot save`, dropping a name a crashed hibernate still holds before retrying.
 func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error {
-	out, err := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	save := func() ([]byte, error) {
+		return c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	}
+	out, err := save()
 	if err == nil {
 		return nil
 	}
@@ -215,7 +217,7 @@ func (c *CocoonCLI) SnapshotSave(ctx context.Context, vmName, vmID string) error
 	if rmErr := c.removeStaleSnapshot(ctx, holder); rmErr != nil {
 		return fmt.Errorf("cocoon snapshot save %s: name held by %s: %w", vmName, holder, rmErr)
 	}
-	out2, err2 := c.command(ctx, "snapshot", "save", "--name", vmName, vmID).CombinedOutput()
+	out2, err2 := save()
 	if err2 != nil {
 		return cocoonCmdError("snapshot save (after rm)", vmName, err2, out2)
 	}
@@ -243,7 +245,6 @@ func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCl
 	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon snapshot import")
 }
 
-// SnapshotExport spawns `cocoon snapshot export` and returns its stdout pipe.
 func (c *CocoonCLI) SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error) {
 	cmd := c.command(ctx, "snapshot", "export", vmName, "-o", "-")
 	return startCmdPipe(ctx, cmd, cmd.StdoutPipe, "cocoon snapshot export")

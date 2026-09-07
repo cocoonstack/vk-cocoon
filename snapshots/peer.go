@@ -392,8 +392,9 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 	eg.SetLimit(defaultPeerConcurrency)
 	for _, t := range tasks {
 		eg.Go(func() error {
+			section, scratch := make([]byte, restoreBufBytes), make([]byte, copyBufBytes)
 			for _, sl := range t.slices {
-				if err := p.fetchSlice(ctx, baseURL, plan.SnapshotID, t.file, sl); err != nil {
+				if err := p.fetchSlice(ctx, baseURL, plan.SnapshotID, t.file, sl, section, scratch); err != nil {
 					return err
 				}
 			}
@@ -403,7 +404,7 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 	return eg.Wait()
 }
 
-func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID string, f *os.File, sl peerSlice) error {
+func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID string, f *os.File, sl peerSlice, section, scratch []byte) error {
 	name := filepath.Base(f.Name())
 	u := fmt.Sprintf("%s%s?id=%s&file=%s&offset=%d&length=%d",
 		baseURL, slicePath, url.QueryEscape(snapshotID), url.QueryEscape(name), sl.Offset, sl.Length)
@@ -414,9 +415,8 @@ func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID strin
 	defer resp.Body.Close() //nolint:errcheck
 
 	h := crc32.New(castagnoli)
-	sw := newSectionWriter(f, sl.Offset)
-	buf := make([]byte, copyBufBytes)
-	n, err := io.CopyBuffer(io.MultiWriter(sw, h), resp.Body, buf)
+	sw := &sectionWriter{f: f, off: sl.Offset, buf: section}
+	n, err := io.CopyBuffer(io.MultiWriter(sw, h), resp.Body, scratch)
 	if err != nil {
 		return fmt.Errorf("peer slice %s@%d: read: %w", name, sl.Offset, err)
 	}
@@ -442,10 +442,6 @@ type sectionWriter struct {
 	off int64
 	buf []byte
 	n   int
-}
-
-func newSectionWriter(f *os.File, off int64) *sectionWriter {
-	return &sectionWriter{f: f, off: off, buf: make([]byte, restoreBufBytes)}
 }
 
 func (s *sectionWriter) Write(p []byte) (int, error) {

@@ -22,7 +22,7 @@ var (
 			Name:      "pod_lifecycle_total",
 			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
-		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release
+		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release|snapshot_cpu_class_mismatch
 		[]string{"op", labelResult, "reason"},
 	)
 
@@ -74,16 +74,6 @@ var (
 			Help:      "Number of annotation-driven clone-from-dir attempts by result.",
 		},
 		[]string{labelResult},
-	)
-
-	VMTableSize = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: metricNamespace,
-			Subsystem: metricSubsystem,
-			Name:      "vm_table_size",
-			Help:      "Number of VMs vk-cocoon currently tracks by Kubernetes namespace.",
-		},
-		[]string{labelNamespace},
 	)
 
 	OrphanVMTotal = prometheus.NewCounter(
@@ -160,7 +150,7 @@ var (
 			Help:      "Time to create a VM (run or clone), from start to Running.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		},
-		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone, backend=cloud-hypervisor|firecracker
+		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone|static, backend=cloud-hypervisor|firecracker
 	)
 
 	SnapshotSaveDuration = prometheus.NewHistogramVec(
@@ -235,7 +225,7 @@ var (
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
-		[]string{labelNamespace, "phase", labelResult}, // phase=netresize|snapshot|push|remove, result=ok|failed
+		[]string{labelNamespace, "phase", labelResult}, // phase=dhcp_release|netresize|snapshot|push|remove, result=ok|failed
 	)
 
 	LeaseReleaseTotal = prometheus.NewCounterVec(
@@ -309,7 +299,6 @@ func Register(reg prometheus.Registerer) {
 		SnapshotPushTotal,
 		SnapshotVerifyTotal,
 		CloneFromDirTotal,
-		VMTableSize,
 		OrphanVMTotal,
 		VMInspectTransientFailTotal,
 		PodEvictFailureTotal,

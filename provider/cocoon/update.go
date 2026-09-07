@@ -245,7 +245,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}
-	src, err := p.resolveWakeSource(ctx, pod, spec.VMName)
+	src, err := p.resolveWakeSource(ctx, pod.Namespace, spec.VMName)
 	if err != nil {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 		p.failOp(ctx, pod, "WakePullFailed", "update", err)
@@ -275,17 +275,8 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 	if err := p.ensureSnapshotBaseImage(ctx, src.snapshot); err != nil {
 		return nil, err
 	}
-	opts := vm.CloneOptions{
-		From:        src.localName,
-		FromDir:     src.dir,
-		To:          spec.VMName,
-		Network:     spec.Network,
-		Backend:     spec.Backend,
-		NoDirectIO:  spec.NoDirectIO,
-		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-		Pull:        src.snapshot != nil && src.snapshot.Image != "",
-		CPUPolicy:   policy,
-	}
+	opts := p.cloneOptionsFor(spec, policy)
+	opts.From, opts.FromDir, opts.Pull = src.localName, src.dir, src.snapshot != nil && src.snapshot.Image != ""
 	if shouldDropNICBeforeHibernate(spec) {
 		opts.NICs = new(1)
 	}
@@ -492,7 +483,7 @@ type wakeSource struct {
 func (s wakeSource) label() string { return cmp.Or(s.localName, s.origin) }
 
 // resolveWakeSource picks the source in order: verified local snapshot, peer raw-file transfer, then registry pull.
-func (p *Provider) resolveWakeSource(ctx context.Context, pod *corev1.Pod, vmName string) (wakeSource, error) {
+func (p *Provider) resolveWakeSource(ctx context.Context, namespace, vmName string) (wakeSource, error) {
 	var (
 		m         *manifest.OCIManifest
 		cfg       *manifest.SnapshotConfig
@@ -520,7 +511,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, pod *corev1.Pod, vmNam
 		return wakeSource{}, fmt.Errorf("inspect local snapshot %s: %w", vmName, err)
 	}
 	if !tagAbsent {
-		if src, ok := p.tryPeerRestore(ctx, pod, vmName, m, cfg); ok {
+		if src, ok := p.tryPeerRestore(ctx, namespace, vmName, m, cfg); ok {
 			return src, nil
 		}
 	}
@@ -545,14 +536,14 @@ func (p *Provider) resolveWakeSource(ctx context.Context, pod *corev1.Pod, vmNam
 		// The import is a one-shot clone source; same-node wakes never get here.
 		release: func() {
 			p.goBackground(func() {
-				p.removeSnapshotDetached(ctx, "Provider.wakeImportCleanup", importName)
+				p.removeSnapshotDetached(ctx, importName)
 			})
 		},
 	}, nil
 }
 
 // tryPeerRestore stages raw files from the manifest's peer node; best-effort, falls back to registry pull.
-func (p *Provider) tryPeerRestore(ctx context.Context, pod *corev1.Pod, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
+func (p *Provider) tryPeerRestore(ctx context.Context, namespace, vmName string, m *manifest.OCIManifest, cfg *manifest.SnapshotConfig) (wakeSource, bool) {
 	if p.PeerRestorer == nil {
 		return wakeSource{}, false
 	}
@@ -590,7 +581,7 @@ func (p *Provider) tryPeerRestore(ctx context.Context, pod *corev1.Pod, vmName s
 		logger.Warnf(ctx, "peer restore %s from %s: %v (falling back to registry)", vmName, peerNode, err)
 		return wakeSource{}, false
 	}
-	metrics.PeerRestoreDuration.WithLabelValues(pod.Namespace).Observe(time.Since(start).Seconds())
+	metrics.PeerRestoreDuration.WithLabelValues(namespace).Observe(time.Since(start).Seconds())
 	metrics.PeerRestoreTotal.WithLabelValues("ok").Inc()
 	logger.Infof(ctx, "peer restore %s from %s in %.1fs", vmName, peerNode, time.Since(start).Seconds())
 	return wakeSource{dir: restored.Dir, origin: "peer " + peerNode, snapshot: restored.Snapshot, release: cleanup}, true

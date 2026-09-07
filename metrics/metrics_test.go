@@ -1,17 +1,19 @@
 package metrics
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+
+	"github.com/cocoonstack/vk-cocoon/provider"
 )
 
 func TestWorkloadMetricsExposeNamespace(t *testing.T) {
 	const namespace = "testing-cocoonset"
 
-	VMTableSize.WithLabelValues(namespace).Set(1)
 	VMBootDuration.WithLabelValues(namespace, "clone", "cloud-hypervisor").Observe(1)
 	SnapshotSaveDuration.WithLabelValues(namespace).Observe(1)
 	SnapshotPushDuration.WithLabelValues(namespace).Observe(1)
@@ -23,7 +25,6 @@ func TestWorkloadMetricsExposeNamespace(t *testing.T) {
 
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(
-		VMTableSize,
 		VMBootDuration,
 		SnapshotSaveDuration,
 		SnapshotPushDuration,
@@ -39,7 +40,6 @@ func TestWorkloadMetricsExposeNamespace(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"cocoon_vk_vm_table_size":                          {"namespace"},
 		"cocoon_vk_vm_boot_duration_seconds":               {"backend", "mode", "namespace"},
 		"cocoon_vk_snapshot_save_duration_seconds":         {"namespace"},
 		"cocoon_vk_snapshot_push_duration_seconds":         {"namespace"},
@@ -53,6 +53,34 @@ func TestWorkloadMetricsExposeNamespace(t *testing.T) {
 		if got := metricLabelNames(t, families, name); !slices.Equal(got, wantLabels) {
 			t.Errorf("%s labels = %v, want %v", name, got, wantLabels)
 		}
+	}
+}
+
+func TestVMCollectorCountsTrackedVMsPerNamespace(t *testing.T) {
+	collector := NewVMCollector(func() provider.Sample {
+		return provider.Sample{
+			VMs:                   []provider.VMStats{{VMName: "a", PodName: "a", Namespace: "staging", Backend: "cloud-hypervisor"}},
+			TrackedVMsByNamespace: map[string]int{"staging": 2, "testing": 1},
+		}
+	})
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(collector)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	got := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "cocoon_vk_vm_table_size" {
+			continue
+		}
+		for _, m := range family.Metric {
+			got[m.Label[0].GetValue()] = m.GetGauge().GetValue()
+		}
+	}
+	want := map[string]float64{"staging": 2, "testing": 1}
+	if !maps.Equal(got, want) {
+		t.Fatalf("vm_table_size = %v, want %v", got, want)
 	}
 }
 

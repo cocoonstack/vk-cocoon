@@ -288,6 +288,10 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	if err != nil {
 		return nil, fmt.Errorf("parse VK_RESTORE_MODE: %w", err)
 	}
+	orphanPolicy, err := provider.ParseOrphanPolicy(opts.orphanPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("parse VK_ORPHAN_POLICY: %w", err)
+	}
 	registry, err := buildRegistry(opts)
 	if err != nil {
 		return nil, fmt.Errorf("construct registry client: %w", err)
@@ -318,7 +322,7 @@ func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error
 	}
 	p.GuestSAC = &sac.Dialer{}
 	p.Probes = probes.NewManager(ctx)
-	p.OrphanPolicy = provider.OrphanPolicy(strings.ToLower(opts.orphanPolicy))
+	p.OrphanPolicy = orphanPolicy
 	p.RestoreMode = restoreMode
 	return p, nil
 }
@@ -355,7 +359,7 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 // patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
 func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
 	logger := log.WithFunc("patchNodeLabelsAndEndpoint")
-	// Give v-k time to create the node object.
+	// give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}

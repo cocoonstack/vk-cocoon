@@ -60,9 +60,11 @@ The `probes/` package owns that loop:
 
 If the ICMP raw socket cannot be opened — typically because the binary is
 running without `CAP_NET_RAW` — the provider falls back to
-`network.NopPinger` and the probe degrades to "an IP was resolved ==
-Ready". That is weaker than a real end-to-end ping but still strictly
-better than the previous behaviour of marking the pod Ready the instant
+`network.NopPinger` and the ICMP branch degrades to "an IP was resolved ==
+Ready". A pod carrying `vm.cocoonstack.io/probe-port` still gets a real TCP
+dial, and macOS pods keep their SSH-banner probe. The degraded branch is
+weaker than a real end-to-end ping but still strictly better than the
+previous behaviour of marking the pod Ready the instant
 `cocoon vm clone/run` returned. The systemd unit in
 `packaging/vk-cocoon.service` grants `AmbientCapabilities=CAP_NET_RAW` so
 the production path gets the real pinger.

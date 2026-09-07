@@ -135,8 +135,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.startProbeIfEnabled(pod)
 
 	p.markPodRunning(pod)
-	// Cloned defers Ready to runPostCloneSetup; Windows+static defers to applyWindowsStaticIP;
-	// restore defers to dispatchHibernateRestore.
+	// Ready is deferred to the path that finishes the boot: post-clone setup, the Windows static-IP pass or the hibernate restore.
 	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markReadyPublished(ctx, pod)
 	} else {
@@ -230,7 +229,7 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return nil, "", err
 	}
 	if meta.ReadRestoreFromHibernate(pod) {
-		src, err := p.resolveWakeSource(ctx, pod, spec.VMName)
+		src, err := p.resolveWakeSource(ctx, pod.Namespace, spec.VMName)
 		if err != nil {
 			return nil, "", err
 		}
@@ -255,15 +254,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if spec.ForkFrom != "" {
 			return nil, "", fmt.Errorf("annotation %s is incompatible with fork-from %q", meta.AnnotationCloneFromDir, spec.ForkFrom)
 		}
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			FromDir:     fromDir,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.FromDir = fromDir
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			metrics.CloneFromDirTotal.WithLabelValues("failed").Inc()
 			return nil, "", fmt.Errorf("clone vm %s from dir %s: %w", spec.VMName, fromDir, err)
@@ -276,15 +269,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err != nil {
 			return nil, "", err
 		}
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:        cloneFrom,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.From = cloneFrom
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, cloneFrom, err)
 		}
@@ -334,16 +321,9 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", baseErr
 		}
 
-		v, err := p.Runtime.Clone(ctx, vm.CloneOptions{
-			From:        local,
-			To:          spec.VMName,
-			Network:     spec.Network,
-			Backend:     backend,
-			NoDirectIO:  noDirectIO,
-			Pull:        srcImage != "",
-			RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
-			CPUPolicy:   policy,
-		})
+		opts := p.cloneOptionsFor(spec, policy)
+		opts.From, opts.Pull = local, srcImage != ""
+		v, err := p.Runtime.Clone(ctx, opts)
 		if err != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, err)
 		}
@@ -351,14 +331,22 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 }
 
-// imagePresent reports whether an image with this digest is in the local store under any name.
-func (p *Provider) imagePresent(ctx context.Context, digest string) bool {
-	return digest != "" && p.Runtime.Image(ctx, digest) == nil
+// cloneOptionsFor fills the fields every clone site shares; callers add the source, Pull and NICs.
+func (p *Provider) cloneOptionsFor(spec meta.VMSpec, policy vm.CPUPolicy) vm.CloneOptions {
+	return vm.CloneOptions{
+		To:          spec.VMName,
+		Network:     spec.Network,
+		Backend:     spec.Backend,
+		NoDirectIO:  spec.NoDirectIO,
+		RestoreMode: restoreModeFor(p.RestoreMode, spec.OS),
+		CPUPolicy:   policy,
+	}
 }
 
 // ensureSnapshotBaseImage imports an OCI-ref base that `vm clone --pull` cannot fetch, deduplicated by digest.
 func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Snapshot) error {
-	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) || p.imagePresent(ctx, snapshot.ImageDigest) {
+	if snapshot == nil || snapshot.Image == "" || isHTTPURL(snapshot.Image) ||
+		(snapshot.ImageDigest != "" && p.Runtime.Image(ctx, snapshot.ImageDigest) == nil) {
 		return nil
 	}
 	if _, err := p.ensureRunImage(ctx, snapshot.Image, false); err != nil {
@@ -378,9 +366,8 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	if image == "" {
 		return image, nil
 	}
-	// Raw ref, not ParseRef-normalized: fallback branches return the leader's
-	// spelling verbatim, so a joiner must share its exact ref.
-	// force keys separately so a force caller never coalesces onto a non-force flight.
+	// the key is the raw ref (fallback branches return the leader's spelling verbatim, so a joiner must share it)
+	// plus force, so a force caller never coalesces onto a non-force flight.
 	key := image
 	if force {
 		key = "force " + image
@@ -457,9 +444,8 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
-	// singleflight so concurrent sub-agents forking the same main don't race into
-	// SnapshotSave and all but one fail "snapshot name already in use". The shared
-	// save is cancel-detached so one caller's aborted CreatePod can't fail the rest.
+	// singleflight: sub-agents forking the same main would race SnapshotSave into "snapshot name already in use";
+	// the shared save is cancel-detached so one aborted CreatePod cannot fail the rest.
 	created, err, _ := p.forkSnapshotSF.Do(snapshotName, func() (any, error) {
 		shared := context.WithoutCancel(ctx)
 		if _, err := p.Runtime.Snapshot(shared, snapshotName); err == nil {
@@ -617,9 +603,8 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	if err != nil {
 		return
 	}
-	// The readiness probe reads the tracked pod via GetPod (DeepCopy under
-	// RLock); guard the write so it doesn't race that copy. GetPodStatus is
-	// called before the lock because it RLocks internally.
+	// the probe's GetPod DeepCopies the tracked pod under RLock, so the write takes the lock;
+	// GetPodStatus RLocks itself and therefore runs first.
 	p.mu.Lock()
 	pod.Status = *status
 	p.mu.Unlock()
@@ -677,8 +662,7 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 	return mode
 }
 
-// isClonedBoot reports whether bringUpVM took a clone path. spec.Mode alone
-// is insufficient: fromDir / ForkFrom override mode=run for sub-agents.
+// isClonedBoot reports a clone path; fromDir and ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
 }
@@ -687,9 +671,7 @@ func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {
 	return strings.TrimSpace(pod.Annotations[meta.AnnotationCloneFromDir]) != "" || spec.ForkFrom != ""
 }
 
-// assertSnapshotBackend rejects a clone when the target backend differs from
-// the backend that produced the snapshot. CH and FC store state incompatibly,
-// so letting this reach cocoon would fail with a harder-to-debug error.
+// assertSnapshotBackend rejects a clone whose backend differs from the snapshot's: CH and FC state is incompatible and cocoon's own error is harder to read.
 func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 	if snapshot == nil || snapshot.Hypervisor == "" || targetBackend == "" {
 		return nil

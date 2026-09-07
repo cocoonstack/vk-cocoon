@@ -14,11 +14,11 @@ import (
 const snapshotCleanupTimeout = 10 * time.Second
 
 // removeSnapshotDetached drops a snapshot under a fresh timed context so caller cancel can't abort it, and a slow remove can't starve a follow-up.
-func (p *Provider) removeSnapshotDetached(ctx context.Context, funcLabel, name string) {
+func (p *Provider) removeSnapshotDetached(ctx context.Context, name string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotCleanupTimeout)
 	defer cancel()
 	if err := p.Runtime.SnapshotRemoveIfExists(ctx, name); err != nil {
-		log.WithFunc(funcLabel).Errorf(ctx, err, "remove snapshot %s", name)
+		log.WithFunc("Provider.removeSnapshotDetached").Errorf(ctx, err, "remove snapshot %s", name)
 	}
 }
 

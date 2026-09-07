@@ -97,9 +97,6 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 		case <-loopCtx.Done():
 			attemptErrs = append(attemptErrs, fmt.Errorf("attempt %d: %w", attempt, loopCtx.Err()))
 		}
-		if loopCtx.Err() != nil {
-			break
-		}
 		if !commonk8s.SleepCtx(loopCtx, postCloneRetryInterval) {
 			break
 		}
@@ -357,7 +354,7 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 	return postClonePlan{argv: []string{"sh", "-c", script}, hint: script}, true
 }
 
-// postCloneNeeded is planPostClone's decision alone — cheap and syscall-free — so lock-holders can ask directly.
+// postCloneNeeded is planPostClone's decision alone, cheap and syscall-free, so lock-holders can ask directly.
 func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
 	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
 }
@@ -369,7 +366,7 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-// needsPostClone: FC always (MAC re-apply); CH only with a static-IP NIC.
+// needsPostClone is true for every FC clone (MAC re-apply) and for CH only with a static-IP NIC.
 func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
 	if backend == vm.BackendFirecracker {
 		return true
@@ -377,7 +374,7 @@ func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
 	return slices.ContainsFunc(networkConfigs, isStaticNIC)
 }
 
-// buildWindowsPostCloneArgv: -PresentOnly matters — ghost Net PnP entries make Disable-PnpDevice return 0x80041001 first.
+// buildWindowsPostCloneArgv passes -PresentOnly because ghost Net PnP entries make Disable-PnpDevice return 0x80041001 first.
 func buildWindowsPostCloneArgv() []string {
 	const ps = `$x=Get-PnpDevice -Class Net -PresentOnly;` +
 		`$x|Disable-PnpDevice -Confirm:$false;` +
@@ -394,7 +391,6 @@ func isStaticNIC(nc *vm.NetworkConfig) bool {
 	return nc.Network != nil && nc.Network.IP != ""
 }
 
-// prefixToSubnet converts a CIDR prefix length to a dotted-decimal subnet mask.
 func prefixToSubnet(prefix int) string {
 	if prefix <= 0 || prefix > 32 {
 		return "255.255.255.0"

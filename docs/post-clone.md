@@ -3,8 +3,8 @@
 After a clone (or hibernate wake / fork), vk-cocoon checks whether the VM
 needs manual guest-side network setup. CH clones are automatic on all-DHCP
 networks (NIC hot-swap triggers systemd-networkd to re-DHCP); the fixup path
-is entered when a static-IP NIC is present, and unconditionally for every
-`os=windows` pod. These combinations require intervention:
+is entered when a static-IP NIC is present, for every Firecracker clone
+(the guest MAC is frozen in vmstate), and for every `os=windows` pod. These combinations require intervention:
 
 | Scenario | Reason | Hint commands |
 |---|---|---|

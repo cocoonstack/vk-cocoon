@@ -104,7 +104,7 @@ func (p *Provider) removeLocalSnapshots(ctx context.Context, vmName string) {
 	var wg sync.WaitGroup
 	for _, name := range []string{vmName, forkSnapshotName(vmName)} {
 		wg.Go(func() {
-			p.removeSnapshotDetached(ctx, "Provider.DeletePod", name)
+			p.removeSnapshotDetached(ctx, name)
 		})
 	}
 	wg.Wait()
