@@ -1,6 +1,8 @@
 // Package provider holds the virtual-kubelet scaffolding shared across cocoon backends: orphan policy, capacity, stats types.
 package provider
 
+import "time"
+
 const (
 	OrphanAlert   OrphanPolicy = "alert"
 	OrphanDestroy OrphanPolicy = "destroy"
@@ -17,6 +19,7 @@ type VMStats struct {
 	Namespace string
 	Backend   string
 	Tap       string
+	StartedAt time.Time
 
 	CPUSeconds          float64 // cumulative CPU seconds
 	CPUThrottledSeconds float64

@@ -1,8 +1,11 @@
 package cocoon
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/cocoonstack/vk-cocoon/provider"
 )
@@ -31,6 +34,34 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 		if got := parseProcStatCPUSeconds(s); got != 0 {
 			t.Errorf("parseProcStatCPUSeconds(%q) = %v, want 0", s, got)
 		}
+	}
+}
+
+func TestStatsReportThePodStartTime(t *testing.T) {
+	p := newTestProvider(t)
+	started := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	p.statsVMs = []provider.VMStats{{VMName: "vk-ns-demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}
+	p.statsAt = time.Now()
+
+	summary, err := p.GetStatsSummary(t.Context())
+	if err != nil {
+		t.Fatalf("GetStatsSummary: %v", err)
+	}
+	pod := summary.Pods[0]
+	if !pod.StartTime.Time.Equal(started) || !pod.Containers[0].StartTime.Time.Equal(started) {
+		t.Fatalf("pod start %v container start %v, want %v", pod.StartTime.Time, pod.Containers[0].StartTime.Time, started)
+	}
+
+	families, err := p.GetMetricsResource(t.Context())
+	if err != nil {
+		t.Fatalf("GetMetricsResource: %v", err)
+	}
+	i := slices.IndexFunc(families, func(f *dto.MetricFamily) bool { return f.GetName() == "container_start_time_seconds" })
+	if i < 0 {
+		t.Fatal("container_start_time_seconds family missing")
+	}
+	if got := families[i].Metric[0].GetGauge().GetValue(); got != float64(started.Unix()) {
+		t.Fatalf("container_start_time_seconds = %v, want %v", got, started.Unix())
 	}
 }
 

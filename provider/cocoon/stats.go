@@ -44,11 +44,15 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 	podStats := make([]statsv1alpha1.PodStats, 0, len(samples))
 	for _, s := range samples {
 		cpu, mem := cpuMemStats(s.CPUSeconds, s.MemoryRSS)
+		start := now
+		if !s.StartedAt.IsZero() {
+			start = metav1.NewTime(s.StartedAt)
+		}
 		ps := statsv1alpha1.PodStats{
 			PodRef:    statsv1alpha1.PodReference{Name: s.PodName, Namespace: s.Namespace},
-			StartTime: now,
+			StartTime: start,
 			Containers: []statsv1alpha1.ContainerStats{{
-				Name: containerName, StartTime: now, CPU: cpu, Memory: mem,
+				Name: containerName, StartTime: start, CPU: cpu, Memory: mem,
 			}},
 		}
 		ps.Network = buildNetworkStats(s)
@@ -79,7 +83,7 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 			newGauge(float64(node.MemoryUsedBytes), nowMs, nil)),
 	}
 
-	var containerCPU, containerMem, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
+	var containerCPU, containerMem, containerStart, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
 	for _, s := range samples {
 		cpuSec := s.CPUSeconds
 		memBytes := float64(s.MemoryRSS)
@@ -93,6 +97,9 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
 		throttledSec = append(throttledSec, newCounter(s.CPUThrottledSeconds, nowMs, containerLabels))
 		throttledPeriods = append(throttledPeriods, newCounter(float64(s.CPUThrottledPeriods), nowMs, containerLabels))
+		if !s.StartedAt.IsZero() {
+			containerStart = append(containerStart, newGauge(float64(s.StartedAt.Unix()), nowMs, containerLabels))
+		}
 
 		podLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
@@ -118,6 +125,10 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 			newGaugeFamily("pod_memory_working_set_bytes",
 				"Current working set of the pod in bytes", podMem...),
 		)
+	}
+	if len(containerStart) > 0 {
+		families = append(families, newGaugeFamily("container_start_time_seconds",
+			"Start time of the container since unix epoch in seconds", containerStart...))
 	}
 
 	return families, nil
@@ -178,6 +189,9 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 		}
 		if len(v.NetworkConfigs) > 0 {
 			snap.Tap = v.NetworkConfigs[0].Tap
+		}
+		if pod.Status.StartTime != nil {
+			snap.StartedAt = pod.Status.StartTime.Time
 		}
 		out = append(out, snap)
 	}
