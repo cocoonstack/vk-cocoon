@@ -141,7 +141,7 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 	if time.Since(p.statsAt) < statsSampleTTL {
 		return p.statsVMs, p.statsNode
 	}
-	snaps := p.snapshotTrackedVMs()
+	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
 	vms := make([]provider.VMStats, 0, len(snaps))
 	for _, s := range snaps {
 		sample := s.VMStats
@@ -163,24 +163,30 @@ func (p *Provider) CollectVMStats() ([]provider.VMStats, provider.NodeStats) {
 		vms = append(vms, sample)
 	}
 	node := provider.NodeStats{
-		CPUSeconds:      readNodeCPUSeconds(),
-		MemoryUsedBytes: readNodeMemoryWorkingSet(),
+		CPUSeconds:            readNodeCPUSeconds(),
+		MemoryUsedBytes:       readNodeMemoryWorkingSet(),
+		TrackedVMsByNamespace: trackedVMsByNamespace,
 	}
 	node.StorageTotal, node.StorageAvailable = provider.StorageBytes()
 	p.statsVMs, p.statsNode, p.statsAt = vms, node, time.Now()
 	return vms, node
 }
 
-// snapshotTrackedVMs copies the minimal VM data under RLock, then releases it so /proc reads don't block CreatePod/DeletePod.
-func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
+// snapshotTrackedVMs copies counts and resource-readable VM data under RLock so /proc reads do not block CreatePod/DeletePod.
+func (p *Provider) snapshotTrackedVMs() ([]vmSnapshot, map[string]int) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
 	out := make([]vmSnapshot, 0, len(p.pods))
+	trackedVMsByNamespace := map[string]int{}
 	for key, pod := range p.pods {
 		spec := meta.ParseVMSpec(pod)
 		v := p.vmsByPod[key]
-		if v == nil || v.PID == 0 {
+		if v == nil {
+			continue
+		}
+		trackedVMsByNamespace[pod.Namespace]++
+		if v.PID == 0 {
 			continue
 		}
 		snap := vmSnapshot{
@@ -195,7 +201,7 @@ func (p *Provider) snapshotTrackedVMs() []vmSnapshot {
 		}
 		out = append(out, snap)
 	}
-	return out
+	return out, trackedVMsByNamespace
 }
 
 func buildNetworkStats(s provider.VMStats) *statsv1alpha1.NetworkStats {

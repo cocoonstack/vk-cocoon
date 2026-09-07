@@ -1,13 +1,16 @@
 package cocoon
 
 import (
+	"maps"
 	"slices"
 	"testing"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
 
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/provider"
+	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
 func TestParseProcStatRSS(t *testing.T) {
@@ -62,6 +65,22 @@ func TestStatsReportThePodStartTime(t *testing.T) {
 	}
 	if got := families[i].Metric[0].GetGauge().GetValue(); got != float64(started.Unix()) {
 		t.Fatalf("container_start_time_seconds = %v, want %v", got, started.Unix())
+	}
+}
+
+func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false})
+	pod.Namespace = "ns"
+	pod.Name = "static"
+	p.trackPod(pod, &vm.VM{ID: "qemu-1", Name: "vk-ns-static"})
+
+	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
+	if len(snaps) != 0 {
+		t.Fatalf("resource samples = %d, want 0", len(snaps))
+	}
+	if want := map[string]int{"ns": 1}; !maps.Equal(trackedVMsByNamespace, want) {
+		t.Fatalf("tracked VMs = %v, want %v", trackedVMsByNamespace, want)
 	}
 }
 

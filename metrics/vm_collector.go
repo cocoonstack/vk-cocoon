@@ -65,9 +65,7 @@ func (c *VMCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 	vms, node := c.collectFn()
 
-	perNamespace := map[string]int{}
 	for _, v := range vms {
-		perNamespace[v.Namespace]++
 		labels := []string{v.VMName, v.PodName, v.Namespace, v.Backend}
 		ch <- prometheus.MustNewConstMetric(c.vmCPUDesc, prometheus.CounterValue, v.CPUSeconds, labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmThrottledDesc, prometheus.CounterValue, v.CPUThrottledSeconds, labels...)
@@ -77,7 +75,7 @@ func (c *VMCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.vmNetRxDesc, prometheus.CounterValue, float64(v.NetRxBytes), labels...)
 		ch <- prometheus.MustNewConstMetric(c.vmNetTxDesc, prometheus.CounterValue, float64(v.NetTxBytes), labels...)
 	}
-	for namespace, n := range perNamespace {
+	for namespace, n := range node.TrackedVMsByNamespace {
 		ch <- prometheus.MustNewConstMetric(c.vmTableDesc, prometheus.GaugeValue, float64(n), namespace)
 	}
 

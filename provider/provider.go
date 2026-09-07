@@ -34,12 +34,13 @@ type VMStats struct {
 	NetTxBytes          uint64
 }
 
-// NodeStats holds node-level resource usage for metrics collection.
+// NodeStats holds node-level data for metrics collection.
 type NodeStats struct {
-	CPUSeconds       float64
-	MemoryUsedBytes  int64
-	StorageAvailable int64
-	StorageTotal     int64
+	CPUSeconds            float64
+	MemoryUsedBytes       int64
+	StorageAvailable      int64
+	StorageTotal          int64
+	TrackedVMsByNamespace map[string]int
 }
 
 // ParseOrphanPolicy validates a configured orphan policy, normalizing case.

@@ -60,9 +60,7 @@ func TestVMCollectorCountsTrackedVMsPerNamespace(t *testing.T) {
 	collector := NewVMCollector(func() ([]provider.VMStats, provider.NodeStats) {
 		return []provider.VMStats{
 			{VMName: "a", PodName: "a", Namespace: "staging", Backend: "cloud-hypervisor"},
-			{VMName: "b", PodName: "b", Namespace: "staging", Backend: "cloud-hypervisor"},
-			{VMName: "c", PodName: "c", Namespace: "testing", Backend: "firecracker"},
-		}, provider.NodeStats{}
+		}, provider.NodeStats{TrackedVMsByNamespace: map[string]int{"staging": 2, "testing": 1}}
 	})
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(collector)
