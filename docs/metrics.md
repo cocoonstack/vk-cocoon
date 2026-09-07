@@ -42,7 +42,7 @@ also serves `/debug/pprof/` and `/debug/pprof/profile`:
 | `cocoon_vk_node_cpu_seconds_total` | Counter | Node cumulative CPU |
 | `cocoon_vk_node_memory_used_bytes` | Gauge | Node used memory |
 | `cocoon_vk_node_storage_available_bytes` / `total_bytes` | Gauge | Cocoon root filesystem |
-| `cocoon_vk_vm_boot_duration_seconds{namespace,mode,backend}` | Histogram | VM creation time (run or clone) |
+| `cocoon_vk_vm_boot_duration_seconds{namespace,mode,backend}` | Histogram | VM creation time (`mode=run\|clone\|static`, `backend=cloud-hypervisor\|firecracker`) |
 | `cocoon_vk_snapshot_save_duration_seconds{namespace}` | Histogram | Snapshot save time |
 | `cocoon_vk_snapshot_push_duration_seconds{namespace}` | Histogram | Registry push time |
 | `cocoon_vk_snapshot_pull_duration_seconds` | Histogram | Registry pull time |

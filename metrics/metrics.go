@@ -22,7 +22,6 @@ var (
 			Name:      "pod_lifecycle_total",
 			Help:      "Number of pod lifecycle operations by op, result, and reason.",
 		},
-		// result=ok|failed|skipped; reason=adopted|noop|superseded|missing_vmname|no_vm|seat_release|snapshot_cpu_class_mismatch
 		[]string{"op", labelResult, "reason"},
 	)
 
@@ -150,7 +149,7 @@ var (
 			Help:      "Time to create a VM (run or clone), from start to Running.",
 			Buckets:   []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		},
-		[]string{labelNamespace, "mode", "backend"}, // mode=run|clone|static, backend=cloud-hypervisor|firecracker
+		[]string{labelNamespace, "mode", "backend"},
 	)
 
 	SnapshotSaveDuration = prometheus.NewHistogramVec(
@@ -225,7 +224,7 @@ var (
 			Name:      "hibernate_total",
 			Help:      "Number of hibernate stages by result.",
 		},
-		[]string{labelNamespace, "phase", labelResult}, // phase=dhcp_release|netresize|snapshot|push|remove, result=ok|failed
+		[]string{labelNamespace, "phase", labelResult},
 	)
 
 	LeaseReleaseTotal = prometheus.NewCounterVec(
@@ -255,7 +254,7 @@ var (
 			Name:      "wake_ip_wait_total",
 			Help:      "Outcomes of the post-clone and wake DHCP lease wait.",
 		},
-		[]string{labelNamespace, labelResult}, // result=ok|timeout
+		[]string{labelNamespace, labelResult},
 	)
 
 	WakeRenewNudgeTotal = prometheus.NewCounterVec(
@@ -265,7 +264,7 @@ var (
 			Name:      "wake_renew_nudge_total",
 			Help:      "ipconfig /renew nudges sent to Windows guests still lease-less mid lease-wait.",
 		},
-		[]string{labelResult}, // result=ok|failed
+		[]string{labelResult},
 	)
 
 	PostCloneTotal = prometheus.NewCounterVec(
@@ -275,7 +274,7 @@ var (
 			Name:      "postclone_total",
 			Help:      "Number of post-clone fixups by guest kind and result.",
 		},
-		[]string{"kind", labelResult}, // kind=windows|linux_static|linux_fc|sac, result=ok|failed
+		[]string{"kind", labelResult},
 	)
 
 	PostCloneRetryAttempts = prometheus.NewHistogramVec(
@@ -286,7 +285,7 @@ var (
 			Help:      "Attempts consumed by post-clone vsock exec by result.",
 			Buckets:   []float64{1, 2, 5, 10, 20, 40, 60},
 		},
-		[]string{labelResult}, // result=ok|failed
+		[]string{labelResult},
 	)
 )
 

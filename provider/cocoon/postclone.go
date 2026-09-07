@@ -382,11 +382,6 @@ func buildWindowsPostCloneArgv() []string {
 	return []string{"powershell", "-nop", "-c", ps}
 }
 
-// isCloudimgVM probes the on-disk overlay when sourceImage is empty (forkFrom, wake).
-func isCloudimgVM(vmID string) bool {
-	return vm.HasCloudimgOverlay(provider.CocoonRootDir(), vmID)
-}
-
 func isStaticNIC(nc *vm.NetworkConfig) bool {
 	return nc.Network != nil && nc.Network.IP != ""
 }
@@ -417,7 +412,8 @@ func buildPostCloneCommands(vmName, backend, vmID, sourceImage string, networkCo
 
 	cmds = append(cmds, "rm -f /etc/systemd/network/10-*.network")
 
-	if isHTTPURL(sourceImage) || isCloudimgVM(vmID) {
+	// the on-disk overlay decides when sourceImage is empty (forkFrom, wake).
+	if isHTTPURL(sourceImage) || vm.HasCloudimgOverlay(provider.CocoonRootDir(), vmID) {
 		cmds = append(cmds, "cloud-init clean --logs --seed --configs network && cloud-init init --local && cloud-init init")
 		cmds = append(cmds, "cloud-init modules --mode=config && systemctl restart systemd-networkd")
 	} else {
