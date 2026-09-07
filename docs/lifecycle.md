@@ -109,19 +109,20 @@ cannot wedge node registration. Rejected create/update calls count on
      --from-dir <abs-path> --pull`, bypassing the local snapshot DB.
      Pairs with `cocoon snapshot export --to-dir` for cross-node staging.
      Conflicts with `mode=run` or `fork-from` fast-fail.
-4. For clone/fork/wake paths, check whether the VM needs guest-side network
-   setup (see [Post-clone hints](post-clone.md)). vk-cocoon runs the fixup
-   itself over `cocoon vm exec`, retrying every 3 s within a 180 s budget,
-   and marks the pod Ready on success. Only when that budget is exhausted
-   does it write the commands as a base64-encoded annotation
-   (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`, and
-   leave the pod Running but Not Ready for manual repair.
-5. Resolve the IP from the cocoon-net JSON lease file by MAC.
-6. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations
+4. Resolve the IP from the cocoon-net JSON lease file by MAC.
+5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations
    back so the operator and other consumers can pick them up. `VNCPort`
    stays unset on this path — cloud-hypervisor has no VNC server; the
    macOS path and the pre-seeded static-toolbox path publish a non-zero
    value.
+6. For clone/fork/wake paths that need guest-side network setup (see
+   [Post-clone hints](post-clone.md)), dispatch the fixup in the background
+   after the annotations are written. vk-cocoon runs it itself over
+   `cocoon vm exec`, retrying every 3 s within a 180 s budget, and marks the
+   pod Ready on success. Only when that budget is exhausted does it write the
+   commands as a base64-encoded annotation
+   (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`, and
+   leave the pod Running but Not Ready for manual repair.
 7. Launch a per-pod probe agent (see [Readiness probing](probes.md)). The
    agent's first probe runs synchronously so the initial `notify` push
    already reflects reachability; later probes run on a ticker and call
@@ -170,7 +171,7 @@ save/restore.
 
 | Transition | Behavior |
 |---|---|
-| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure runs before any release). Pod stays alive (`PodRunning`) so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
+| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure runs before any release). The pod object stays, reporting phase `Pending` while no VM is tracked, so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. CH+Windows snapshots are NIC-less, so the clone hot-adds a fresh NIC; vk-cocoon then waits up to 45 s for a DHCP lease, nudging a renew at 30 s if none has landed yet. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
