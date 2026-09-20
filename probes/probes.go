@@ -21,6 +21,7 @@ const (
 
 	defaultSteadyInterval   = 5 * time.Second
 	defaultFailureThreshold = 3
+	probeTimeout            = 3 * time.Second
 )
 
 // Probe is the per-tick health check.
@@ -182,7 +183,7 @@ func nextInitialInterval(d time.Duration) time.Duration {
 }
 
 func runProbe(ctx context.Context, probe Probe, duration prometheus.Observer) (bool, string) {
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	start := time.Now()
 	ok, msg := probe(probeCtx)

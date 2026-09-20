@@ -416,10 +416,8 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	if p.Puller == nil {
 		return nil, nil
 	}
-	// The in-flight re-check is load-bearing: SnapshotImport rm's the target
-	// name first and cocoon registers it only when the import completes, so a
-	// caller that missed the outer check during another flight's pull would
-	// otherwise re-import and rm the snapshot that flight just registered.
+	// the in-flight re-check matters: SnapshotImport rm's the target name first and cocoon registers it only on
+	// completion, so a joiner that missed the outer check would re-import and rm the snapshot the last flight registered.
 	ch := p.snapshotPullSF.DoChan(local, func() (any, error) {
 		shared, cancel := p.detachedImportContext()
 		defer cancel()
@@ -625,9 +623,8 @@ func addAnnotationPatch(patch map[string]any, key, current, desired string) {
 	}
 }
 
-// awaitFlight waits on a singleflight result or the caller's cancellation,
-// whichever comes first; a canceled caller abandons the flight, which keeps
-// running for its remaining waiters.
+// awaitFlight waits on a singleflight result or the caller's cancellation; a canceled caller abandons the flight,
+// which keeps running for its remaining waiters.
 func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
 	select {
 	case res := <-ch:
@@ -716,10 +713,8 @@ func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 
-// podCPUPolicy derives cgroup knobs: quota caps at the CPU limit and
-// never falls back to requests, weight always tracks requests (limits
-// when unset, mirroring the K8s Guaranteed defaulting) so a BestEffort
-// pod gets kubelet's minimum share, not cocoon's vCPU-count default.
+// podCPUPolicy caps the quota at the CPU limit (never requests) and tracks the weight from requests (limits when
+// unset, the K8s Guaranteed defaulting) so a BestEffort pod gets kubelet's minimum share, not cocoon's vCPU default.
 func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	if len(pod.Spec.Containers) == 0 {
 		return vm.CPUPolicy{}

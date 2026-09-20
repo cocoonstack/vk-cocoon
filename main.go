@@ -283,7 +283,7 @@ func buildRegistry(opts buildOpts) (oci.Registry, error) {
 }
 
 func buildProvider(ctx context.Context, opts buildOpts) (*cocoon.Provider, error) {
-	logger := log.WithFunc("buildProvider")
+	logger := log.WithFunc("main.buildProvider")
 	restoreMode, err := vm.ParseRestoreMode(opts.restoreMode)
 	if err != nil {
 		return nil, fmt.Errorf("parse VK_RESTORE_MODE: %w", err)
@@ -358,7 +358,7 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 
 // patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
 func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
-	logger := log.WithFunc("patchNodeLabelsAndEndpoint")
+	logger := log.WithFunc("main.patchNodeLabelsAndEndpoint")
 	// give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
