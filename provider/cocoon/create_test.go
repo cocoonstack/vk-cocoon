@@ -26,6 +26,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	utilexec "k8s.io/client-go/util/exec"
 
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
@@ -1498,6 +1499,42 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileAdoptsAnUnmanagedPodFromItsAnnotations(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+		meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+		pod.Spec.NodeName = "cocoon-pool"
+		meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+		meta.HibernateState(true).Apply(pod)
+
+		rt := &fakeRuntime{}
+		if local {
+			rt.listVMs = []vm.VM{{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9"}}
+		}
+		p := newTestProvider(t)
+		p.NodeName = "cocoon-pool"
+		p.Runtime = rt
+		p.Clientset = fake.NewSimpleClientset(pod)
+
+		if err := p.StartupReconcile(t.Context()); err != nil {
+			t.Fatalf("local=%v StartupReconcile: %v", local, err)
+		}
+		if got := p.vmForPod("ns", "cs-db"); got == nil || got.ID != "extern-vm-1" || got.IP != "10.0.0.9" {
+			t.Fatalf("local=%v unmanaged VM not adopted from the annotations, got %#v", local, got)
+		}
+		adopted, err := p.GetPod(t.Context(), "ns", "cs-db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.ParseVMRuntime(adopted).VMID != "extern-vm-1" {
+			t.Fatalf("local=%v stale-hibernate recovery cleared the unmanaged pod's VMID: %v", local, adopted.Annotations)
+		}
+		if rt.removedID != "" {
+			t.Fatalf("local=%v the unmanaged VM was treated as an orphan and removed: %q", local, rt.removedID)
+		}
+	}
+}
+
 func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
@@ -2236,6 +2273,48 @@ func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	}
 	if publishedAt > readyAt {
 		t.Errorf("ready patched before the status reached the apiserver, writes = %v", seq)
+	}
+}
+
+func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
+		Name:      "db",
+		Mode:      cocoonv1.ToolboxModeStatic,
+		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSWindows, Backend: cocoonv1.BackendCloudHypervisor},
+	}, "vk-ns-cs-db", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+	spec := meta.ParseVMSpec(pod)
+	if spec.Managed {
+		t.Fatal("a static toolbox must be unmanaged")
+	}
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if isClonedBoot(pod, spec) {
+		t.Error("an unmanaged pod must not count as a cloned boot")
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
+		t.Errorf("lifecycle = %q, want %q: ready must not wait on a post-clone fixup vk does not own", got, meta.LifecycleStateReady)
+	}
+	v := &vm.VM{ID: "extern-vm-1", Name: spec.VMName}
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	if op := owedOpFor(pod, v); op != resumeOpReadyWait {
+		t.Errorf("owedOpFor = %q for an unmanaged pod left in creating, want %q", op, resumeOpReadyWait)
+	}
+	pod.Annotations[annotationPostCloneState] = postCloneStateRunning
+	if op := owedOpFor(pod, v); op != resumeOpReadyWait {
+		t.Errorf("owedOpFor = %q with a stale post-clone marker on an unmanaged pod, want %q", op, resumeOpReadyWait)
+	}
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateReady)
+	meta.HibernateState(true).Apply(pod)
+	if op := owedOpFor(pod, v); op != "" {
+		t.Errorf("owedOpFor = %q for a hibernate-marked unmanaged pod, want none", op)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -640,6 +641,24 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 
 	if !p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
 		t.Fatal("lease landed during the nudge exec; verdict must be success")
+	}
+}
+
+func TestUpdatePodLeavesAnUnmanagedVMAlone(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+	meta.HibernateState(true).Apply(pod)
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if rt.snapshotSaveCount != 0 || rt.removedID != "" {
+		t.Fatalf("hibernate touched an unmanaged VM: saves=%d removed=%q", rt.snapshotSaveCount, rt.removedID)
 	}
 }
 

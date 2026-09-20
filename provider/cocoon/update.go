@@ -90,6 +90,9 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		return p.noopUpdate(ctx, pod)
 	}
+	if !spec.Managed {
+		return p.noopUpdate(ctx, pod)
+	}
 
 	haveVM := v != nil
 

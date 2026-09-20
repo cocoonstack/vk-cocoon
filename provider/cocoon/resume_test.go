@@ -404,6 +404,21 @@ func TestClassifyNICRecoveryStopsAtBudgetWithoutRetryingEvidence(t *testing.T) {
 	}
 }
 
+func TestResumeReadyWaitPublishesReadyForAnUnmanagedPod(t *testing.T) {
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false, OS: string(cocoonv1.OSWindows)}.Apply(pod)
+	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	v := &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning}
+	p.trackPod(pod, v)
+
+	p.dispatchResume(meta.PodKey("ns", "cs-db"), pod, v, resumeOpReadyWait)
+	awaitLifecycle(t, p, "ns", "cs-db", meta.LifecycleStateReady)
+}
+
 func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta.LifecycleState) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

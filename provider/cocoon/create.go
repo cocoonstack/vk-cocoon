@@ -664,7 +664,7 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 
 // isClonedBoot reports a clone path; fromDir and ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
-	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
+	return spec.Managed && (hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun))
 }
 
 func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {

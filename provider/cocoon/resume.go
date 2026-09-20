@@ -75,6 +75,10 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 	case resumeOpPostClone:
 		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false) })
 	case resumeOpReadyWait:
+		if !spec.Managed {
+			run(func() { p.markReadyPublished(p.lifecycleCtx, pod) })
+			return
+		}
 		// ambiguous create-tail vs wake-finalize: resumed outcomes skip the wake accounting rather than guess.
 		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, false) })
 	case resumeOpClassifyNIC:
@@ -160,17 +164,23 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if isMacosVM(v) {
 		return ""
 	}
+	lc := meta.ReadLifecycleState(pod)
+	// an empty lifecycle (lost Creating patch) with a marker still records owed work.
+	resuming := lc == meta.LifecycleStateCreating || lc == ""
+	spec := meta.ParseVMSpec(pod)
+	if !spec.Managed {
+		if resuming {
+			return resumeOpReadyWait
+		}
+		return ""
+	}
 	if meta.ReadHibernateState(pod) {
 		return resumeOpHibernate
 	}
-	lc := meta.ReadLifecycleState(pod)
-	pcs := pod.Annotations[annotationPostCloneState]
-	// an empty lifecycle (lost Creating patch) with a marker still records owed work.
-	resuming := lc == meta.LifecycleStateCreating || lc == ""
 	if !resuming {
 		return ""
 	}
-	switch pcs {
+	switch pod.Annotations[annotationPostCloneState] {
 	case postCloneStateFailed:
 		return ""
 	case postCloneStateRunning:
@@ -178,7 +188,6 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	case postCloneStateDone:
 		return resumeOpReadyWait
 	default:
-		spec := meta.ParseVMSpec(pod)
 		// marker-less drop-NIC = interrupted restore (PnP must not touch the hot-added NIC) or a pre-marker fresh clone; evidence decides, async.
 		if shouldDropNICBeforeHibernate(spec) {
 			return resumeOpClassifyNIC

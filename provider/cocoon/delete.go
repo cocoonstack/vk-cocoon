@@ -37,6 +37,11 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	// a seat release keeps the local snapshot as the same-node warm-wake cache; resolveWakeSource still gates it on the :hibernate tag.
 	keepSnapshots := meta.ReadKeepSnapshotOnDelete(pod)
+	if !spec.Managed {
+		p.forgetPod(pod.Namespace, pod.Name)
+		metrics.PodLifecycleTotal.WithLabelValues("delete", "skipped", "unmanaged").Inc()
+		return nil
+	}
 
 	v := p.vmForPod(pod.Namespace, pod.Name)
 	if v == nil {

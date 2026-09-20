@@ -323,7 +323,7 @@ func TestIsClonedBoot(t *testing.T) {
 			if tc.fromDir != "" {
 				pod.Annotations[meta.AnnotationCloneFromDir] = tc.fromDir
 			}
-			spec := meta.VMSpec{Mode: tc.mode, ForkFrom: tc.forkFrom}
+			spec := meta.VMSpec{Mode: tc.mode, ForkFrom: tc.forkFrom, Managed: true}
 			if got := isClonedBoot(pod, spec); got != tc.want {
 				t.Errorf("isClonedBoot mode=%q forkFrom=%q fromDir=%q = %v, want %v",
 					tc.mode, tc.forkFrom, tc.fromDir, got, tc.want)
