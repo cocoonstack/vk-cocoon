@@ -28,8 +28,8 @@ cannot wedge node registration. Rejected create/update calls count on
    cloud-hypervisor-only.
 2. If a VM with `spec.VMName` already exists locally, adopt it
    (idempotent on restart). Adoption hinges on `StartupReconcile` having
-   populated `vmsByName`; before reconcile completes, CreatePod treats
-   the pod as new and may collide on VM name.
+   populated `vmsByName`, which is why `main.go` runs it to completion
+   before the pod controller starts.
 3. Otherwise `bringUpVM` selects a path. An unmanaged pod (`spec.Managed`
    false) short-circuits first onto its pre-assigned VMID/IP; the managed
    paths are then tried in order — restore-from-hibernate, clone-from-dir,
@@ -40,12 +40,13 @@ cannot wedge node registration. Rejected create/update calls count on
      evidence**: a managed pod with no marker whose VM name still owns a
      `:hibernate` registry tag (local snapshot presence in registry-less
      deployments) is a wake lost to a vk restart, and fresh-booting it
-     would let the next hibernate overwrite the guest's state. The
-     derived path fails closed on registry errors
-     (`HibernateEvidenceUnavailable`), conflicts loudly with explicit
-     clone sources, and rejects a pod whose image ref differs from the
-     ref recorded on the hibernate artifact at push time
-     (`cocoonstack.snapshot.baseimage`). Identity is compared by ref:
+     would let the next hibernate overwrite the guest's state. Both the
+     marked and the derived path fail closed on registry errors
+     (`HibernateEvidenceUnavailable`) and reject a pod whose image ref
+     differs from the ref recorded on the hibernate artifact at push time
+     (`cocoonstack.snapshot.baseimage`); only the derived path conflicts
+     with explicit clone sources, emits `HibernateSnapshotExists` and
+     counts `verdict=restored`. Identity is compared by ref:
      a ref change signals operator intent for a different image, while
      content drift under an unchanged ref is governed by the
      hibernate-state-is-authoritative contract (discarding hibernated
@@ -64,7 +65,10 @@ cannot wedge node registration. Rejected create/update calls count on
      toolboxes on an external QEMU host): skip the runtime entirely and
      adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator
      pre-wrote into the `VMRuntime` annotations. `Managed` is the single
-     source of truth for "vk-cocoon owns this VM's lifecycle".
+     source of truth for "vk-cocoon owns this VM's lifecycle": a
+     hibernate annotation on such a pod is a no-op, delete only forgets
+     the pod, and a restart re-adopts it from those annotations and
+     re-publishes Ready without any guest work.
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot
      locally using a **tag-aware name** (`repo:tag`, or bare `repo` when
      the tag is `latest` for backward compatibility; a name over 63

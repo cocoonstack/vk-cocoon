@@ -52,9 +52,9 @@ The `probes/` package owns that loop:
    step 2 was not yet ready), and again after 3 consecutive failures flip
    readiness back to false. `onUpdate` re-reads the pod, rebuilds the
    status, and calls `notify` so the kubelet observes the change.
-4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod
-   goroutine; `Manager.Close` is called once at shutdown to tear every
-   remaining agent down.
+4. `DeletePod` and a completed hibernate call `Manager.Forget`, which
+   cancels the per-pod goroutine; `Manager.Close` is called once at
+   shutdown to tear every remaining agent down.
 
 ## Degraded mode without CAP_NET_RAW
 
