@@ -86,12 +86,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// A restore reuses wake()'s post-restore path (CH+Windows waits on the fresh
 	// NIC's lease; others run runPostCloneSetup) and skips the base-image post-clone.
 	restoring := meta.ReadRestoreFromHibernate(pod)
-	if !restoring && spec.Managed {
-		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec)
+	if spec.Managed {
+		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec, restoring)
 		if err != nil {
-			return p.failCreate(ctx, pod, false, "HibernateEvidenceFailed", err)
+			return p.failCreate(ctx, pod, restoring, "HibernateEvidenceFailed", err)
 		}
-		restoring = derived
+		restoring = restoring || derived
 	}
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
@@ -161,8 +161,8 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 	return err
 }
 
-// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: fresh-booting a name whose guest state sits in a hibernate snapshot would let the next hibernate overwrite it (#54).
-func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
+// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: fresh-booting a name whose guest state sits in a hibernate snapshot would let the next hibernate overwrite it (#54); a pod the operator already marked keeps the image guard.
+func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, marked bool) (bool, error) {
 	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
 	if err != nil {
 		metrics.HibernateEvidenceTotal.WithLabelValues("unavailable").Inc()
@@ -172,13 +172,16 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 	if !evidence {
 		return false, nil
 	}
-	if hasExplicitCloneSource(pod, spec) {
+	if !marked && hasExplicitCloneSource(pod, spec) {
 		metrics.HibernateEvidenceTotal.WithLabelValues("source_conflict").Inc()
 		return false, fmt.Errorf("vm %s has a hibernate snapshot but the pod requests an explicit clone source; delete the %s tag to discard the hibernated state", spec.VMName, meta.HibernateSnapshotTag)
 	}
 	if recordedImage != "" && recordedImage != spec.Image {
 		metrics.HibernateEvidenceTotal.WithLabelValues("image_conflict").Inc()
 		return false, fmt.Errorf("hibernate snapshot of vm %s came from image %q but the pod requests %q; delete the %s tag to discard the hibernated state", spec.VMName, recordedImage, spec.Image, meta.HibernateSnapshotTag)
+	}
+	if marked {
+		return true, nil
 	}
 	metrics.HibernateEvidenceTotal.WithLabelValues("restored").Inc()
 	// The pod is tracked: GetPod's DeepCopy may be reading this map.

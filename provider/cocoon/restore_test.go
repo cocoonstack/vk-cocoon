@@ -286,3 +286,38 @@ func TestCreatePodEvidenceForkFromConflict(t *testing.T) {
 		t.Error("a source conflict must refuse both restore and fresh boot")
 	}
 }
+
+func TestCreatePodPreMarkedRestoreStillRefusesImageConflict(t *testing.T) {
+	const vmName = "vk-ns-demo-0"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = newWakeVerifyRegistryWithImage(t, "SNAP-1", "reg.example/agent:v1")
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v2", Mode: "clone"})
+	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
+	err := p.CreatePod(t.Context(), pod)
+	if err == nil || !strings.Contains(err.Error(), "came from image") {
+		t.Fatalf("err = %v, want image-identity conflict on the operator-marked restore", err)
+	}
+	if rt.cloned != nil || rt.ran != nil {
+		t.Error("a marked restore must not clone the old image's snapshot under the new image")
+	}
+}
+
+func TestCreatePodPreMarkedRestoreKeepsForkFrom(t *testing.T) {
+	const vmName = "vk-ns-demo-1"
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Registry = newWakeVerifyRegistryWithImage(t, "SNAP-1", "reg.example/agent:v1")
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v1", ForkFrom: "vk-ns-demo-0", Mode: "clone"})
+	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if rt.cloned == nil || rt.cloned.From != vmName {
+		t.Fatalf("a marked sub-agent must restore from its own hibernate snapshot, cloned = %#v", rt.cloned)
+	}
+}
