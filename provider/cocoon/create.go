@@ -447,8 +447,9 @@ func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) 
 
 	// singleflight: sub-agents forking the same main would race SnapshotSave into "snapshot name already in use";
 	// the shared save is cancel-detached so one aborted CreatePod cannot fail the rest.
-	created, err, _ := p.forkSnapshotSF.Do(snapshotName, func() (any, error) {
-		shared := context.WithoutCancel(ctx)
+	ch := p.forkSnapshotSF.DoChan(snapshotName, func() (any, error) {
+		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), importDetachTimeout)
+		defer cancel()
 		if _, err := p.Runtime.Snapshot(shared, snapshotName); err == nil {
 			return snapshotName, nil
 		}
@@ -465,10 +466,7 @@ func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) 
 		}
 		return snapshotName, nil
 	})
-	if err != nil {
-		return "", err
-	}
-	return created.(string), nil
+	return awaitFlight(ctx, ch, "")
 }
 
 func (p *Provider) vmByName(name string) *vm.VM {

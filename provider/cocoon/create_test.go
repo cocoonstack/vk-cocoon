@@ -185,10 +185,11 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 		closeEntered()
 		<-release
 	}}
-	p := &Provider{
-		Runtime:   rt,
-		vmsByName: map[string]*vm.VM{"vk-ns-demo-0": {ID: "src", Name: "vk-ns-demo-0"}},
-	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.mu.Lock()
+	p.vmsByName["vk-ns-demo-0"] = &vm.VM{ID: "src", Name: "vk-ns-demo-0"}
+	p.mu.Unlock()
 
 	var wg sync.WaitGroup
 	names := make([]string, n)
@@ -2318,6 +2319,49 @@ func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
 	}
 }
 
+func TestEnsureForkSnapshotAbandonsTheFlightOnCallerCancel(t *testing.T) {
+	p, _, entered, release := newWedgedForkFixture(t)
+	t.Cleanup(func() { close(release) })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.ensureForkSnapshot(ctx, "vk-ns-main-0")
+		done <- err
+	}()
+	<-entered
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ensureForkSnapshot still blocked on the wedged save after the caller canceled")
+	}
+}
+
+func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
+	p, rt, entered, release := newWedgedForkFixture(t)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.ensureForkSnapshot(t.Context(), "vk-ns-main-0")
+		done <- err
+	}()
+	<-entered
+	p.lifecycleStop()
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("shutdown aborted the in-flight save: %v", err)
+	}
+	if rt.snapshotSaveCount != 1 {
+		t.Fatalf("saves = %d, want 1", rt.snapshotSaveCount)
+	}
+}
+
 type fakeInspectStep struct {
 	vm  *vm.VM
 	err error
@@ -2478,9 +2522,12 @@ func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.S
 	return vm.StaleCreateCollected, nil
 }
 
-func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+func (f *fakeRuntime) SnapshotSave(ctx context.Context, name, vmID string) error {
 	if f.snapshotSaveHook != nil {
 		f.snapshotSaveHook()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if f.snapshotSaveErr != nil {
 		return f.snapshotSaveErr
@@ -2718,6 +2765,23 @@ func (c *countingRegistry) GetBlob(_ context.Context, _, digest string) (io.Read
 		return io.NopCloser(bytes.NewReader(b)), nil
 	}
 	return nil, fmt.Errorf("blob %s not found", digest)
+}
+
+func newWedgedForkFixture(t *testing.T) (*Provider, *fakeRuntime, chan struct{}, chan struct{}) {
+	t.Helper()
+	rt := &fakeRuntime{}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	rt.snapshotSaveHook = func() {
+		close(entered)
+		<-release
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.mu.Lock()
+	p.vmsByName["vk-ns-main-0"] = &vm.VM{ID: "vmid-main", Name: "vk-ns-main-0", State: vm.StateRunning}
+	p.mu.Unlock()
+	return p, rt, entered, release
 }
 
 func newTestProvider(t *testing.T) *Provider {
