@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/vk-cocoon/vm"
@@ -252,6 +254,48 @@ func TestWriteSkippingZerosPreservesContentAndHoles(t *testing.T) {
 	}
 	if got[3*zeroSkipBytes] != 0xBB || got[5*zeroSkipBytes+100] != 0xCC {
 		t.Error("later data chunks mismatch")
+	}
+}
+
+func TestPeerRestoreAbortsAStalledSlice(t *testing.T) {
+	restore := peerSliceStallTimeout
+	peerSliceStallTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { peerSliceStallTimeout = restore })
+
+	stall := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case planPath:
+			_ = json.NewEncoder(w).Encode(&peerPlan{
+				SnapshotID: "snap-1",
+				Files:      []peerFile{{Name: "memory-ranges", Size: 1 << 20, Slices: []peerSlice{{Offset: 0, Length: 1 << 20}}}},
+			})
+		case slicePath:
+			w.Header().Set("Trailer", sliceChecksumTrailer)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("partial"))
+			w.(http.Flusher).Flush()
+			<-stall
+		}
+	}))
+	t.Cleanup(func() { close(stall); srv.Close() })
+
+	p := &PeerRestorer{StagingRoot: t.TempDir()}
+	done := make(chan error, 1)
+	go func() {
+		_, cleanup, err := p.Restore(t.Context(), srv.URL, "vm-a", testConfig("snap-1"))
+		if cleanup != nil {
+			cleanup()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "peer slice memory-ranges@0") {
+			t.Fatalf("Restore err = %v, want the stalled slice named", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Restore still blocked on a peer that stopped sending body bytes")
 	}
 }
 
