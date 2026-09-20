@@ -740,6 +740,25 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 	}
 }
 
+func TestHibernateStopsTheReadinessProbe(t *testing.T) {
+	rt := &fakeRuntime{}
+	p, pod := newHibernateFixture(t, rt, "vmid-1", "10.0.0.5")
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.5", State: vm.StateRunning}
+	p.trackPod(pod, v)
+	p.startProbeIfEnabled(pod)
+
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if !p.Probes.Get(key).Ready {
+		t.Fatalf("probe before hibernate = %#v, want ready", p.Probes.Get(key))
+	}
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if got := p.Probes.Get(key); !got.LastSeen.IsZero() {
+		t.Fatalf("probe after hibernate = %#v, want forgotten", got)
+	}
+}
+
 func hammerPodAnnotation(t *testing.T, p *Provider, key string) {
 	t.Helper()
 	stop := make(chan struct{})

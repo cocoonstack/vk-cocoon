@@ -190,6 +190,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
+	if p.Probes != nil {
+		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
+	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
 	if p.Pusher != nil {
 		p.emitNormalf(pod, "Hibernated", "snapshot pushed to registry")
