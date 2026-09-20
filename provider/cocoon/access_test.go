@@ -55,8 +55,8 @@ func TestRunInContainerSurfacesNonZeroExit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-zero exit to surface as error")
 	}
-	var exitErr utilexec.ExitError
-	if !errors.As(err, &exitErr) {
+	exitErr, ok := errors.AsType[utilexec.ExitError](err)
+	if !ok {
 		t.Fatalf("expected utilexec.ExitError, got %T: %v", err, err)
 	}
 	if !exitErr.Exited() || exitErr.ExitStatus() != 7 {
