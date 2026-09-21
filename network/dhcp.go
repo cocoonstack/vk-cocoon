@@ -33,7 +33,7 @@ type cocoonNetLease struct {
 	Expiry string `json:"expiry"`
 }
 
-// LeaseParser reads cocoon-net leases, caching until mtime changes.
+// LeaseParser reads cocoon-net leases, caching until the file's mtime or size changes.
 type LeaseParser struct {
 	Path string
 

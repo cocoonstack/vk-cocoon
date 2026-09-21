@@ -5,7 +5,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metric names are cocoon_vk_*.
 const (
 	metricNamespace = "cocoon"
 	metricSubsystem = "vk"

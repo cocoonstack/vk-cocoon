@@ -104,7 +104,7 @@ type Provider struct {
 	startTime time.Time
 	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
 	lifecycleCtx   context.Context
-	lifecycleStop  context.CancelFunc // canceled from Close to stop deferred goroutines
+	lifecycleStop  context.CancelFunc
 	mu             sync.RWMutex
 	pods           map[string]*corev1.Pod
 	vmsByPod       map[string]*vm.VM
