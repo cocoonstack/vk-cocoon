@@ -196,12 +196,6 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		IP:      v.IP,
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
-	if rt.IP == "" {
-		// no lease yet (restart adoption): keep the pre-restart address until the probe or status reconciler resolves it.
-		p.mu.RLock()
-		rt.IP = pod.Annotations[meta.AnnotationIP]
-		p.mu.RUnlock()
-	}
 	if !p.bindRuntime(ctx, pod, v, rt) {
 		return false
 	}
