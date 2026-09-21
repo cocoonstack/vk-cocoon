@@ -177,6 +177,9 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		}
 		// VM is still live; restore NIC + VMID/IP so the pod can retry hibernate.
 		p.rollbackHibernateNIC(ctx, v, dropNIC)
+		if dropNIC {
+			v = p.refreshRolledBackNIC(ctx, pod, v)
+		}
 		p.applyRuntime(ctx, pod, v)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
 		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
@@ -450,6 +453,20 @@ func (p *Provider) fetchHibernateManifest(ctx context.Context, vmName string) (*
 		return nil, false, fmt.Errorf("parse hibernate manifest: %w", err)
 	}
 	return m, true, nil
+}
+
+func (p *Provider) refreshRolledBackNIC(ctx context.Context, pod *corev1.Pod, v *vm.VM) *vm.VM {
+	fresh, err := p.Runtime.Inspect(ctx, v.ID)
+	if err != nil {
+		log.WithFunc("Provider.refreshRolledBackNIC").Errorf(ctx, err, "inspect %s after the NIC rollback", v.Name)
+	}
+	updated := p.updateTrackedVM(pod.Namespace, pod.Name, v.ID, func(t *vm.VM) {
+		t.IP = ""
+		if fresh != nil {
+			t.MAC, t.NetworkConfigs = fresh.MAC, fresh.NetworkConfigs
+		}
+	})
+	return cmp.Or(updated, v)
 }
 
 func (p *Provider) forgetVMOnly(namespace, name string) {

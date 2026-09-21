@@ -172,6 +172,34 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 	}
 }
 
+func TestHibernateRemoveFailureRepublishesTheLiveNICNotTheReleasedIP(t *testing.T) {
+	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", MAC: "02:00:00:00:00:02"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01"}
+	p.trackPod(pod, v)
+
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
+		t.Fatal("hibernate must surface the remove failure")
+	}
+	tracked := p.vmForPod("ns", "demo-0")
+	if tracked == nil || tracked.MAC != "02:00:00:00:00:02" || tracked.IP != "" {
+		t.Fatalf("tracked VM after the rollback = %#v, want the re-added NIC's MAC and no IP", tracked)
+	}
+	if got := pod.Annotations[meta.AnnotationIP]; got != "" {
+		t.Fatalf("the released IP %q was republished", got)
+	}
+	if got := pod.Annotations[meta.AnnotationVMID]; got != "vmid-1" {
+		t.Fatalf("VMID annotation = %q, want vmid-1", got)
+	}
+}
+
 func TestHibernateKeepsVMIDOnSaveFailure(t *testing.T) {
 	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
 	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
