@@ -625,6 +625,11 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		return
 	}
 	trackedID := trackedVM.ID
+	if !meta.ParseVMSpec(affectedPod).Managed {
+		logger.Infof(ctx, "vm %s pod %s/%s is unmanaged, skipping VM-gone handler",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
+		return
+	}
 
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {

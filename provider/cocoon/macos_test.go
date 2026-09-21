@@ -33,11 +33,11 @@ const macosInspectJSON = `{
 }`
 
 func TestIsMacosSpec(t *testing.T) {
-	if !isMacosSpec(meta.VMSpec{OS: "macos"}) || !isMacosSpec(meta.VMSpec{OS: "MacOS"}) {
+	if !isMacosSpec(meta.VMSpec{OS: "macos", Managed: true}) || !isMacosSpec(meta.VMSpec{OS: "MacOS", Managed: true}) {
 		t.Fatal("os=macos spec not detected")
 	}
-	if isMacosSpec(meta.VMSpec{OS: "windows"}) || isMacosSpec(meta.VMSpec{}) {
-		t.Fatal("non-macos spec misdetected")
+	if isMacosSpec(meta.VMSpec{OS: "windows", Managed: true}) || isMacosSpec(meta.VMSpec{Managed: true}) || isMacosSpec(meta.VMSpec{OS: "macos"}) {
+		t.Fatal("non-macos or unmanaged spec misdetected")
 	}
 }
 

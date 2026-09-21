@@ -507,7 +507,7 @@ func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
 }
 
 func isMacosSpec(spec meta.VMSpec) bool {
-	return strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
+	return spec.Managed && strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
 }
 
 func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }

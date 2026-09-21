@@ -67,8 +67,10 @@ cannot wedge node registration. Rejected create/update calls count on
      pre-wrote into the `VMRuntime` annotations. `Managed` is the single
      source of truth for "vk-cocoon owns this VM's lifecycle": a
      hibernate annotation on such a pod is a no-op, delete only forgets
-     the pod, and a restart re-adopts it from those annotations and
-     re-publishes Ready without any guest work.
+     the pod, a restart re-adopts it from those annotations and
+     re-publishes Ready without any guest work, the VM event watcher
+     leaves its VM alone, and `os=macos` on such a pod never enters the
+     cocoon-macos lifecycle.
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot
      locally using a **tag-aware name** (`repo:tag`, or bare `repo` when
      the tag is `latest` for backward compatibility; a name over 63

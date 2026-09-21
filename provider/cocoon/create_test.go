@@ -2319,6 +2319,49 @@ func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
 	}
 }
 
+func TestCreateAndDeleteStaticMacosToolboxSkipTheMacosLifecycle(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-mac", Namespace: "ns"}}
+	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
+		Name:      "mac",
+		Mode:      cocoonv1.ToolboxModeStatic,
+		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSMacos},
+	}, "vk-ns-cs-mac", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	meta.VMRuntime{VMID: "extern-mac-1", IP: "10.0.0.12"}.Apply(pod)
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateReady)
+	}
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if p.vmForPod("ns", "cs-mac") != nil || rt.removedID != "" {
+		t.Fatalf("delete must only forget the pod: tracked=%v removed=%q", p.vmForPod("ns", "cs-mac"), rt.removedID)
+	}
+}
+
+func TestHandleVMGoneLeavesAnUnmanagedVMAlone(t *testing.T) {
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", State: "stopped"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db"})
+	if len(rt.startCalls) != 0 || rt.removedID != "" {
+		t.Fatalf("the watcher acted on an unmanaged VM: starts=%v removed=%q", rt.startCalls, rt.removedID)
+	}
+	if p.vmForPod("ns", "cs-db") == nil {
+		t.Fatal("the unmanaged pod was evicted")
+	}
+}
+
 func TestEnsureForkSnapshotAbandonsTheFlightOnCallerCancel(t *testing.T) {
 	p, _, entered, release := newWedgedForkFixture(t)
 	t.Cleanup(func() { close(release) })
