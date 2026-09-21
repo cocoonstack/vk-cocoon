@@ -44,6 +44,8 @@ const (
 	// 32 concurrent streams saturate the NIC on the measured node classes.
 	defaultPeerConcurrency = 32
 
+	peerSliceStreams = 4 * defaultPeerConcurrency
+
 	// interleaved writers on one inode measured 1.6 GB/s vs 2.7 GB/s for disjoint sequential regions.
 	streamsPerFile = 8
 
@@ -60,6 +62,8 @@ var (
 
 	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
 	peerRestoreGate = semaphore.NewWeighted(2)
+
+	peerSliceGate = semaphore.NewWeighted(peerSliceStreams)
 
 	// one shared transport for connection reuse; dead peers fail fast into the registry fallback.
 	peerClient = &http.Client{Transport: &http.Transport{
@@ -200,6 +204,11 @@ func (s *PeerServer) handleSlice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file must be a plain name", http.StatusBadRequest)
 		return
 	}
+	if !peerSliceGate.TryAcquire(1) {
+		http.Error(w, "slice streams saturated", http.StatusServiceUnavailable)
+		return
+	}
+	defer peerSliceGate.Release(1)
 
 	f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // both components validated above
 	if err != nil {

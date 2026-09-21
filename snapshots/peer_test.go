@@ -299,6 +299,31 @@ func TestPeerRestoreAbortsAStalledSlice(t *testing.T) {
 	}
 }
 
+func TestPeerServerRefusesSlicesPastTheStreamBound(t *testing.T) {
+	srv, _ := newPeerFixture(t, "SNAP-1", map[string][]byte{"state.json": []byte(`{"s":1}`)})
+	if err := peerSliceGate.Acquire(t.Context(), peerSliceStreams); err != nil {
+		t.Fatal(err)
+	}
+	u := srv.URL + slicePath + "?id=SNAP-1&file=state.json&offset=0&length=7"
+	resp, err := http.Get(u) //nolint:gosec,noctx // test server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("saturated server answered %d, want 503", resp.StatusCode)
+	}
+	peerSliceGate.Release(peerSliceStreams)
+	resp, err = http.Get(u) //nolint:gosec,noctx // test server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("server answered %d once the streams were released, want 200", resp.StatusCode)
+	}
+}
+
 type stubResolver map[string]*vm.Snapshot
 
 func (s stubResolver) Snapshot(_ context.Context, name string) (*vm.Snapshot, error) {
