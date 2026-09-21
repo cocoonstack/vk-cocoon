@@ -173,7 +173,7 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 }
 
 func TestHibernateRemoveFailureKeepsAStaticNICsFreshIP(t *testing.T) {
-	fresh := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.8", MAC: "02:00:00:00:00:02", NetworkConfigs: []*vm.NetworkConfig{{IP: "10.0.0.8"}}}
+	fresh := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.8", MAC: "02:00:00:00:00:02", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.8"}}}}
 	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: fresh}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -183,7 +183,7 @@ func TestHibernateRemoveFailureKeepsAStaticNICsFreshIP(t *testing.T) {
 		OS:      string(cocoonv1.OSWindows),
 	})
 	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01", NetworkConfigs: []*vm.NetworkConfig{{IP: "10.0.0.7"}}}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.7"}}}}
 	p.trackPod(pod, v)
 
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
