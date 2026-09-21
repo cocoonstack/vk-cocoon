@@ -1,14 +1,15 @@
 # vk-cocoon
 
 Virtual Kubelet provider that maps Kubernetes pods to
-[Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs.
-
-One vk-cocoon process runs per node. It satisfies the
+[Cocoon](https://github.com/cocoonstack/cocoon) MicroVMs. One vk-cocoon process
+runs per node and satisfies the
 [virtual-kubelet](https://github.com/virtual-kubelet/virtual-kubelet)
 provider contract by translating pod CRUD into `cocoon` CLI calls and
 pushing per-VM status back to the kubelet.
 
-**Documentation: [cocoonstack.github.io/vk-cocoon](https://cocoonstack.github.io/vk-cocoon/)** (source in [`docs/`](docs/)).
+**Documentation: [cocoonstack.github.io/vk-cocoon](https://cocoonstack.github.io/vk-cocoon/)**
+
+## Architecture
 
 ```
 Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
@@ -16,8 +17,6 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
    status      ◄── async notify ── per-pod probe loop + real-time VM event watcher
    snapshots   ──► Puller / Pusher ── OCI registry (cross-node hibernate/wake)
 ```
-
-## Architecture
 
 | Layer | Package | Responsibility |
 |---|---|---|
@@ -34,20 +33,10 @@ Kubernetes API ──► virtual-kubelet provider (vk-cocoon, one per node)
 See [Architecture](docs/architecture.md) for the full layer map and the
 async-provider contract.
 
-## macOS guests
+### macOS guests
 
-Pods annotated `cocoonset.cocoonstack.io/os: macos` dispatch to the standalone
-[cocoon-macos](https://github.com/cocoonstack/cocoon-macos) QEMU/KVM backend
-(`VK_COCOON_MACOS_BIN`, default `/usr/local/bin/cocoon-macos`) instead of the
-cocoon CLI. The guest joins the cocoon CNI plane for a DHCP'd routed IP.
-Readiness uses a bare TCP accept on the declared `vm.cocoonstack.io/probe-port`,
-or falls back to requiring the guest sshd's `SSH-` banner on `:22`. The QEMU VNC
-framebuffer gets a node-unique, password-protected host port allocated by
-vk-cocoon, published via `vm.cocoonstack.io/vnc-port` and served on all node
-interfaces (firewall 5900-5999; unset `COCOON_MACOS_VNC_PASSWORD` disables VNC).
-A vk-cocoon restart
-adopts a live guest instead of relaunching it (two QEMU processes on one overlay
-corrupt the disk). Hibernate/wake, fork, and snapshot push do not apply to macOS guests.
+Managed macOS guests use the standalone cocoon-macos backend; see
+[macOS lifecycle and networking](docs/lifecycle.md#macos-guests).
 
 ## Quick start
 
@@ -63,29 +52,6 @@ sudo systemctl daemon-reload && sudo systemctl enable --now vk-cocoon
 
 Full steps in [Installation](docs/installation.md).
 
-## Documentation
-
-- [Architecture](docs/architecture.md) — layer map, async-provider contract
-- [Pod lifecycle](docs/lifecycle.md) — CreatePod / DeletePod / hibernate
-- [Readiness probing](docs/probes.md) — the per-pod probe loop
-- [Runtime reconciliation](docs/reconcile.md) — startup reconcile, VM events
-- [Post-clone network hints](docs/post-clone.md) — manual guest fixups
-- [Node resources](docs/node-resources.md) — host-probed Capacity/Allocatable
-- [CPU QoS](docs/cpu-qos.md) — pod requests/limits onto per-VM cgroup policy
-- [Metrics & monitoring](docs/metrics.md) — the three metrics surfaces
-- [Configuration](docs/configuration.md) — every environment variable
-- [Installation](docs/installation.md) — systemd unit and building from source
-
-## Development
-
-```bash
-make all     # deps + fmt + lint + test + build
-make build   # build the vk-cocoon binary
-make test    # vet + race-detected tests
-make lint    # golangci-lint on linux + darwin
-make help    # show all targets
-```
-
 ## Related projects
 
 | Project | Role |
@@ -95,6 +61,17 @@ make help    # show all targets
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
 | [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking; vk-cocoon reads its JSON lease file and releases leases over its control socket (≥ v0.2.2) |
+
+## Development
+
+```bash
+make all     # deps + fmt + lint + test + build
+make build   # build the vk-cocoon binary
+make test    # vet + race-detected tests
+make lint    # golangci-lint on linux + darwin
+make fmt     # gofumpt + goimports
+make help    # show all targets
+```
 
 ## License
 

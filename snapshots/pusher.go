@@ -16,7 +16,7 @@ import (
 // AnnotationFromNode names the node that pushed a hibernate snapshot, so a wake elsewhere can fetch the raw files from it.
 const AnnotationFromNode = "cocoonstack.snapshot.from-node"
 
-// pushGate serializes v2 (pipelined) pushes node-wide; v1 spool pushes cost disk, not RAM, and stay concurrent.
+// pushGate serializes pushes node-wide: v2 costs RAM, v1 costs the bounded spool volume.
 var pushGate = semaphore.NewWeighted(1)
 
 // Pusher streams a local snapshot up into an OCI registry; non-empty NodeName is stamped onto the manifest for peer discovery.
@@ -32,12 +32,10 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 	repo = cmp.Or(repo, vmName)
 	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
 
-	if p.Transfer.ZstdLevel > 0 || p.Transfer.ChunkSizeMiB > 0 {
-		if err := pushGate.Acquire(ctx, 1); err != nil {
-			return err
-		}
-		defer pushGate.Release(1)
+	if err := pushGate.Acquire(ctx, 1); err != nil {
+		return err
 	}
+	defer pushGate.Release(1)
 
 	pusher := &snapshot.Pusher{
 		Uploader: p.Registry,

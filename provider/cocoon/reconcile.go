@@ -74,12 +74,20 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		spec := meta.ParseVMSpec(pod)
 		// os=macos guests live outside Runtime.List; adopt them via cocoon-macos.
-		if spec := meta.ParseVMSpec(pod); isMacosSpec(spec) {
+		if isMacosSpec(spec) {
 			macosPods = append(macosPods, macosPod{pod, spec})
 			continue
 		}
 		runtime := meta.ParseVMRuntime(pod)
+		if !spec.Managed && runtime.VMID != "" {
+			p.trackPod(pod, &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning})
+			p.seedLifecycleIntentFromPod(pod)
+			matched[runtime.VMID] = true
+			probePods = append(probePods, pod)
+			continue
+		}
 		if runtime.VMID == "" {
 			if v := p.adoptByVMName(ctx, pod, vmByName); v != nil {
 				matched[v.ID] = true

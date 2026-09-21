@@ -44,6 +44,8 @@ const (
 	// 32 concurrent streams saturate the NIC on the measured node classes.
 	defaultPeerConcurrency = 32
 
+	peerSliceStreams = 4 * defaultPeerConcurrency
+
 	// interleaved writers on one inode measured 1.6 GB/s vs 2.7 GB/s for disjoint sequential regions.
 	streamsPerFile = 8
 
@@ -61,6 +63,8 @@ var (
 	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
 	peerRestoreGate = semaphore.NewWeighted(2)
 
+	peerSliceGate = semaphore.NewWeighted(peerSliceStreams)
+
 	// one shared transport for connection reuse; dead peers fail fast into the registry fallback.
 	peerClient = &http.Client{Transport: &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
@@ -69,6 +73,8 @@ var (
 	}}
 
 	zeroChunk = make([]byte, zeroSkipBytes)
+
+	peerSliceStallTimeout = 30 * time.Second
 )
 
 type peerPlan struct {
@@ -198,6 +204,11 @@ func (s *PeerServer) handleSlice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file must be a plain name", http.StatusBadRequest)
 		return
 	}
+	if !peerSliceGate.TryAcquire(1) {
+		http.Error(w, "slice streams saturated", http.StatusServiceUnavailable)
+		return
+	}
+	defer peerSliceGate.Release(1)
 
 	f, err := os.Open(filepath.Join(dir, name)) //nolint:gosec // both components validated above
 	if err != nil {
@@ -408,15 +419,19 @@ func (p *PeerRestorer) fetchSlice(ctx context.Context, baseURL, snapshotID strin
 	name := filepath.Base(f.Name())
 	u := fmt.Sprintf("%s%s?id=%s&file=%s&offset=%d&length=%d",
 		baseURL, slicePath, url.QueryEscape(snapshotID), url.QueryEscape(name), sl.Offset, sl.Length)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	resp, err := p.doGet(ctx, u)
 	if err != nil {
 		return fmt.Errorf("peer slice %s@%d: %w", name, sl.Offset, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
+	stall := time.AfterFunc(peerSliceStallTimeout, cancel)
+	defer stall.Stop()
 	h := crc32.New(castagnoli)
 	sw := &sectionWriter{f: f, off: sl.Offset, buf: section}
-	n, err := io.CopyBuffer(io.MultiWriter(sw, h), resp.Body, scratch)
+	n, err := io.CopyBuffer(io.MultiWriter(sw, h), stallReader{r: resp.Body, timer: stall}, scratch)
 	if err != nil {
 		return fmt.Errorf("peer slice %s@%d: read: %w", name, sl.Offset, err)
 	}
@@ -470,6 +485,17 @@ func (s *sectionWriter) Flush() error {
 	s.off += int64(s.n)
 	s.n = 0
 	return nil
+}
+
+type stallReader struct {
+	r     io.Reader
+	timer *time.Timer
+}
+
+func (s stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	s.timer.Reset(peerSliceStallTimeout)
+	return n, err
 }
 
 // writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular all-zero chunks so skipped regions stay sparse.

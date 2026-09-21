@@ -86,12 +86,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	// A restore reuses wake()'s post-restore path (CH+Windows waits on the fresh
 	// NIC's lease; others run runPostCloneSetup) and skips the base-image post-clone.
 	restoring := meta.ReadRestoreFromHibernate(pod)
-	if !restoring && spec.Managed {
-		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec)
+	if spec.Managed {
+		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec, restoring)
 		if err != nil {
-			return p.failCreate(ctx, pod, false, "HibernateEvidenceFailed", err)
+			return p.failCreate(ctx, pod, restoring, "HibernateEvidenceFailed", err)
 		}
-		restoring = derived
+		restoring = restoring || derived
 	}
 	bootStart := time.Now()
 	v, sourceImage, err := p.bringUpVM(ctx, pod, spec)
@@ -161,8 +161,8 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 	return err
 }
 
-// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: fresh-booting a name whose guest state sits in a hibernate snapshot would let the next hibernate overwrite it (#54).
-func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) (bool, error) {
+// deriveRestoreFromEvidence re-derives a wake lost to a vk restart: fresh-booting a name whose guest state sits in a hibernate snapshot would let the next hibernate overwrite it (#54); a pod the operator already marked keeps the image guard.
+func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, marked bool) (bool, error) {
 	evidence, recordedImage, err := p.hibernateEvidence(ctx, spec.VMName)
 	if err != nil {
 		metrics.HibernateEvidenceTotal.WithLabelValues("unavailable").Inc()
@@ -172,13 +172,16 @@ func (p *Provider) deriveRestoreFromEvidence(ctx context.Context, pod *corev1.Po
 	if !evidence {
 		return false, nil
 	}
-	if hasExplicitCloneSource(pod, spec) {
+	if !marked && hasExplicitCloneSource(pod, spec) {
 		metrics.HibernateEvidenceTotal.WithLabelValues("source_conflict").Inc()
 		return false, fmt.Errorf("vm %s has a hibernate snapshot but the pod requests an explicit clone source; delete the %s tag to discard the hibernated state", spec.VMName, meta.HibernateSnapshotTag)
 	}
 	if recordedImage != "" && recordedImage != spec.Image {
 		metrics.HibernateEvidenceTotal.WithLabelValues("image_conflict").Inc()
 		return false, fmt.Errorf("hibernate snapshot of vm %s came from image %q but the pod requests %q; delete the %s tag to discard the hibernated state", spec.VMName, recordedImage, spec.Image, meta.HibernateSnapshotTag)
+	}
+	if marked {
+		return true, nil
 	}
 	metrics.HibernateEvidenceTotal.WithLabelValues("restored").Inc()
 	// The pod is tracked: GetPod's DeepCopy may be reading this map.
@@ -416,10 +419,8 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	if p.Puller == nil {
 		return nil, nil
 	}
-	// The in-flight re-check is load-bearing: SnapshotImport rm's the target
-	// name first and cocoon registers it only when the import completes, so a
-	// caller that missed the outer check during another flight's pull would
-	// otherwise re-import and rm the snapshot that flight just registered.
+	// the in-flight re-check matters: SnapshotImport rm's the target name first and cocoon registers it only on
+	// completion, so a joiner that missed the outer check would re-import and rm the snapshot the last flight registered.
 	ch := p.snapshotPullSF.DoChan(local, func() (any, error) {
 		shared, cancel := p.detachedImportContext()
 		defer cancel()
@@ -446,8 +447,9 @@ func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) 
 
 	// singleflight: sub-agents forking the same main would race SnapshotSave into "snapshot name already in use";
 	// the shared save is cancel-detached so one aborted CreatePod cannot fail the rest.
-	created, err, _ := p.forkSnapshotSF.Do(snapshotName, func() (any, error) {
-		shared := context.WithoutCancel(ctx)
+	ch := p.forkSnapshotSF.DoChan(snapshotName, func() (any, error) {
+		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), importDetachTimeout)
+		defer cancel()
 		if _, err := p.Runtime.Snapshot(shared, snapshotName); err == nil {
 			return snapshotName, nil
 		}
@@ -464,10 +466,7 @@ func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) 
 		}
 		return snapshotName, nil
 	})
-	if err != nil {
-		return "", err
-	}
-	return created.(string), nil
+	return awaitFlight(ctx, ch, "")
 }
 
 func (p *Provider) vmByName(name string) *vm.VM {
@@ -625,9 +624,8 @@ func addAnnotationPatch(patch map[string]any, key, current, desired string) {
 	}
 }
 
-// awaitFlight waits on a singleflight result or the caller's cancellation,
-// whichever comes first; a canceled caller abandons the flight, which keeps
-// running for its remaining waiters.
+// awaitFlight waits on a singleflight result or the caller's cancellation; a canceled caller abandons the flight,
+// which keeps running for its remaining waiters.
 func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
 	select {
 	case res := <-ch:
@@ -664,7 +662,7 @@ func restoreModeFor(mode vm.RestoreMode, os string) vm.RestoreMode {
 
 // isClonedBoot reports a clone path; fromDir and ForkFrom override mode=run for sub-agents.
 func isClonedBoot(pod *corev1.Pod, spec meta.VMSpec) bool {
-	return hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun)
+	return spec.Managed && (hasExplicitCloneSource(pod, spec) || strings.ToLower(spec.Mode) != string(cocoonv1.AgentModeRun))
 }
 
 func hasExplicitCloneSource(pod *corev1.Pod, spec meta.VMSpec) bool {
@@ -716,10 +714,8 @@ func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 
-// podCPUPolicy derives cgroup knobs: quota caps at the CPU limit and
-// never falls back to requests, weight always tracks requests (limits
-// when unset, mirroring the K8s Guaranteed defaulting) so a BestEffort
-// pod gets kubelet's minimum share, not cocoon's vCPU-count default.
+// podCPUPolicy caps the quota at the CPU limit (never requests) and tracks the weight from requests (limits when
+// unset, the K8s Guaranteed defaulting) so a BestEffort pod gets kubelet's minimum share, not cocoon's vCPU default.
 func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	if len(pod.Spec.Containers) == 0 {
 		return vm.CPUPolicy{}

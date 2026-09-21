@@ -10,9 +10,11 @@ is invisible to the cluster unless vk-cocoon re-fires `notify`.
 A successful probe is necessary but not sufficient for `Ready=True`: vk's
 in-memory lifecycle intent must also be `ready`. This keeps a reachable VM Not
 Ready while clone setup runs, after lifecycle failure, or during hibernation.
-On the apiserver the status patch carrying `Ready=True` lands before the
-`lifecycle-state=ready` annotation patch — consumers gate on the annotation,
-not the reverse.
+The current status is published before the `lifecycle-state=ready` annotation.
+This ordering does not guarantee `Ready=True` in that status: plain `mode: run`
+can publish ready intent before the first successful probe or resolved IP
+([#97](https://github.com/cocoonstack/vk-cocoon/issues/97)). PodReady remains
+probe-gated.
 
 ## The probe loop
 
@@ -52,9 +54,9 @@ The `probes/` package owns that loop:
    step 2 was not yet ready), and again after 3 consecutive failures flip
    readiness back to false. `onUpdate` re-reads the pod, rebuilds the
    status, and calls `notify` so the kubelet observes the change.
-4. `DeletePod` calls `Manager.Forget`, which cancels the per-pod
-   goroutine; `Manager.Close` is called once at shutdown to tear every
-   remaining agent down.
+4. `DeletePod` and a completed hibernate call `Manager.Forget`, which
+   cancels the per-pod goroutine; `Manager.Close` is called once at
+   shutdown to tear every remaining agent down.
 
 ## Degraded mode without CAP_NET_RAW
 

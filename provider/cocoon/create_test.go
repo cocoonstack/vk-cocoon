@@ -26,6 +26,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	utilexec "k8s.io/client-go/util/exec"
 
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
@@ -184,10 +185,11 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 		closeEntered()
 		<-release
 	}}
-	p := &Provider{
-		Runtime:   rt,
-		vmsByName: map[string]*vm.VM{"vk-ns-demo-0": {ID: "src", Name: "vk-ns-demo-0"}},
-	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.mu.Lock()
+	p.vmsByName["vk-ns-demo-0"] = &vm.VM{ID: "src", Name: "vk-ns-demo-0"}
+	p.mu.Unlock()
 
 	var wg sync.WaitGroup
 	names := make([]string, n)
@@ -1498,6 +1500,42 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileAdoptsAnUnmanagedPodFromItsAnnotations(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+		meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+		pod.Spec.NodeName = "cocoon-pool"
+		meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+		meta.HibernateState(true).Apply(pod)
+
+		rt := &fakeRuntime{}
+		if local {
+			rt.listVMs = []vm.VM{{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9"}}
+		}
+		p := newTestProvider(t)
+		p.NodeName = "cocoon-pool"
+		p.Runtime = rt
+		p.Clientset = fake.NewSimpleClientset(pod)
+
+		if err := p.StartupReconcile(t.Context()); err != nil {
+			t.Fatalf("local=%v StartupReconcile: %v", local, err)
+		}
+		if got := p.vmForPod("ns", "cs-db"); got == nil || got.ID != "extern-vm-1" || got.IP != "10.0.0.9" {
+			t.Fatalf("local=%v unmanaged VM not adopted from the annotations, got %#v", local, got)
+		}
+		adopted, err := p.GetPod(t.Context(), "ns", "cs-db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.ParseVMRuntime(adopted).VMID != "extern-vm-1" {
+			t.Fatalf("local=%v stale-hibernate recovery cleared the unmanaged pod's VMID: %v", local, adopted.Annotations)
+		}
+		if rt.removedID != "" {
+			t.Fatalf("local=%v the unmanaged VM was treated as an orphan and removed: %q", local, rt.removedID)
+		}
+	}
+}
+
 func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
@@ -2239,6 +2277,134 @@ func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	}
 }
 
+func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
+		Name:      "db",
+		Mode:      cocoonv1.ToolboxModeStatic,
+		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSWindows, Backend: cocoonv1.BackendCloudHypervisor},
+	}, "vk-ns-cs-db", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+	spec := meta.ParseVMSpec(pod)
+	if spec.Managed {
+		t.Fatal("a static toolbox must be unmanaged")
+	}
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if isClonedBoot(pod, spec) {
+		t.Error("an unmanaged pod must not count as a cloned boot")
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
+		t.Errorf("lifecycle = %q, want %q: ready must not wait on a post-clone fixup vk does not own", got, meta.LifecycleStateReady)
+	}
+	v := &vm.VM{ID: "extern-vm-1", Name: spec.VMName}
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	if op := owedOpFor(pod, v); op != resumeOpReadyWait {
+		t.Errorf("owedOpFor = %q for an unmanaged pod left in creating, want %q", op, resumeOpReadyWait)
+	}
+	pod.Annotations[annotationPostCloneState] = postCloneStateRunning
+	if op := owedOpFor(pod, v); op != resumeOpReadyWait {
+		t.Errorf("owedOpFor = %q with a stale post-clone marker on an unmanaged pod, want %q", op, resumeOpReadyWait)
+	}
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateReady)
+	meta.HibernateState(true).Apply(pod)
+	if op := owedOpFor(pod, v); op != "" {
+		t.Errorf("owedOpFor = %q for a hibernate-marked unmanaged pod, want none", op)
+	}
+}
+
+func TestCreateAndDeleteStaticMacosToolboxSkipTheMacosLifecycle(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-mac", Namespace: "ns"}}
+	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
+		Name:      "mac",
+		Mode:      cocoonv1.ToolboxModeStatic,
+		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSMacos},
+	}, "vk-ns-cs-mac", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	meta.VMRuntime{VMID: "extern-mac-1", IP: "10.0.0.12"}.Apply(pod)
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateReady)
+	}
+	if err := p.DeletePod(t.Context(), pod); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if p.vmForPod("ns", "cs-mac") != nil || rt.removedID != "" {
+		t.Fatalf("delete must only forget the pod: tracked=%v removed=%q", p.vmForPod("ns", "cs-mac"), rt.removedID)
+	}
+}
+
+func TestHandleVMGoneLeavesAnUnmanagedVMAlone(t *testing.T) {
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", State: "stopped"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db"})
+	if len(rt.startCalls) != 0 || rt.removedID != "" {
+		t.Fatalf("the watcher acted on an unmanaged VM: starts=%v removed=%q", rt.startCalls, rt.removedID)
+	}
+	if p.vmForPod("ns", "cs-db") == nil {
+		t.Fatal("the unmanaged pod was evicted")
+	}
+}
+
+func TestEnsureForkSnapshotAbandonsTheFlightOnCallerCancel(t *testing.T) {
+	p, _, entered, release := newWedgedForkFixture(t)
+	t.Cleanup(func() { close(release) })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.ensureForkSnapshot(ctx, "vk-ns-main-0")
+		done <- err
+	}()
+	<-entered
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ensureForkSnapshot still blocked on the wedged save after the caller canceled")
+	}
+}
+
+func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
+	p, rt, entered, release := newWedgedForkFixture(t)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.ensureForkSnapshot(t.Context(), "vk-ns-main-0")
+		done <- err
+	}()
+	<-entered
+	p.lifecycleStop()
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("shutdown aborted the in-flight save: %v", err)
+	}
+	if rt.snapshotSaveCount != 1 {
+		t.Fatalf("saves = %d, want 1", rt.snapshotSaveCount)
+	}
+}
+
 type fakeInspectStep struct {
 	vm  *vm.VM
 	err error
@@ -2399,9 +2565,12 @@ func (f *fakeRuntime) ReconcileStaleCreate(_ context.Context, vmID string) (vm.S
 	return vm.StaleCreateCollected, nil
 }
 
-func (f *fakeRuntime) SnapshotSave(_ context.Context, name, vmID string) error {
+func (f *fakeRuntime) SnapshotSave(ctx context.Context, name, vmID string) error {
 	if f.snapshotSaveHook != nil {
 		f.snapshotSaveHook()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if f.snapshotSaveErr != nil {
 		return f.snapshotSaveErr
@@ -2639,6 +2808,23 @@ func (c *countingRegistry) GetBlob(_ context.Context, _, digest string) (io.Read
 		return io.NopCloser(bytes.NewReader(b)), nil
 	}
 	return nil, fmt.Errorf("blob %s not found", digest)
+}
+
+func newWedgedForkFixture(t *testing.T) (*Provider, *fakeRuntime, chan struct{}, chan struct{}) {
+	t.Helper()
+	rt := &fakeRuntime{}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	rt.snapshotSaveHook = func() {
+		close(entered)
+		<-release
+	}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.mu.Lock()
+	p.vmsByName["vk-ns-main-0"] = &vm.VM{ID: "vmid-main", Name: "vk-ns-main-0", State: vm.StateRunning}
+	p.mu.Unlock()
+	return p, rt, entered, release
 }
 
 func newTestProvider(t *testing.T) *Provider {

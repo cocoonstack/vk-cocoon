@@ -196,12 +196,6 @@ func (p *Provider) registerMacosVM(ctx context.Context, pod *corev1.Pod, spec me
 		IP:      v.IP,
 		VNCPort: int32(vncPort), //nolint:gosec // bounded by macosVNCPortBase+macosVNCPortSpan
 	}
-	if rt.IP == "" {
-		// no lease yet (restart adoption): keep the pre-restart address until the probe or status reconciler resolves it.
-		p.mu.RLock()
-		rt.IP = pod.Annotations[meta.AnnotationIP]
-		p.mu.RUnlock()
-	}
 	if !p.bindRuntime(ctx, pod, v, rt) {
 		return false
 	}
@@ -507,7 +501,7 @@ func applyMacosRecord(v *vm.VM, rec *macosVMRecord) {
 }
 
 func isMacosSpec(spec meta.VMSpec) bool {
-	return strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
+	return spec.Managed && strings.EqualFold(strings.TrimSpace(spec.OS), string(cocoonv1.OSMacos))
 }
 
 func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }

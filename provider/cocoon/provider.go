@@ -625,6 +625,11 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		return
 	}
 	trackedID := trackedVM.ID
+	if !meta.ParseVMSpec(affectedPod).Managed {
+		logger.Infof(ctx, "vm %s pod %s/%s is unmanaged, skipping VM-gone handler",
+			trackedID, affectedPod.Namespace, affectedPod.Name)
+		return
+	}
 
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {
@@ -695,11 +700,10 @@ func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, po
 		return
 	}
 	defer p.finishDeleting(key)
-	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
+	if err := p.removeVM(ctx, v); err != nil {
 		logger.Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
-	p.releaseDHCPLeases(ctx, v)
 	p.evictPod(ctx, key, pod, reason, message)
 }
 

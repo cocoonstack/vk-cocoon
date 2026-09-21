@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -168,6 +169,59 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 	}
 	if got := pod.Annotations[meta.AnnotationIP]; got != "10.0.0.7" {
 		t.Errorf("IP annotation must be restored after Remove failure; got %q want 10.0.0.7", got)
+	}
+}
+
+func TestHibernateRemoveFailureKeepsAStaticNICsFreshIP(t *testing.T) {
+	fresh := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.8", MAC: "02:00:00:00:00:02", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.8"}}}}
+	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: fresh}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.7"}}}}
+	p.trackPod(pod, v)
+
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
+		t.Fatal("hibernate must surface the remove failure")
+	}
+	if tracked := p.vmForPod("ns", "demo-0"); tracked == nil || tracked.IP != "10.0.0.8" {
+		t.Fatalf("tracked VM after the rollback = %#v, want the static NIC's fresh IP", tracked)
+	}
+	if got := pod.Annotations[meta.AnnotationIP]; got != "10.0.0.8" {
+		t.Fatalf("IP annotation = %q, want the fresh static IP", got)
+	}
+}
+
+func TestHibernateRemoveFailureRepublishesTheLiveNICNotTheReleasedIP(t *testing.T) {
+	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", MAC: "02:00:00:00:00:02"}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0",
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+		OS:      string(cocoonv1.OSWindows),
+	})
+	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01"}
+	p.trackPod(pod, v)
+
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
+		t.Fatal("hibernate must surface the remove failure")
+	}
+	tracked := p.vmForPod("ns", "demo-0")
+	if tracked == nil || tracked.MAC != "02:00:00:00:00:02" || tracked.IP != "" {
+		t.Fatalf("tracked VM after the rollback = %#v, want the re-added NIC's MAC and no IP", tracked)
+	}
+	if got := pod.Annotations[meta.AnnotationIP]; got != "" {
+		t.Fatalf("the released IP %q was republished", got)
+	}
+	if got := pod.Annotations[meta.AnnotationVMID]; got != "vmid-1" {
+		t.Fatalf("VMID annotation = %q, want vmid-1", got)
 	}
 }
 
@@ -643,6 +697,24 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 	}
 }
 
+func TestUpdatePodLeavesAnUnmanagedVMAlone(t *testing.T) {
+	rt := &fakeRuntime{}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+	meta.HibernateState(true).Apply(pod)
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if rt.snapshotSaveCount != 0 || rt.removedID != "" {
+		t.Fatalf("hibernate touched an unmanaged VM: saves=%d removed=%q", rt.snapshotSaveCount, rt.removedID)
+	}
+}
+
 func TestWakeClearsStalePostCloneMarker(t *testing.T) {
 	const vmName = "vk-ns-demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
@@ -718,6 +790,25 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 			t.Fatalf("GetPods = %v, %v, want one pod", pods, err)
 		}
 		_ = pods[0].Annotations[annotationPostCloneState]
+	}
+}
+
+func TestHibernateStopsTheReadinessProbe(t *testing.T) {
+	rt := &fakeRuntime{}
+	p, pod := newHibernateFixture(t, rt, "vmid-1", "10.0.0.5")
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.5", State: vm.StateRunning}
+	p.trackPod(pod, v)
+	p.startProbeIfEnabled(pod)
+
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	if !p.Probes.Get(key).Ready {
+		t.Fatalf("probe before hibernate = %#v, want ready", p.Probes.Get(key))
+	}
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if got := p.Probes.Get(key); !got.LastSeen.IsZero() {
+		t.Fatalf("probe after hibernate = %#v, want forgotten", got)
 	}
 }
 

@@ -42,8 +42,9 @@ const (
 	postCloneKindLinuxStatic = "linux_static"
 	postCloneKindLinuxFC     = "linux_fc"
 
-	sacEnumRetries  = 60 // polls SAC `i` until Windows PnP lists every NIC
-	sacIPSetRetries = 10 // per-NIC retry until SAC `i` reflects the assigned IP
+	sacEnumRetries   = 60 // polls SAC `i` until Windows PnP lists every NIC
+	sacIPSetRetries  = 10 // per-NIC retry until SAC `i` reflects the assigned IP
+	sacRetryInterval = 2 * time.Second
 )
 
 // runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state; exhaustion leaves a manual hint.
@@ -290,7 +291,7 @@ func (p *Provider) sacEnumerateNICs(ctx context.Context, pod *corev1.Pod, sess g
 			p.emitWarningf(pod, "PostCloneSACEnumFailed", "%v", err)
 			return nil, err
 		}
-		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
+		if !commonk8s.SleepCtx(ctx, sacRetryInterval) {
 			return nil, ctx.Err()
 		}
 	}
@@ -318,7 +319,7 @@ func (p *Provider) sacSetNICIP(ctx context.Context, pod *corev1.Pod, sess guest.
 			p.emitWarningf(pod, "PostCloneSACVerifyFailed", "%v", err)
 			return err
 		}
-		if !commonk8s.SleepCtx(ctx, 2*time.Second) {
+		if !commonk8s.SleepCtx(ctx, sacRetryInterval) {
 			return ctx.Err()
 		}
 	}

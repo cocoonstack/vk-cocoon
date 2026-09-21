@@ -118,7 +118,7 @@ var (
 			Name:      "stale_create_reconcile_total",
 			Help:      "Creating placeholders found at startup reconcile, by cocoon verb outcome.",
 		},
-		[]string{"outcome"}, // collected|busy|not-creating|not-found|error
+		[]string{"outcome"},
 	)
 
 	StartupResumeTotal = prometheus.NewCounterVec(
@@ -128,7 +128,7 @@ var (
 			Name:      "startup_resume_total",
 			Help:      "Interrupted operations re-dispatched by startup reconcile, by op.",
 		},
-		[]string{"op"}, // hibernate|post_clone|ready_wait|classify_drop_nic
+		[]string{"op"},
 	)
 
 	HibernateEvidenceTotal = prometheus.NewCounterVec(
@@ -138,7 +138,7 @@ var (
 			Name:      "hibernate_evidence_total",
 			Help:      "Fresh-boot requests intercepted by hibernate-snapshot evidence, by verdict.",
 		},
-		[]string{"verdict"}, // restored|image_conflict|source_conflict|unavailable
+		[]string{"verdict"},
 	)
 
 	VMBootDuration = prometheus.NewHistogramVec(
@@ -191,7 +191,7 @@ var (
 			Name:      "snapshot_peer_restore_total",
 			Help:      "Peer snapshot restores by result; a failure falls back to the registry pull.",
 		},
-		[]string{labelResult}, // ok|failed
+		[]string{labelResult},
 	)
 
 	PeerRestoreDuration = prometheus.NewHistogramVec(

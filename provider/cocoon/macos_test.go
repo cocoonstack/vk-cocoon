@@ -33,11 +33,11 @@ const macosInspectJSON = `{
 }`
 
 func TestIsMacosSpec(t *testing.T) {
-	if !isMacosSpec(meta.VMSpec{OS: "macos"}) || !isMacosSpec(meta.VMSpec{OS: "MacOS"}) {
+	if !isMacosSpec(meta.VMSpec{OS: "macos", Managed: true}) || !isMacosSpec(meta.VMSpec{OS: "MacOS", Managed: true}) {
 		t.Fatal("os=macos spec not detected")
 	}
-	if isMacosSpec(meta.VMSpec{OS: "windows"}) || isMacosSpec(meta.VMSpec{}) {
-		t.Fatal("non-macos spec misdetected")
+	if isMacosSpec(meta.VMSpec{OS: "windows", Managed: true}) || isMacosSpec(meta.VMSpec{Managed: true}) || isMacosSpec(meta.VMSpec{OS: "macos"}) {
+		t.Fatal("non-macos or unmanaged spec misdetected")
 	}
 }
 
@@ -263,6 +263,27 @@ func TestReconcileMacosPodPublishesReadiness(t *testing.T) {
 	}
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateReady {
 		t.Fatalf("adopted reachable macOS pod stuck at lifecycle %q, want ready", state)
+	}
+}
+
+func TestRegisterMacosVMClearsAStaleIPUntilALeaseResolves(t *testing.T) {
+	p := newTestProvider(t)
+	spec := macosSpec()
+	pod := newPodWithSpec(spec)
+	pod.Annotations[meta.AnnotationIP] = "192.0.2.10"
+	p.Clientset = fake.NewSimpleClientset(pod)
+	stubMacosExec(p, inspectOnlyHandler)
+	p.trackPod(pod, nil)
+
+	if !p.registerMacosVM(t.Context(), pod, spec, &macosVMRecord{Name: spec.VMName, PID: 4242, MAC: "52:54:00:12:34:56"}, 0) {
+		t.Fatal("registerMacosVM = false")
+	}
+	live, err := p.Clientset.CoreV1().Pods(pod.Namespace).Get(t.Context(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if ip := live.Annotations[meta.AnnotationIP]; ip != "" {
+		t.Fatalf("ip annotation = %q, want cleared until a lease resolves; the status reconciler clears it anyway", ip)
 	}
 }
 

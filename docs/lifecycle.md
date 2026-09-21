@@ -22,14 +22,15 @@ cannot wedge node registration. Rejected create/update calls count on
 
 ## CreatePod
 
-1. Parse `meta.VMSpec` from the pod annotations. `os=macos` pods branch
-   here to the self-contained cocoon-macos path (see
-   [macOS guests](../README.md#macos-guests)) — the remaining steps are
-   cloud-hypervisor-only.
+1. Parse `meta.VMSpec` from the pod annotations. `Managed` determines
+   whether vk-cocoon owns the VM lifecycle. Only managed `os=macos` pods
+   dispatch to [cocoon-macos](#macos-guests); other managed pods use
+   Cloud Hypervisor or Firecracker. Unmanaged pods use the operator's
+   pre-assigned runtime annotations and skip guest setup.
 2. If a VM with `spec.VMName` already exists locally, adopt it
    (idempotent on restart). Adoption hinges on `StartupReconcile` having
-   populated `vmsByName`; before reconcile completes, CreatePod treats
-   the pod as new and may collide on VM name.
+   populated `vmsByName`, which is why `main.go` runs it to completion
+   before the pod controller starts.
 3. Otherwise `bringUpVM` selects a path. An unmanaged pod (`spec.Managed`
    false) short-circuits first onto its pre-assigned VMID/IP; the managed
    paths are then tried in order — restore-from-hibernate, clone-from-dir,
@@ -40,12 +41,13 @@ cannot wedge node registration. Rejected create/update calls count on
      evidence**: a managed pod with no marker whose VM name still owns a
      `:hibernate` registry tag (local snapshot presence in registry-less
      deployments) is a wake lost to a vk restart, and fresh-booting it
-     would let the next hibernate overwrite the guest's state. The
-     derived path fails closed on registry errors
-     (`HibernateEvidenceUnavailable`), conflicts loudly with explicit
-     clone sources, and rejects a pod whose image ref differs from the
-     ref recorded on the hibernate artifact at push time
-     (`cocoonstack.snapshot.baseimage`). Identity is compared by ref:
+     would let the next hibernate overwrite the guest's state. Both the
+     marked and the derived path fail closed on registry errors
+     (`HibernateEvidenceUnavailable`) and reject a pod whose image ref
+     differs from the ref recorded on the hibernate artifact at push time
+     (`cocoonstack.snapshot.baseimage`); only the derived path conflicts
+     with explicit clone sources, emits `HibernateSnapshotExists` and
+     counts `verdict=restored`. Identity is compared by ref:
      a ref change signals operator intent for a different image, while
      content drift under an unchanged ref is governed by the
      hibernate-state-is-authoritative contract (discarding hibernated
@@ -64,7 +66,12 @@ cannot wedge node registration. Rejected create/update calls count on
      toolboxes on an external QEMU host): skip the runtime entirely and
      adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator
      pre-wrote into the `VMRuntime` annotations. `Managed` is the single
-     source of truth for "vk-cocoon owns this VM's lifecycle".
+     source of truth for "vk-cocoon owns this VM's lifecycle": a
+     hibernate annotation on such a pod is a no-op, delete only forgets
+     the pod, a restart re-adopts it from those annotations and
+     re-publishes Ready without any guest work, the VM event watcher
+     leaves its VM alone, and `os=macos` on such a pod never enters the
+     cocoon-macos lifecycle.
    - **Mode `clone`** (default, `Managed=true`): look up the snapshot
      locally using a **tag-aware name** (`repo:tag`, or bare `repo` when
      the tag is `latest` for backward compatibility; a name over 63
@@ -118,11 +125,13 @@ cannot wedge node registration. Rejected create/update calls count on
 6. For clone/fork/wake paths that need guest-side network setup (see
    [Post-clone hints](post-clone.md)), dispatch the fixup in the background
    after the annotations are written. vk-cocoon runs it itself over
-   `cocoon vm exec`, retrying every 3 s within a 180 s budget, and marks the
-   pod Ready on success. Only when that budget is exhausted does it write the
+   `cocoon vm exec`, retrying every 3 s within a 180 s budget, then waits
+   for an IP before publishing ready intent; PodReady also requires a
+   successful probe. Only when that budget is exhausted does it write the
    commands as a base64-encoded annotation
    (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`, and
-   leave the pod Running but Not Ready for manual repair.
+   mark lifecycle Failed. Manual guest repair alone does not clear that
+   state; see [recovery](post-clone.md#recovery-after-exhaustion).
 7. Launch a per-pod probe agent (see [Readiness probing](probes.md)). The
    agent's first probe runs synchronously so the initial `notify` push
    already reflects reachability; later probes run on a ticker and call
@@ -134,9 +143,10 @@ cannot wedge node registration. Rejected create/update calls count on
 
 ## DeletePod
 
-1. Decode `meta.VMSpec`. `os=macos` pods tear down via
-   `cocoon-macos vm rm`, release their DHCP leases (step 3), and skip the
-   snapshot logic below.
+1. Decode `meta.VMSpec`. Unmanaged pods are only forgotten; their VMs
+   remain under the external owner's control. Managed `os=macos` pods
+   tear down via `cocoon-macos vm rm`, release their DHCP leases, and
+   skip the snapshot logic below.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via
@@ -147,9 +157,10 @@ cannot wedge node registration. Rejected create/update calls count on
    - `main-only`: same, but only for the main agent (role `RoleMain`,
      i.e. slot 0 of its CocoonSet).
    - `never`: skip snapshots entirely.
-3. `Runtime.Remove(vmID)` to destroy the VM, then idempotently release each
-   DHCP-backed NIC lease through cocoon-net's local control socket. Lease
-   cleanup is best-effort after destruction; the normal lease expiry remains
+3. `Runtime.Remove(vmID)` destroys the VM; an already absent VM also
+   completes this step. Then release each DHCP-backed NIC lease through
+   cocoon-net's local control socket. Lease cleanup is best-effort after
+   destruction; the normal lease expiry remains
    the fallback if cocoon-net is temporarily unavailable.
 4. Drop the local snapshot and its fork snapshot, **unless** the pod carries
    `vm.cocoonstack.io/keep-snapshot-on-delete`. The operator sets that flag
@@ -165,14 +176,35 @@ cannot wedge node registration. Rejected create/update calls count on
 
 The only update vk-cocoon honors is a `HibernateState` transition.
 Anything else is a no-op (the operator deletes and recreates the pod for
-genuine spec changes). `os=macos` pods reject hibernate outright —
-cocoon-macos snapshots are offline disk snapshots with no live
-save/restore.
+genuine spec changes). Unmanaged pods ignore hibernate regardless of OS.
+Managed `os=macos` pods reject hibernate because cocoon-macos snapshots
+are offline disk snapshots with no live save/restore.
 
 | Transition | Behavior |
 |---|---|
-| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure runs before any release). The pod object stays, reporting phase `Pending` while no VM is tracked, so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
+| `false → true` | NetResize (CH+Windows) → SnapshotSave → Push → clear VMID before Remove → Remove, then release the guest's DHCP leases through cocoon-net (rollback on failure precedes this post-remove lease cleanup). The pod object stays, reporting phase `Pending` while no VM is tracked, so K8s controllers do not recreate it. VMID/IP annotations clear between Push and Remove so the operator's manifest+VMID race window collapses to one patch RTT. **Compensating rollback**: if `Runtime.Remove` fails after a successful push, vk-cocoon best-effort `Registry.DeleteManifest` the hibernate tag and re-applies VMID/IP so the pod stays recoverable. Push and Save are idempotent, so a compensated retry re-publishes the tag cleanly on the next attempt. |
 | `true → false` (with no live VM) | Resolve the clone source in order: registry-verified local snapshot → best-effort raw-file restore from the manifest's `from-node` peer → registry `Puller.PullSnapshot(tag=meta.HibernateSnapshotTag)`. Peer files are staged for `Runtime.Clone --from-dir`; an unavailable peer, checksum failure, or snapshot-ID mismatch falls through to the registry path. CH+Windows snapshots are NIC-less, so the clone hot-adds a fresh NIC; vk-cocoon then waits up to 45 s for a DHCP lease, nudging a renew at 30 s if none has landed yet. vk-cocoon does not touch the registry tag on wake; the operator's `CocoonHibernation` reconciler drops the `:hibernate` tag once the woken VM is running. |
+
+On Save, Push, or Remove failure after a NIC drop, rollback re-adds the NIC,
+inspects its current MAC and network configuration, and republishes VMID/IP.
+DHCP addresses are cleared until the replacement NIC's lease resolves;
+static NICs retain the fresh inspected address. Rollback has a bounded
+lifetime independent of the failed request's cancellation.
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.
+
+## macOS guests
+
+Managed pods annotated `cocoonset.cocoonstack.io/os: macos` dispatch to the standalone
+[cocoon-macos](https://github.com/cocoonstack/cocoon-macos) QEMU/KVM backend
+(`VK_COCOON_MACOS_BIN`, default `/usr/local/bin/cocoon-macos`) instead of the
+cocoon CLI. The guest joins the cocoon CNI plane for a DHCP'd routed IP.
+Readiness uses a bare TCP accept on the declared `vm.cocoonstack.io/probe-port`,
+or falls back to requiring the guest sshd's `SSH-` banner on `:22`. The QEMU VNC
+framebuffer gets a node-unique, password-protected host port allocated by
+vk-cocoon, published via `vm.cocoonstack.io/vnc-port` and served on all node
+interfaces (firewall 5900-5999; unset `COCOON_MACOS_VNC_PASSWORD` disables VNC).
+A vk-cocoon restart
+adopts a live guest instead of relaunching it (two QEMU processes on one overlay
+corrupt the disk). Hibernate/wake, fork, and snapshot push do not apply to macOS guests.
