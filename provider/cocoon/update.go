@@ -306,15 +306,6 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 	})
 }
 
-// markLifecycleStateForWake gates on (tracked ∧ !hibernate ∧ VM==wakeVMID) and writes atomically.
-func (p *Provider) markLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) bool {
-	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, state, message)
-	if applied {
-		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
-	}
-	return applied
-}
-
 func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()
@@ -330,14 +321,6 @@ func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod
 	status, applied := p.applyLifecycleLocked(ctx, pod, state, message)
 	p.mu.Unlock()
 	return status, applied
-}
-
-func (p *Provider) markReadyPublishedForWake(ctx context.Context, pod *corev1.Pod, wakeVMID string) bool {
-	status, applied := p.setLifecycleStateForWake(ctx, pod, wakeVMID, meta.LifecycleStateReady, "")
-	if applied {
-		p.publishReadyLifecycle(ctx, pod, status)
-	}
-	return applied
 }
 
 // waitForFreshIP polls for the clone's DHCP lease; UFFD contention under concurrent resumes can delay it many seconds.
