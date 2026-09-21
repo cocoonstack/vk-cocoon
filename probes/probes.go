@@ -130,13 +130,6 @@ func (m *Manager) setOwned(key string, ag *agent, r Result) bool {
 }
 
 func (m *Manager) run(ctx context.Context, key string, ag *agent, probe Probe, onUpdate OnUpdate, lastReady bool) {
-	defer func() {
-		m.mu.Lock()
-		if _, ok := m.agents[key]; !ok {
-			delete(m.results, key)
-		}
-		m.mu.Unlock()
-	}()
 	interval := defaultInitialInterval
 	if lastReady {
 		interval = defaultSteadyInterval
