@@ -83,17 +83,10 @@ func main() {
 
 	nodeName := commonk8s.EnvOrDefault("VK_NODE_NAME", defaultNodeName)
 	metricsAddr := commonk8s.EnvOrDefault("VK_METRICS_ADDR", defaultMetricsAddr)
-	ociRegistry := os.Getenv("OCI_REGISTRY")
-	leasesPath := commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath)
-	controlSocket := commonk8s.EnvOrDefault("VK_COCOON_NET_CONTROL_SOCKET", network.DefaultControlSocket)
-	cocoonBin := commonk8s.EnvOrDefault("VK_COCOON_BIN", "")
-	macosBin := commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", "")
 	macosVNCPassword := os.Getenv("COCOON_MACOS_VNC_PASSWORD")
 	if err := cocoon.ValidateMacosVNCPassword(macosVNCPassword); err != nil {
 		logger.Fatalf(ctx, err, "invalid COCOON_MACOS_VNC_PASSWORD")
 	}
-	orphanPolicy := commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy)
-	restoreMode := commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode)
 	stagingDir := commonk8s.EnvOrDefault("VK_STAGING_DIR", defaultStagingDir)
 	peerAddr := commonk8s.EnvOrDefault("VK_PEER_ADDR", defaultPeerAddr)
 	cocoonSnapshotDir := commonk8s.EnvOrDefault("VK_COCOON_SNAPSHOT_DIR", defaultCocoonSnapshotDir)
@@ -151,14 +144,14 @@ func main() {
 	p, err := buildProvider(signalCtx, buildOpts{
 		nodeName:                   nodeName,
 		snapshotCompatibilityClass: snapshotCompatibilityClass,
-		ociRegistry:                ociRegistry,
-		leasesPath:                 leasesPath,
-		controlSocket:              controlSocket,
-		cocoonBin:                  cocoonBin,
-		macosBin:                   macosBin,
+		ociRegistry:                os.Getenv("OCI_REGISTRY"),
+		leasesPath:                 commonk8s.EnvOrDefault("VK_LEASES_PATH", network.DefaultLeasesPath),
+		controlSocket:              commonk8s.EnvOrDefault("VK_COCOON_NET_CONTROL_SOCKET", network.DefaultControlSocket),
+		cocoonBin:                  commonk8s.EnvOrDefault("VK_COCOON_BIN", ""),
+		macosBin:                   commonk8s.EnvOrDefault("VK_COCOON_MACOS_BIN", ""),
 		macosVNCPassword:           macosVNCPassword,
-		orphanPolicy:               orphanPolicy,
-		restoreMode:                restoreMode,
+		orphanPolicy:               commonk8s.EnvOrDefault("VK_ORPHAN_POLICY", defaultOrphanPolicy),
+		restoreMode:                commonk8s.EnvOrDefault("VK_RESTORE_MODE", defaultRestoreMode),
 		stagingDir:                 stagingDir,
 		peerPort:                   peerPort,
 		clientset:                  clientset,
@@ -359,7 +352,6 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 // patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
 func patchNodeLabelsAndEndpoint(ctx context.Context, clientset kubernetes.Interface, nodeName, nodePool, snapshotCompatibilityClass string) {
 	logger := log.WithFunc("main.patchNodeLabelsAndEndpoint")
-	// give v-k time to create the node object.
 	if !commonk8s.SleepCtx(ctx, endpointPatchWait) {
 		return
 	}
