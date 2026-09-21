@@ -57,5 +57,5 @@ both come from `/proc/<pid>/stat` and throttling is always reported 0.
 | [cocoon](https://github.com/cocoonstack/cocoon) | The MicroVM runtime vk-cocoon shells out to |
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry + snapshot/cloud-image packages |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
-| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for cocoon pod ownership, scale-down protection, and CocoonSet/CocoonHibernation validation |
 | [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking with embedded DHCP server and iptables setup; vk-cocoon reads its JSON lease file and issues `DELETE /v1/leases/{mac}` over its control socket |

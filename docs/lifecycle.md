@@ -64,8 +64,8 @@ cannot wedge node registration. Rejected create/update calls count on
      continues the same lineage.
    - **`Managed=false`** (static / externally-managed VMs, e.g. Windows
      toolboxes on an external QEMU host): skip the runtime entirely and
-     adopt the pre-assigned `VMID` / `IP` / `VNCPort` the operator
-     pre-wrote into the `VMRuntime` annotations. `Managed` is the single
+     adopt the pre-assigned `VMID` / `IP` the operator pre-wrote into
+     the `VMRuntime` annotations. `Managed` is the single
      source of truth for "vk-cocoon owns this VM's lifecycle": a
      hibernate annotation on such a pod is a no-op, delete only forgets
      the pod, a restart re-adopts it from those annotations and
@@ -119,9 +119,9 @@ cannot wedge node registration. Rejected create/update calls count on
 4. Resolve the IP from the cocoon-net JSON lease file by MAC.
 5. `meta.VMRuntime{VMID, IP}.Apply(pod)` writes the runtime annotations
    back so the operator and other consumers can pick them up. `VNCPort`
-   stays unset on this path — cloud-hypervisor has no VNC server; the
-   macOS path and the pre-seeded static-toolbox path publish a non-zero
-   value.
+   stays unset on this path — cloud-hypervisor has no VNC server; only the
+   macOS path publishes one, and an unmanaged pod's own `vnc-port`
+   annotation is left untouched.
 6. For clone/fork/wake paths that need guest-side network setup (see
    [Post-clone hints](post-clone.md)), dispatch the fixup in the background
    after the annotations are written. vk-cocoon runs it itself over

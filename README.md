@@ -59,7 +59,7 @@ Full steps in [Installation](docs/installation.md).
 | [cocoon](https://github.com/cocoonstack/cocoon) | The MicroVM runtime vk-cocoon shells out to |
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, OCI registry + snapshot/cloud-image packages |
 | [cocoon-operator](https://github.com/cocoonstack/cocoon-operator) | CocoonSet and CocoonHibernation reconcilers |
-| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for cocoon pod ownership, scale-down protection, and CocoonSet/CocoonHibernation validation |
 | [cocoon-net](https://github.com/cocoonstack/cocoon-net) | Per-host networking; vk-cocoon reads its JSON lease file and releases leases over its control socket (≥ v0.2.2) |
 
 ## Development

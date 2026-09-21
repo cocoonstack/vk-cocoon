@@ -6,6 +6,8 @@ systemd unit reads them from `/etc/cocoon/vk-cocoon.env`.
 | Variable | Default | Description |
 |---|---|---|
 | `KUBECONFIG` | unset | Path to kubeconfig (in-cluster used otherwise). |
+| `COCOON_K8S_QPS` | `50` | Kubernetes client QPS. |
+| `COCOON_K8S_BURST` | `100` | Kubernetes client burst. |
 | `VK_NODE_NAME` | `cocoon-pool` | Virtual node name registered with the K8s API. |
 | `VK_LOG_LEVEL` | `info` | `projecteru2/core/log` level. |
 | `OCI_REGISTRY` | **required** | OCI registry base for snapshots and cloud images (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |

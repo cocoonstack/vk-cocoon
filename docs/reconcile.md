@@ -10,7 +10,7 @@ On every restart vk-cocoon:
 
 1. Lists every pod scheduled to its node via
    `fieldSelector=spec.nodeName=<VK_NODE_NAME>`. Unmanaged pods are adopted
-   from their operator-supplied VMID/IP/VNC annotations without runtime
+   from their operator-supplied VMID/IP annotations without runtime
    lifecycle operations. Managed `os=macos` pods are split out and adopted
    via `cocoon-macos vm inspect` plus a PID
    probe (they never appear in `Runtime.List`); a dead or missing record
