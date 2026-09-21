@@ -8,8 +8,9 @@ with values the scheduler can trust.
 - **Capacity** = raw host resources (`runtime.NumCPU`, `/proc/meminfo`
   MemTotal, `statfs` total, and `hugepages-<size>` where the page size is
   read from `/proc/meminfo` so a 1Gi-default node is advertised under the
-  right key; a `VK_NODE_HUGEPAGES` override always advertises under
-  `hugepages-2Mi`).
+  right key; a `VK_NODE_HUGEPAGES` override advertises under the host's
+  page size too, falling back to `hugepages-2Mi` when `/proc/meminfo` has
+  no `Hugepagesize`).
 - **Allocatable** = Capacity minus a reserve fraction (default 20%,
   override via `VK_RESERVE_PERCENT`), applied to every resource except
   `pods`, which is passed through unreduced. The reserve is accounting only;
