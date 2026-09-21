@@ -155,7 +155,6 @@ func (p *Provider) backoffIfResuming(namespace, name string) error {
 	return nil
 }
 
-// owedOpFor decides what a tracked pod is still owed.
 func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if pod.DeletionTimestamp != nil || v == nil {
 		return ""

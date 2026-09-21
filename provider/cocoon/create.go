@@ -749,9 +749,6 @@ func selectQuantity(primary, fallback corev1.ResourceList, name corev1.ResourceN
 }
 
 func quantityCPURoundUp(q resource.Quantity) int {
-	if q.IsZero() {
-		return 0
-	}
 	milli := q.MilliValue()
 	if milli <= 0 {
 		return 0

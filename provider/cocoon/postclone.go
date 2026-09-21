@@ -129,7 +129,8 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 		return
 	}
 	if gotIP {
-		if p.markReadyPublishedForWake(ctx, pod, v.ID) {
+		if status, applied := p.setLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, ""); applied {
+			p.publishReadyLifecycle(ctx, pod, status)
 			metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "ok").Inc()
 			if wake {
 				metrics.WakeTotal.WithLabelValues("ok").Inc()
@@ -144,14 +145,18 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
 	err := fmt.Errorf("%s %s: dhcp lease not observed within %s", kind, v.Name, budget)
 	msg := err.Error()
-	if p.markLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes)) {
-		metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "timeout").Inc()
-		if wake {
-			metrics.WakeTotal.WithLabelValues("failed").Inc()
-		}
-		p.emitWarningf(pod, event, "%s", truncate(msg, eventMessageMaxBytes))
-		log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s ip wait timeout", pod.Namespace, pod.Name)
+	status, applied := p.setLifecycleStateForWake(ctx, pod, v.ID,
+		meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))
+	if !applied {
+		return
 	}
+	p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
+	metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "timeout").Inc()
+	if wake {
+		metrics.WakeTotal.WithLabelValues("failed").Inc()
+	}
+	p.emitWarningf(pod, event, "%s", truncate(msg, eventMessageMaxBytes))
+	log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s ip wait timeout", pod.Namespace, pod.Name)
 }
 
 // runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; ok=false means the pod was marked Failed.

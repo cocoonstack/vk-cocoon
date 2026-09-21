@@ -16,7 +16,7 @@ const (
 	lifecycleMessageMaxBytes = 4096
 )
 
-// failOp records a terminal Pod failure; op is one of create, update, delete.
+// failOp records a terminal Pod failure under the verb that failed.
 func (p *Provider) failOp(ctx context.Context, pod *corev1.Pod, reason, op string, err error) {
 	metrics.PodLifecycleTotal.WithLabelValues(op, "failed", "").Inc()
 	msg := err.Error()

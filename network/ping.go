@@ -90,11 +90,11 @@ func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 		if parsed.Type != ipv4.ICMPTypeEchoReply {
 			continue
 		}
-		// also match on peer address to avoid cross-socket reply stealing.
 		echo, ok := parsed.Body.(*icmp.Echo)
 		if !ok || echo.ID != p.id {
 			continue
 		}
+		// also match on peer address to avoid cross-socket reply stealing.
 		if peerAddr, ok := peer.(*net.IPAddr); ok && !peerAddr.IP.Equal(addr.IP) {
 			continue
 		}

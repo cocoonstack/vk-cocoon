@@ -47,7 +47,7 @@ func (d *Dialer) Dial(ctx context.Context, target string) (guest.Session, error)
 	if err != nil {
 		return nil, err
 	}
-	if promptErr := waitPrompt(ctx, conn, time.Until(deadline)); promptErr != nil {
+	if _, promptErr := readUntilPrompt(ctx, conn, time.Until(deadline), "\r\n"); promptErr != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("sac wait prompt: %w", promptErr)
 	}
@@ -120,13 +120,6 @@ func dial(ctx context.Context, socketPath string, deadline time.Time) (net.Conn,
 			return nil, ctx.Err()
 		}
 	}
-}
-
-func waitPrompt(ctx context.Context, conn net.Conn, timeout time.Duration) error {
-	if _, err := readUntilPrompt(ctx, conn, timeout, "\r\n"); err != nil {
-		return fmt.Errorf("await SAC prompt: %w", err)
-	}
-	return nil
 }
 
 func sacCommand(ctx context.Context, conn net.Conn, cmd string, timeout time.Duration) (string, error) {

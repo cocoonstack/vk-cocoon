@@ -47,9 +47,10 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("detect hugepages: %w", err)
 	}
-	pods, err := parseQuantityEnv("VK_NODE_PODS", strconv.Itoa(defaultMaxPods))
+	rawPods := commonk8s.EnvOrDefault("VK_NODE_PODS", strconv.Itoa(defaultMaxPods))
+	pods, err := resource.ParseQuantity(rawPods)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parse VK_NODE_PODS=%q: %w", rawPods, err)
 	}
 
 	capacity = corev1.ResourceList{
@@ -215,13 +216,4 @@ func detectStorageOrOverride() (total, avail resource.Quantity, err error) {
 	totalQ := *resource.NewQuantity(statTotalBytes(stat), resource.BinarySI)
 	availQ := *resource.NewQuantity(statAvailBytes(stat), resource.BinarySI)
 	return totalQ, availQ, nil
-}
-
-func parseQuantityEnv(key, fallback string) (resource.Quantity, error) {
-	raw := commonk8s.EnvOrDefault(key, fallback)
-	q, err := resource.ParseQuantity(raw)
-	if err != nil {
-		return resource.Quantity{}, fmt.Errorf("parse %s=%q: %w", key, raw, err)
-	}
-	return q, nil
 }

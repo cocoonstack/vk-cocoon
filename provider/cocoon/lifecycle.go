@@ -167,7 +167,7 @@ func (p *Provider) reconcileAllLifecycle(ctx context.Context) {
 		if intent.flushed == intent.status.Snapshot() {
 			continue
 		}
-		ns, name := splitPodKey(key)
+		ns, name, _ := strings.Cut(key, "/")
 		drifts = append(drifts, lcDrift{ns: ns, name: name, uid: intent.uid, status: intent.status})
 	}
 	p.mu.RUnlock()
@@ -250,9 +250,4 @@ func (p *Provider) reassertLifecycleLocked(key string, pod *corev1.Pod) {
 func (p *Provider) lifecycleOwnedLocked(key string, uid types.UID, snap string) (lifecycleEntry, bool) {
 	cur, ok := p.lifecycleIntent[key]
 	return cur, ok && cur.uid == uid && cur.status.Snapshot() == snap
-}
-
-func splitPodKey(key string) (string, string) {
-	ns, name, _ := strings.Cut(key, "/")
-	return ns, name
 }
