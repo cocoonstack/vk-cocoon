@@ -462,8 +462,12 @@ func (p *Provider) refreshRolledBackNIC(ctx context.Context, pod *corev1.Pod, v 
 	}
 	updated := p.updateTrackedVM(pod.Namespace, pod.Name, v.ID, func(t *vm.VM) {
 		t.IP = ""
-		if fresh != nil {
-			t.MAC, t.NetworkConfigs = fresh.MAC, fresh.NetworkConfigs
+		if fresh == nil {
+			return
+		}
+		t.MAC, t.NetworkConfigs = fresh.MAC, fresh.NetworkConfigs
+		if len(fresh.NetworkConfigs) > 0 && isStaticNIC(fresh.NetworkConfigs[0]) {
+			t.IP = fresh.IP
 		}
 	})
 	return cmp.Or(updated, v)
