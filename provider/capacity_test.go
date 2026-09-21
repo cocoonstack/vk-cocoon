@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -30,6 +31,29 @@ func TestReserveQuantity(t *testing.T) {
 				t.Errorf("reserveQuantity(%v, %d) = %d, want %d", tc.q, tc.pct, got.Value(), tc.want)
 			}
 		})
+	}
+}
+
+func TestHugepagesResourceNameFollowsThePageSize(t *testing.T) {
+	for pageSizeKB, want := range map[int64]corev1.ResourceName{2048: "hugepages-2Mi", 1048576: "hugepages-1Gi", 0: "hugepages-2Mi"} {
+		if got := hugepagesResourceName(pageSizeKB); got != want {
+			t.Errorf("hugepagesResourceName(%d) = %q, want %q", pageSizeKB, got, want)
+		}
+	}
+}
+
+func TestDetectHugepagesOverrideFollowsTheHostPageSize(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires /proc/meminfo")
+	}
+	t.Setenv("VK_NODE_HUGEPAGES", "8Gi")
+	fields, err := ReadKeyedProcFile("/proc/meminfo", "Hugepagesize")
+	if err != nil {
+		t.Skipf("no Hugepagesize on this host: %v", err)
+	}
+	_, name, err := detectHugepagesResource()
+	if err != nil || name != hugepagesResourceName(fields["Hugepagesize"]) {
+		t.Fatalf("override advertises %q, %v; want %q", name, err, hugepagesResourceName(fields["Hugepagesize"]))
 	}
 }
 

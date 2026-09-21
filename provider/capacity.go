@@ -175,7 +175,8 @@ func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 		if err != nil {
 			return resource.Quantity{}, "", fmt.Errorf("parse VK_NODE_HUGEPAGES=%q: %w", v, err)
 		}
-		return q, corev1.ResourceHugePagesPrefix + "2Mi", nil
+		fields, _ := ReadKeyedProcFile("/proc/meminfo", "Hugepagesize")
+		return q, hugepagesResourceName(fields["Hugepagesize"]), nil
 	}
 	fields, err := ReadKeyedProcFile("/proc/meminfo", "HugePages_Total", "Hugepagesize")
 	if err != nil {
@@ -186,9 +187,15 @@ func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 	if total == 0 || pageSizeKB == 0 {
 		return resource.Quantity{}, "", nil
 	}
-	pageSuffix := resource.NewQuantity(pageSizeKB*1024, resource.BinarySI).String()
 	qty := *resource.NewQuantity(total*pageSizeKB*1024, resource.BinarySI)
-	return qty, corev1.ResourceName(corev1.ResourceHugePagesPrefix + pageSuffix), nil
+	return qty, hugepagesResourceName(pageSizeKB), nil
+}
+
+func hugepagesResourceName(pageSizeKB int64) corev1.ResourceName {
+	if pageSizeKB == 0 {
+		return corev1.ResourceHugePagesPrefix + "2Mi"
+	}
+	return corev1.ResourceName(corev1.ResourceHugePagesPrefix + resource.NewQuantity(pageSizeKB*1024, resource.BinarySI).String())
 }
 
 // detectStorageOrOverride returns filesystem total and available bytes; VK_NODE_STORAGE overrides both to the same value.
