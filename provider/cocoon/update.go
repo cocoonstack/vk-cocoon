@@ -140,7 +140,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
 		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "snapshot", "failed").Inc()
-		p.rollbackHibernateNIC(ctx, v, dropNIC)
+		p.rollbackHibernate(ctx, pod, v, dropNIC)
 		err = fmt.Errorf("save snapshot %s: %w", v.Name, err)
 		p.failOp(ctx, pod, "HibernateSnapshotFailed", "update", err)
 		return err
@@ -154,7 +154,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		if err := p.Pusher.PushSnapshot(ctx, v.Name, v.Name, meta.HibernateSnapshotTag, spec.Image); err != nil {
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues(pod.Namespace, "push", "failed").Inc()
-			p.rollbackHibernateNIC(ctx, v, dropNIC)
+			p.rollbackHibernate(ctx, pod, v, dropNIC)
 			err = fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
 			p.failOp(ctx, pod, "HibernatePushFailed", "update", err)
 			return err
@@ -175,12 +175,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 				logger.Errorf(ctx, delErr, "rollback hibernate push after remove failed for %s", v.Name)
 			}
 		}
-		// VM is still live; restore NIC + VMID/IP so the pod can retry hibernate.
-		p.rollbackHibernateNIC(ctx, v, dropNIC)
-		if dropNIC {
-			v = p.refreshRolledBackNIC(ctx, pod, v)
-		}
-		p.applyRuntime(ctx, pod, v)
+		p.rollbackHibernate(ctx, pod, v, dropNIC)
 		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
 		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
 		return err
@@ -226,21 +221,23 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, pod *corev1.Pod, v *
 	return nil
 }
 
-func (p *Provider) rollbackHibernateNIC(ctx context.Context, v *vm.VM, dropped bool) {
-	if !dropped {
-		return
-	}
-	logger := log.WithFunc("Provider.rollbackHibernateNIC")
+func (p *Provider) rollbackHibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM, dropped bool) {
+	logger := log.WithFunc("Provider.rollbackHibernate")
 	// cancel-detached: the triggering failure may be ctx dying, and an online VM must not be left NIC-less.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hibernateRollbackTimeout)
 	defer cancel()
-	if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
-		logger.Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
-		return
+	if dropped {
+		if err := p.Runtime.NetResize(ctx, v.ID, 1); err != nil {
+			logger.Errorf(ctx, err, "re-add NIC after hibernate failure %s", v.Name)
+		}
+		v = p.refreshRolledBackNIC(ctx, pod, v)
 	}
+	p.applyRuntime(ctx, pod, v)
 	// The pre-hibernate release left the guest unbound; nudge it to re-acquire.
-	if err := p.execGuestIpconfig(ctx, v.ID, "renew"); err != nil {
-		logger.Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
+	if dropped {
+		if err := p.execGuestIpconfig(ctx, v.ID, "renew"); err != nil {
+			logger.Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
+		}
 	}
 }
 

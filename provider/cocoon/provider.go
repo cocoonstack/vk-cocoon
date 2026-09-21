@@ -700,11 +700,10 @@ func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, po
 		return
 	}
 	defer p.finishDeleting(key)
-	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
+	if err := p.removeVM(ctx, v); err != nil {
 		logger.Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
 		return
 	}
-	p.releaseDHCPLeases(ctx, v)
 	p.evictPod(ctx, key, pod, reason, message)
 }
 

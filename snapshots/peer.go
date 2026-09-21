@@ -487,7 +487,6 @@ func (s *sectionWriter) Flush() error {
 	return nil
 }
 
-// writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular all-zero chunks so skipped regions stay sparse.
 type stallReader struct {
 	r     io.Reader
 	timer *time.Timer
@@ -499,6 +498,7 @@ func (s stallReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular all-zero chunks so skipped regions stay sparse.
 func writeSkippingZeros(f *os.File, data []byte, off int64) error {
 	for start := 0; start < len(data); {
 		end := min(start+zeroSkipBytes, len(data))

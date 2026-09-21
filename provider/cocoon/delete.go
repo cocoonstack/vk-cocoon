@@ -2,6 +2,7 @@ package cocoon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -77,7 +78,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 }
 
 func (p *Provider) removeVM(ctx context.Context, v *vm.VM) error {
-	if err := p.Runtime.Remove(ctx, v.ID); err != nil {
+	if err := p.Runtime.Remove(ctx, v.ID); err != nil && !errors.Is(err, vm.ErrVMNotFound) {
 		return err
 	}
 	p.releaseDHCPLeases(ctx, v)
