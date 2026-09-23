@@ -653,6 +653,9 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		p.evictGoneIncarnation(ctx, affectedKey, affectedPod, trackedVM, "VMGone", "vm no longer exists")
+		if p.trackedPodMatches(affectedKey, affectedPod.UID) {
+			p.scheduleDeferredRecheck(trackedID)
+		}
 
 	case err != nil:
 		// cocoon does not re-emit DELETED and probes only ping IPs, so a deferred recheck must settle a still-transient VM
@@ -777,7 +780,15 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
 			p.evictGoneIncarnation(ctx, key, pod, tracked, "VMGone", "vm no longer exists")
-			return
+			if !p.trackedPodMatches(key, pod.UID) {
+				return
+			}
+			if time.Now().After(deadline) {
+				logger.Warnf(ctx, "deferred recheck: pod %s/%s eviction unresolved after %s, keeping state",
+					pod.Namespace, pod.Name, budget)
+				return
+			}
+			delay = min(delay*2, maxDelay)
 		case err != nil:
 			if time.Now().After(deadline) {
 				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, removing before eviction of pod %s/%s",
