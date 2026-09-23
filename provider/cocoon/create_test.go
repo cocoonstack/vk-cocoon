@@ -2407,13 +2407,13 @@ func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
 }
 
 func TestVMWatchLoopRestartsAStoppedVMSeenAtStreamStart(t *testing.T) {
-	stopped := &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0", State: "stopped"}
+	stopped := &vm.VM{ID: "vmid-s", Name: "vk-ns.demo-0", State: "stopped"}
 	rt := &fakeRuntime{inspectVM: stopped, events: []vm.VMEvent{{Event: "ADDED", VM: *stopped}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-s", Name: "vk-ns.demo-0"})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -2433,7 +2433,7 @@ func TestVMWatchLoopRestartsAStoppedVMSeenAtStreamStart(t *testing.T) {
 }
 
 func TestHandleVMGoneRetriesEvictionUntilTheAPIRecovers(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	cs := fake.NewSimpleClientset(pod)
 	var deletes atomic.Int32
 	cs.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -2447,7 +2447,7 @@ func TestHandleVMGoneRetriesEvictionUntilTheAPIRecovers(t *testing.T) {
 	p.Clientset = cs
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 20 * time.Millisecond
-	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
 
 	evicted := make(chan struct{}, 1)
 	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
@@ -2459,7 +2459,7 @@ func TestHandleVMGoneRetriesEvictionUntilTheAPIRecovers(t *testing.T) {
 		}
 	})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
 
 	select {
 	case <-evicted:
