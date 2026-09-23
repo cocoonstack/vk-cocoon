@@ -305,20 +305,20 @@ func TestPeerServerRefusesSlicesPastTheStreamBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	u := srv.URL + slicePath + "?id=SNAP-1&file=state.json&offset=0&length=7"
-	resp, err := http.Get(u) //nolint:gosec,noctx // test server
+	resp, err := http.Get(u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close() //nolint:errcheck
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("saturated server answered %d, want 503", resp.StatusCode)
 	}
 	peerSliceGate.Release(peerSliceStreams)
-	resp, err = http.Get(u) //nolint:gosec,noctx // test server
+	resp, err = http.Get(u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close() //nolint:errcheck
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("server answered %d once the streams were released, want 200", resp.StatusCode)
 	}

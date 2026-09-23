@@ -32,7 +32,6 @@ func NewICMPPinger() (*ICMPPinger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open icmp socket: %w", err)
 	}
-	// capability-check only; fresh socket per Ping.
 	if closeErr := conn.Close(); closeErr != nil {
 		return nil, fmt.Errorf("close probe socket: %w", closeErr)
 	}
