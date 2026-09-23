@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -25,13 +26,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 
 	commonhttpx "github.com/cocoonstack/cocoon-common/httpx"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -68,6 +72,8 @@ const (
 	endpointPatchRetry    = 2 * time.Second
 	nodePatchAttempts     = 10
 	shutdownTimeout       = 10 * time.Second
+	podRetryBaseDelay     = 5 * time.Millisecond
+	podRetryMaxDelay      = 1000 * time.Second
 )
 
 func main() {
@@ -111,7 +117,11 @@ func main() {
 	certPath := commonk8s.EnvOrDefault("VK_TLS_CERT", defaultTLSCert)
 	keyPath := commonk8s.EnvOrDefault("VK_TLS_KEY", defaultTLSKey)
 
-	clientset, err := commonk8s.NewClientset()
+	kubeCfg, err := commonk8s.LoadConfig()
+	if err != nil {
+		logger.Fatalf(ctx, err, "load kubeconfig")
+	}
+	clientset, err := kubernetes.NewForConfig(kubeCfg)
 	if err != nil {
 		logger.Fatalf(ctx, err, "build clientset")
 	}
@@ -206,6 +216,7 @@ func main() {
 		nodeutil.WithClient(clientset),
 		nodeutil.AttachProviderRoutes(kubeletMux),
 		withHandler(kubeletMux),
+		withPodQueueLimits(kubeCfg.QPS, kubeCfg.Burst),
 		nodeutil.WithTLSConfig(func(tc *tls.Config) error {
 			tc.Certificates = []tls.Certificate{tlsCert}
 			tc.ClientAuth = tls.NoClientCert
@@ -347,6 +358,27 @@ func withHandler(h http.Handler) nodeutil.NodeOpt {
 		cfg.HTTPListenAddr = fmt.Sprintf(":%d", kubeletAPIPort())
 		return nil
 	}
+}
+
+func withPodQueueLimits(qps float32, burst int) nodeutil.NodeOpt {
+	qps = cmp.Or(qps, rest.DefaultQPS)
+	burst = cmp.Or(burst, rest.DefaultBurst)
+	return nodeutil.WithPodControllerConfigOverrides(func(c *node.PodControllerConfig) error {
+		limiter := func() workqueue.TypedRateLimiter[any] {
+			backoff := workqueue.NewTypedItemExponentialFailureRateLimiter[any](podRetryBaseDelay, podRetryMaxDelay)
+			if qps < 0 {
+				return backoff
+			}
+			return workqueue.NewTypedMaxOfRateLimiter(
+				backoff,
+				&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(qps), burst)},
+			)
+		}
+		c.SyncPodsFromKubernetesRateLimiter = limiter()
+		c.DeletePodsFromKubernetesRateLimiter = limiter()
+		c.SyncPodStatusFromProviderRateLimiter = limiter()
+		return nil
+	})
 }
 
 // patchNodeLabelsAndEndpoint re-asserts node labels and daemonEndpoints with retries to ride out the node-creation window.
