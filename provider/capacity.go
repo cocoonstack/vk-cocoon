@@ -181,7 +181,7 @@ func detectHugepagesResource() (resource.Quantity, corev1.ResourceName, error) {
 	}
 	fields, err := ReadKeyedProcFile("/proc/meminfo", "HugePages_Total", "Hugepagesize")
 	if err != nil {
-		return resource.Quantity{}, "", nil //nolint:nilerr // missing fields = no hugepages
+		return resource.Quantity{}, "", nil // missing fields = no hugepages
 	}
 	total := fields["HugePages_Total"]
 	pageSizeKB := fields["Hugepagesize"]

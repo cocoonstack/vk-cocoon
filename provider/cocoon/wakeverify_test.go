@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/manifest"
@@ -285,7 +284,7 @@ func newPeerWakeFixture(t *testing.T, snapshotID string) (*Provider, *fakeRuntim
 	p.PeerRestorer = &snapshots.PeerRestorer{StagingRoot: t.TempDir()}
 	p.PeerPort = peerURL.Port()
 	p.Clientset = fake.NewSimpleClientset(&corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-src"},
+		Name: "node-src",
 		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
 			{Type: corev1.NodeInternalIP, Address: "127.0.0.1"},
 		}},

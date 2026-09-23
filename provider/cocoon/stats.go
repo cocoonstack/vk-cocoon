@@ -242,8 +242,8 @@ func readNodeMemoryWorkingSet() int64 {
 
 // cpuMemStats packs raw CPU seconds and working-set bytes into the kubelet stats types, clamping memory to non-negative.
 func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
-	cpuNano := uint64(cpuSeconds * 1e9) //nolint:gosec // cpu seconds read from /proc are always non-negative
-	mem := uint64(max(memBytes, 0))     //nolint:gosec // clamped to non-negative via max
+	cpuNano := uint64(cpuSeconds * 1e9)
+	mem := uint64(max(memBytes, 0))
 	return &statsv1alpha1.CPUStats{UsageCoreNanoSeconds: &cpuNano},
 		&statsv1alpha1.MemoryStats{WorkingSetBytes: &mem}
 }

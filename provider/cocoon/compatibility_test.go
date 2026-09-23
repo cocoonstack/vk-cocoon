@@ -5,14 +5,13 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 func TestAssertPodSnapshotCompatibility(t *testing.T) {
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm-0"},
+		Namespace: "ns", Name: "vm-0",
 		Spec: corev1.PodSpec{NodeSelector: map[string]string{
 			meta.LabelSnapshotCompatibilityClass: "n2-cascade-lake-v1",
 		}},
@@ -52,7 +51,7 @@ func TestAssertPodSnapshotCompatibility(t *testing.T) {
 
 	t.Run("legacy pod", func(t *testing.T) {
 		p := &Provider{NodeName: "node-d", SnapshotCompatibilityClass: "n4-emerald-rapids-v1"}
-		legacy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "legacy"}}
+		legacy := &corev1.Pod{Namespace: "ns", Name: "legacy"}
 		if err := p.assertPodSnapshotCompatibility(legacy); err != nil {
 			t.Fatalf("legacy pod rejected: %v", err)
 		}

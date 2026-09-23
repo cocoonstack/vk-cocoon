@@ -20,10 +20,10 @@ import (
 func TestMarkLifecycleStateWritesAtomicTriple(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -49,12 +49,12 @@ func TestMarkLifecycleStateWritesAtomicTriple(t *testing.T) {
 func TestMarkLifecycleStateClearsMessageOnTerminalSuccess(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{
 			meta.AnnotationLifecycleStateMessage: "stale failure reason",
 		},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -70,7 +70,7 @@ func TestMarkLifecycleStateClearsMessageOnTerminalSuccess(t *testing.T) {
 func TestMarkLifecycleStateRecordsMessageOnFailed(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -89,7 +89,7 @@ func TestMarkLifecycleStateRecordsMessageOnFailed(t *testing.T) {
 func TestReconcileSkipsPodWithoutLifecycleState(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	patches := 0
 	cs.PrependReactor("patch", "pods", func(_ k8stesting.Action) (bool, runtime.Object, error) {
@@ -110,7 +110,7 @@ func TestReconcileSkipsPodWithoutLifecycleState(t *testing.T) {
 func TestReconcileSkipsWhenNoDrift(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -132,7 +132,7 @@ func TestReconcileSkipsWhenNoDrift(t *testing.T) {
 func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -155,10 +155,10 @@ func TestReconcileFixesDriftWhenFlushedIsStale(t *testing.T) {
 }
 
 func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationLifecycleState: string(meta.LifecycleStateCreating)},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod.DeepCopy())
 	failStatus := true
 	statusPublished := false
@@ -214,7 +214,7 @@ func TestReadyPublicationRetriesStatusBeforeLifecycle(t *testing.T) {
 }
 
 func TestReadyPublicationNotifiesWhenLifecycleTransitionIsRejected(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	failed := meta.LifecycleStatus{State: meta.LifecycleStateFailed}
 	failed.Apply(pod)
 
@@ -259,13 +259,13 @@ func TestReconcileDropsReadyIntentForDeletedPod(t *testing.T) {
 func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 	t.Parallel()
 
-	stalePod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	stalePod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{
 			meta.AnnotationLifecycleState:              "ready",
 			meta.AnnotationLifecycleObservedGeneration: "3",
 		},
-	}}
+	}
 	cs := fake.NewSimpleClientset(stalePod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -289,10 +289,10 @@ func TestReconcileIgnoresStalePodAnnotations(t *testing.T) {
 func TestMarkLifecycleStateUsesLatestTrackedGen(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -364,7 +364,7 @@ func TestUpdatePodNoopSkipsRepublishWhenGenUnchanged(t *testing.T) {
 func TestMarkLifecycleStateRejectsStaleObservedGeneration(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -422,7 +422,7 @@ func TestRecordLifecycleFlushedSkipsAdvancedIntent(t *testing.T) {
 func TestFlushLifecycleSkipsWhenIntentAdvanced(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -488,13 +488,13 @@ func TestMarkLifecycleStateUpdatesTrackedPodAnnotations(t *testing.T) {
 func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{
 			meta.AnnotationLifecycleState:              "ready",
 			meta.AnnotationLifecycleObservedGeneration: "3",
 		},
-	}}
+	}
 	p := newTestProvider(t)
 	p.seedLifecycleIntentFromPod(pod)
 
@@ -513,7 +513,7 @@ func TestSeedLifecycleIntentFromPodRestoresIntent(t *testing.T) {
 func TestSeedLifecycleIntentFromPodSkipsUnannotatedPod(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	p := newTestProvider(t)
 	p.seedLifecycleIntentFromPod(pod)
 
@@ -557,14 +557,14 @@ func TestRepublishAfterRestartWithSeed(t *testing.T) {
 func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.T) {
 	t.Parallel()
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	cs := fake.NewSimpleClientset(podA)
 	p := newTestProvider(t)
 	p.Clientset = cs
 	p.trackPod(podA, nil)
 	p.markLifecycleState(t.Context(), podA, meta.LifecycleStateReady, "")
 
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
 	p.markLifecycleState(t.Context(), podB, meta.LifecycleStateFailed, "stale goroutine")
 
 	key := meta.PodKey("ns", "demo-0")
@@ -582,10 +582,10 @@ func TestApplyLifecycleLockedDropsWriteFromRecreatedPodMismatchedUID(t *testing.
 func TestApplyLifecycleLockedSameGenFailedAllowsNewAttemptViaHibernating(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -603,10 +603,10 @@ func TestApplyLifecycleLockedSameGenFailedAllowsNewAttemptViaHibernating(t *test
 func TestApplyLifecycleLockedSameGenFailedStaysStickyWithoutNewAttempt(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	pod := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
-	}}
+	}
 	cs := fake.NewSimpleClientset(pod)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -647,13 +647,13 @@ func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 	p := newTestProvider(t)
 	p.lifecycleIntent[key] = lifecycleEntry{status: meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}}
 
-	stale := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	stale := &corev1.Pod{
 		Name: name, Namespace: ns,
 		Annotations: map[string]string{
 			meta.AnnotationCocoonSetGeneration: "1",
 			meta.AnnotationLifecycleState:      string(meta.LifecycleStateCreating),
 		},
-	}}
+	}
 	p.trackPod(stale, nil)
 
 	if got := p.pods[key].Annotations[meta.AnnotationLifecycleState]; got != string(meta.LifecycleStateReady) {
@@ -664,7 +664,7 @@ func TestTrackPodPreservesReadyIntentOverStaleUpdate(t *testing.T) {
 func TestFlushLifecycleKeepsIntentStagedByNewerIncarnation(t *testing.T) {
 	t.Parallel()
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	cs := fake.NewSimpleClientset(podA)
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -707,7 +707,7 @@ func TestFlushLifecycleKeepsIntentStagedByNewerIncarnation(t *testing.T) {
 func TestFailCreateRepairsLifecycleWithOriginatingUID(t *testing.T) {
 	t.Parallel()
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	cs := fake.NewSimpleClientset(pod.DeepCopy())
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -759,7 +759,7 @@ func TestFailCreateRepairsLifecycleWithOriginatingUID(t *testing.T) {
 func TestReconcileRepairsIncarnationReusingFlushedSnapshot(t *testing.T) {
 	t.Parallel()
 
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
 	cs := fake.NewSimpleClientset(podB.DeepCopy())
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -805,14 +805,14 @@ func TestReconcileRepairsIncarnationReusingFlushedSnapshot(t *testing.T) {
 func TestTrackPodDropsPredecessorLifecycleMarkers(t *testing.T) {
 	t.Parallel()
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	podA := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns", UID: "a",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "5"},
-	}}
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+	}
+	podB := &corev1.Pod{
 		Name: "demo-0", Namespace: "ns", UID: "b",
 		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "1"},
-	}}
+	}
 	cs := fake.NewSimpleClientset(podB.DeepCopy())
 	p := newTestProvider(t)
 	p.Clientset = cs
@@ -850,8 +850,8 @@ func TestTrackPodDropsPredecessorLifecycleMarkers(t *testing.T) {
 func TestUntrackedIntentRejectsPredecessorWrite(t *testing.T) {
 	t.Parallel()
 
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	cs := fake.NewSimpleClientset(podB.DeepCopy())
 	p := newTestProvider(t)
 	p.Clientset = cs

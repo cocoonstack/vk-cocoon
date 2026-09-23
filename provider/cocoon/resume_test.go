@@ -407,7 +407,7 @@ func TestClassifyNICRecoveryStopsAtBudgetWithoutRetryingEvidence(t *testing.T) {
 func TestResumeReadyWaitPublishesReadyForAnUnmanagedPod(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
 	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false, OS: string(cocoonv1.OSWindows)}.Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 	meta.HibernateState(true).Apply(pod)

@@ -723,7 +723,7 @@ func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	resources := pod.Spec.Containers[0].Resources
 	var policy vm.CPUPolicy
 	if limit := resources.Limits[corev1.ResourceCPU]; !limit.IsZero() {
-		policy.CPUQuotaUs = max(limit.MilliValue()*cpuPeriodUs/1000, minQuotaUs) //nolint:mnd // millicores per core
+		policy.CPUQuotaUs = max(limit.MilliValue()*cpuPeriodUs/1000, minQuotaUs)
 		policy.CPUPeriodUs = cpuPeriodUs
 	}
 	request := selectQuantity(resources.Requests, resources.Limits, corev1.ResourceCPU)

@@ -7,7 +7,6 @@ import (
 	"github.com/virtual-kubelet/virtual-kubelet/node"
 	"github.com/virtual-kubelet/virtual-kubelet/node/nodeutil"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"
 
@@ -39,7 +38,7 @@ func TestApplyNodeLabels(t *testing.T) {
 		t.Errorf("snapshot compatibility class = %q, want n2-cascade-lake-v1", got)
 	}
 
-	unclassified := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"existing": "keep"}}}
+	unclassified := &corev1.Node{Labels: map[string]string{"existing": "keep"}}
 	applyNodeLabels(unclassified, "purpose-b", "")
 	if _, ok := unclassified.Labels[meta.LabelSnapshotCompatibilityClass]; ok {
 		t.Error("unclassified node must not advertise a snapshot compatibility class")

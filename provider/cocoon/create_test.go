@@ -42,7 +42,7 @@ func TestCreatePodMissingVMNameRejected(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "x", Namespace: "ns"}
 	if err := p.CreatePod(t.Context(), pod); err == nil {
 		t.Errorf("expected error when VMName annotation is missing")
 	}
@@ -1270,10 +1270,10 @@ func TestEnsureSnapshotSharedWorkSurvivesCallerCancel(t *testing.T) {
 		wg.Wait()
 
 		if !errors.Is(errLeader, context.Canceled) {
-			t.Errorf("cancelled caller err = %v, want context.Canceled (it must not wait out the shared import)", errLeader)
+			t.Errorf("canceled caller err = %v, want context.Canceled (it must not wait out the shared import)", errLeader)
 		}
 		if errLive != nil || liveSnapshot == nil {
-			t.Fatalf("shared work must outlive the cancelled caller: snapshot=%v err=%v", liveSnapshot, errLive)
+			t.Fatalf("shared work must outlive the canceled caller: snapshot=%v err=%v", liveSnapshot, errLive)
 		}
 		if len(rt.snapshotImports) != 1 {
 			t.Errorf("imports = %v, want one", rt.snapshotImports)
@@ -1424,7 +1424,7 @@ func TestEnsureRunImageConcurrentForceShareOneImport(t *testing.T) {
 func TestEnsureRunImageFallbackDeduped(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rt := &fakeRuntime{}
-		reg := &countingRegistry{fakeRegistry: fakeRegistry{err: errors.New("registry down")}}
+		reg := &countingRegistry{err: errors.New("registry down")}
 		p := newTestProvider(t)
 		p.Runtime = rt
 		p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}
@@ -1488,7 +1488,7 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.99"}.Apply(pod)
 
@@ -1502,7 +1502,7 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 
 func TestStartupReconcileAdoptsAnUnmanagedPodFromItsAnnotations(t *testing.T) {
 	for _, local := range []bool{false, true} {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+		pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
 		meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
 		pod.Spec.NodeName = "cocoon-pool"
 		meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
@@ -2282,11 +2282,12 @@ func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
 	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
-		Name:      "db",
-		Mode:      cocoonv1.ToolboxModeStatic,
-		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSWindows, Backend: cocoonv1.BackendCloudHypervisor},
+		Name:    "db",
+		Mode:    cocoonv1.ToolboxModeStatic,
+		OS:      cocoonv1.OSWindows,
+		Backend: cocoonv1.BackendCloudHypervisor,
 	}, "vk-ns-cs-db", cocoonv1.SnapshotPolicyAlways).Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 	spec := meta.ParseVMSpec(pod)
@@ -2323,11 +2324,11 @@ func TestCreateAndDeleteStaticMacosToolboxSkipTheMacosLifecycle(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-mac", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "cs-mac", Namespace: "ns"}
 	meta.FromToolboxSpec(cocoonv1.ToolboxSpec{
-		Name:      "mac",
-		Mode:      cocoonv1.ToolboxModeStatic,
-		VMOptions: cocoonv1.VMOptions{OS: cocoonv1.OSMacos},
+		Name: "mac",
+		Mode: cocoonv1.ToolboxModeStatic,
+		OS:   cocoonv1.OSMacos,
 	}, "vk-ns-cs-mac", cocoonv1.SnapshotPolicyAlways).Apply(pod)
 	meta.VMRuntime{VMID: "extern-mac-1", IP: "10.0.0.12"}.Apply(pod)
 
@@ -2349,7 +2350,7 @@ func TestHandleVMGoneLeavesAnUnmanagedVMAlone(t *testing.T) {
 	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", State: "stopped"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
 	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
 	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
 
@@ -2847,7 +2848,7 @@ func newLeaseParser(t *testing.T, mac, ip string) *network.LeaseParser {
 }
 
 func newPodWithSpec(spec meta.VMSpec) *corev1.Pod {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	spec.Managed = true
 	spec.Apply(pod)
 	return pod
@@ -2891,7 +2892,7 @@ func newCloudImageTestSetup(t *testing.T) (*Provider, *fakeRuntime, *countingReg
 func newArtifactTestSetup(t *testing.T, m []byte, blobs map[string][]byte) (*Provider, *fakeRuntime, *countingRegistry) {
 	t.Helper()
 	rt := &fakeRuntime{}
-	reg := &countingRegistry{fakeRegistry: fakeRegistry{manifest: m}, blobs: blobs}
+	reg := &countingRegistry{manifest: m, blobs: blobs}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Puller = &snapshots.Puller{Registry: reg, Runtime: rt}

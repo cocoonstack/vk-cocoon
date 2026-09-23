@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"iter"
 	"net"
 	"net/http"
 	"net/url"
@@ -252,20 +251,15 @@ func coalesceExtents(extents []extent, maxGap int64) []extent {
 	return out
 }
 
-// splitExtents caps each transfer slice at max bytes.
-func splitExtents(extents []extent, max int64) []peerSlice {
+// splitExtents caps each transfer slice at limit bytes.
+func splitExtents(extents []extent, limit int64) []peerSlice {
 	var out []peerSlice
 	for _, e := range extents {
-		for off := e.offset; off < e.offset+e.length; off += max {
-			out = append(out, peerSlice{Offset: off, Length: min(max, e.offset+e.length-off)})
+		for off := e.offset; off < e.offset+e.length; off += limit {
+			out = append(out, peerSlice{Offset: off, Length: min(limit, e.offset+e.length-off)})
 		}
 	}
 	return out
-}
-
-// groupSlices splits an ordered slice list into up to n contiguous runs so each fetcher writes one disjoint region.
-func groupSlices(sl []peerSlice, n int) iter.Seq[[]peerSlice] {
-	return slices.Chunk(sl, max(1, (len(sl)+n-1)/n))
 }
 
 // isPlainName rejects path components that could escape their directory.
@@ -394,7 +388,8 @@ func (p *PeerRestorer) fetchFiles(ctx context.Context, baseURL string, plan *pee
 		if err := f.Truncate(pf.Size); err != nil {
 			return fmt.Errorf("truncate %s: %w", pf.Name, err)
 		}
-		for group := range groupSlices(pf.Slices, streamsPerFile) {
+		perStream := max(1, (len(pf.Slices)+streamsPerFile-1)/streamsPerFile)
+		for group := range slices.Chunk(pf.Slices, perStream) {
 			tasks = append(tasks, task{file: f, slices: group})
 		}
 	}

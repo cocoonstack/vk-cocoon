@@ -90,7 +90,7 @@ func (p *LeaseParser) refresh() error {
 }
 
 func (p *LeaseParser) parse() ([]Lease, error) {
-	data, err := os.ReadFile(p.Path) //nolint:gosec // operator-supplied path
+	data, err := os.ReadFile(p.Path)
 	if err != nil {
 		return nil, fmt.Errorf("read lease file %s: %w", p.Path, err)
 	}
