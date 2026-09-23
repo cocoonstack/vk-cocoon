@@ -599,7 +599,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 			switch ev.Event {
 			case "DELETED":
 				p.handleVMGone(ctx, &ev.VM)
-			case "MODIFIED":
+			case "ADDED", "MODIFIED":
 				if ev.VM.State != vm.StateRunning {
 					p.handleVMGone(ctx, &ev.VM)
 				}
