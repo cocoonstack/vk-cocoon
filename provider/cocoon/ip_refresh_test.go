@@ -18,10 +18,10 @@ func TestResolveVMIPReplacesStaleCachedIP(t *testing.T) {
 	p := newTestProvider(t)
 	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{
 		ID:   "vmid",
-		Name: "vk-ns-demo-0",
+		Name: "vk-ns.demo-0",
 		MAC:  "aa:bb:cc:dd:ee:ff",
 		IP:   "172.20.0.42",
 	})
@@ -37,8 +37,8 @@ func TestResolveVMIPReplacesStaleCachedIP(t *testing.T) {
 
 func TestPodForVMMatchReturnsACopy(t *testing.T) {
 	p := newTestProvider(t)
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0"})
 
 	_, matched, _ := p.podForVMMatch("vmid", "")
 	if matched == nil {
@@ -57,12 +57,12 @@ func TestPodForVMMatchReturnsACopy(t *testing.T) {
 
 func TestOnUpdateRepublishesRenewedIPAnnotation(t *testing.T) {
 	p := newTestProvider(t)
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	pod.Annotations[meta.AnnotationIP] = "172.20.0.42"
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.trackPod(pod, &vm.VM{
 		ID:   "vmid",
-		Name: "vk-ns-demo-0",
+		Name: "vk-ns.demo-0",
 		MAC:  "aa:bb:cc:dd:ee:ff",
 		IP:   "172.20.0.88",
 	})
@@ -79,7 +79,7 @@ func TestOnUpdateRepublishesRenewedIPAnnotation(t *testing.T) {
 }
 
 func TestOnUpdateSkipsNotifyWhenEndpointsSuperseded(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podA.Annotations[meta.AnnotationIP] = "172.20.0.42"
 
@@ -90,7 +90,7 @@ func TestOnUpdateSkipsNotifyWhenEndpointsSuperseded(t *testing.T) {
 	client := fake.NewSimpleClientset(podB)
 	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
 	p.Clientset = client
-	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "172.20.0.88"})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "172.20.0.88"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -109,10 +109,10 @@ func TestResolveVMIPKeepsStaticAddress(t *testing.T) {
 	p := newTestProvider(t)
 	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{
 		ID:   "vmid",
-		Name: "vk-ns-demo-0",
+		Name: "vk-ns.demo-0",
 		MAC:  "aa:bb:cc:dd:ee:ff",
 		IP:   "10.0.0.42",
 		NetworkConfigs: []*vm.NetworkConfig{{
@@ -140,10 +140,10 @@ func TestResolveVMIPClearsExpiredDHCPAddress(t *testing.T) {
 	p := newTestProvider(t)
 	p.LeaseParser = network.NewLeaseParser(path)
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.trackPod(pod, &vm.VM{
 		ID:   "vmid",
-		Name: "vk-ns-demo-0",
+		Name: "vk-ns.demo-0",
 		MAC:  "aa:bb:cc:dd:ee:ff",
 		IP:   "172.20.0.42",
 	})

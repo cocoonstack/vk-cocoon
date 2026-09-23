@@ -61,7 +61,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snapshot-repo:latest",
 		Mode:   "clone",
 	})
@@ -71,7 +71,7 @@ func TestCreatePodCloneMode(t *testing.T) {
 	if rt.cloned == nil {
 		t.Fatalf("Runtime.Clone was not called")
 	}
-	if rt.cloned.To != "vk-ns-demo-0" {
+	if rt.cloned.To != "vk-ns.demo-0" {
 		t.Errorf("clone target: %q", rt.cloned.To)
 	}
 	if rt.cloned.From != "snapshot-repo" {
@@ -104,7 +104,7 @@ func TestCreatePodCloneModeEnsuresOCIRefBaseImage(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snapshot-repo:latest",
 		Mode:   "clone",
 	})
@@ -135,7 +135,7 @@ func TestCreatePodCloneModeSkipsEnsureWhenDigestPresent(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snapshot-repo:latest",
 		Mode:   "clone",
 	})
@@ -149,15 +149,15 @@ func TestCreatePodCloneModeSkipsEnsureWhenDigestPresent(t *testing.T) {
 }
 
 func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
-	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns.demo-0"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:   "vk-ns-demo-1",
+		VMName:   "vk-ns.demo-1",
 		Image:    "snapshot-repo:latest",
 		Mode:     "clone",
-		ForkFrom: "vk-ns-demo-0",
+		ForkFrom: "vk-ns.demo-0",
 	})
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
@@ -165,11 +165,11 @@ func TestCreatePodForkFromLocalVMSkipsSnapshotBaseImage(t *testing.T) {
 	if rt.cloned == nil {
 		t.Fatalf("Runtime.Clone was not called")
 	}
-	if rt.savedSnapshot.name != "fork-vk-ns-demo-0" || rt.savedSnapshot.vmID != "source-vm-id" {
-		t.Fatalf("SnapshotSave = (%q, %q), want (fork-vk-ns-demo-0, source-vm-id)", rt.savedSnapshot.name, rt.savedSnapshot.vmID)
+	if rt.savedSnapshot.name != "fork-vk-ns.demo-0" || rt.savedSnapshot.vmID != "source-vm-id" {
+		t.Fatalf("SnapshotSave = (%q, %q), want (fork-vk-ns.demo-0, source-vm-id)", rt.savedSnapshot.name, rt.savedSnapshot.vmID)
 	}
-	if rt.cloned.From != "fork-vk-ns-demo-0" {
-		t.Fatalf("clone source = %q, want fork-vk-ns-demo-0", rt.cloned.From)
+	if rt.cloned.From != "fork-vk-ns.demo-0" {
+		t.Fatalf("clone source = %q, want fork-vk-ns.demo-0", rt.cloned.From)
 	}
 	if len(rt.ensuredImages) != 0 {
 		t.Fatalf("EnsureImage should not run for local VM fork, got %#v", rt.ensuredImages)
@@ -188,7 +188,7 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.mu.Lock()
-	p.vmsByName["vk-ns-demo-0"] = &vm.VM{ID: "src", Name: "vk-ns-demo-0"}
+	p.vmsByName["vk-ns.demo-0"] = &vm.VM{ID: "src", Name: "vk-ns.demo-0"}
 	p.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -196,7 +196,7 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	errs := make([]error, n)
 	for i := range n {
 		wg.Go(func() {
-			names[i], errs[i] = p.ensureForkSnapshot(t.Context(), "vk-ns-demo-0")
+			names[i], errs[i] = p.ensureForkSnapshot(t.Context(), "vk-ns.demo-0")
 		})
 	}
 	<-entered
@@ -206,7 +206,7 @@ func TestEnsureForkSnapshotDedupsConcurrentSaves(t *testing.T) {
 	if rt.snapshotSaveCount != 1 {
 		t.Errorf("concurrent forks saved the shared snapshot %d times, want 1", rt.snapshotSaveCount)
 	}
-	want := forkSnapshotName("vk-ns-demo-0")
+	want := forkSnapshotName("vk-ns.demo-0")
 	for i := range n {
 		if errs[i] != nil {
 			t.Errorf("caller %d: %v", i, errs[i])
@@ -225,13 +225,13 @@ func TestCreatePodInvalidatesForkSnapshot(t *testing.T) {
 	}{
 		{
 			name: "run mode",
-			rt:   &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}},
-			spec: meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run", OS: "linux"},
+			rt:   &fakeRuntime{runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns.demo-0"}},
+			spec: meta.VMSpec{VMName: "vk-ns.demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run", OS: "linux"},
 		},
 		{
 			name: "clone mode",
 			rt:   &fakeRuntime{snapshots: map[string]*vm.Snapshot{"snapshot-repo": {Name: "snapshot-repo"}}},
-			spec: meta.VMSpec{VMName: "vk-ns-demo-0", Image: "snapshot-repo:latest", Mode: "clone"},
+			spec: meta.VMSpec{VMName: "vk-ns.demo-0", Image: "snapshot-repo:latest", Mode: "clone"},
 		},
 	}
 	for _, tt := range tests {
@@ -243,8 +243,8 @@ func TestCreatePodInvalidatesForkSnapshot(t *testing.T) {
 			if err := p.CreatePod(t.Context(), pod); err != nil {
 				t.Fatalf("create: %v", err)
 			}
-			if len(tt.rt.snapshotRemoveCalls) != 1 || tt.rt.snapshotRemoveCalls[0] != "fork-vk-ns-demo-0" {
-				t.Fatalf("SnapshotRemoveIfExists calls = %v, want [fork-vk-ns-demo-0]", tt.rt.snapshotRemoveCalls)
+			if len(tt.rt.snapshotRemoveCalls) != 1 || tt.rt.snapshotRemoveCalls[0] != "fork-vk-ns.demo-0" {
+				t.Fatalf("SnapshotRemoveIfExists calls = %v, want [fork-vk-ns.demo-0]", tt.rt.snapshotRemoveCalls)
 			}
 		})
 	}
@@ -254,7 +254,7 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	p := newTestProvider(t)
 
 	podB := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "registry.example/cocoon/ubuntu:24.04",
 		Mode:   "run",
 		OS:     "linux",
@@ -264,7 +264,7 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	podA.UID = "a"
 
 	rt := &fakeRuntime{
-		runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"},
+		runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns.demo-0"},
 		runHook: func() {
 			p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "stale predecessor")
 		},
@@ -286,7 +286,7 @@ func TestCreatePodDoesNotReclaimSupersededIncarnationAfterBringUp(t *testing.T) 
 	p := newTestProvider(t)
 
 	podA := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "registry.example/cocoon/ubuntu:24.04",
 		Mode:   "run",
 		OS:     "linux",
@@ -296,7 +296,7 @@ func TestCreatePodDoesNotReclaimSupersededIncarnationAfterBringUp(t *testing.T) 
 	podB.UID = "b"
 
 	p.Runtime = &fakeRuntime{
-		runVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"},
+		runVM: &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"},
 		runHook: func() {
 			p.trackPod(podB, nil)
 		},
@@ -324,7 +324,7 @@ func TestCreatePodDoesNotReclaimSupersededIncarnationAfterBringUp(t *testing.T) 
 }
 
 func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
@@ -333,10 +333,10 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 	client := fake.NewSimpleClientset(podB)
 	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))
 	p.Clientset = client
-	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: vm.StateRunning}}
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0", State: vm.StateRunning}}
 	p.trackPod(podA, nil)
 
-	if p.applyRuntime(t.Context(), podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}) {
+	if p.applyRuntime(t.Context(), podA, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"}) {
 		t.Fatal("runtime write accepted after the API pod incarnation changed")
 	}
 	got, err := client.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
@@ -362,15 +362,15 @@ func TestApplyRuntimeRejectsRecreatedPodAtAPIFence(t *testing.T) {
 }
 
 func TestUpdatePodRoutesARecreatedPodThroughCreate(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(podB)
-	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: vm.StateRunning}}
-	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0", State: vm.StateRunning}}
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 
 	if err := p.UpdatePod(t.Context(), podB); err != nil {
 		t.Fatalf("update with the successor: %v", err)
@@ -395,14 +395,14 @@ func TestUpdatePodRoutesARecreatedPodThroughCreate(t *testing.T) {
 }
 
 func TestApplyRuntimeKeepsTheBindingWhenThePodIsGone(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	pod.UID = "a"
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset()
 	p.trackPod(pod, nil)
 
-	if !p.applyRuntime(t.Context(), pod, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}) {
+	if !p.applyRuntime(t.Context(), pod, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"}) {
 		t.Fatal("runtime write dropped the binding because the API pod was already deleted")
 	}
 	if bound := p.vmForPod("ns", "demo-0"); bound == nil || bound.ID != "vmid-a" {
@@ -412,13 +412,13 @@ func TestApplyRuntimeKeepsTheBindingWhenThePodIsGone(t *testing.T) {
 
 func TestDetachIncarnationKeepsSuccessorBinding(t *testing.T) {
 	p := newTestProvider(t)
-	podB := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podB := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podB.UID = "b"
-	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 
-	p.detachIncarnation(meta.PodKey("ns", "demo-0"), "a", &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.detachIncarnation(meta.PodKey("ns", "demo-0"), "a", &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-b" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "vmid-b" {
 		t.Errorf("name index = %#v, want the successor's vmid-b", got)
 	}
 	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-b" {
@@ -432,7 +432,7 @@ func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "registry.example/cocoon/ubuntu:24.04",
 		Mode:   "run",
 		OS:     "linux",
@@ -445,7 +445,7 @@ func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	}
 
 	rt.runErr = nil
-	rt.runVM = &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0"}
+	rt.runVM = &vm.VM{ID: "vmid-main", Name: "vk-ns.demo-0"}
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("retry create: %v", err)
 	}
@@ -459,19 +459,19 @@ func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 
 func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 	rt := &fakeRuntime{
-		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"},
+		inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns.demo-0"},
 		snapshots: map[string]*vm.Snapshot{
-			"fork-vk-ns-demo-0": {Name: "fork-vk-ns-demo-0"},
+			"fork-vk-ns.demo-0": {Name: "fork-vk-ns.demo-0"},
 		},
 	}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:   "vk-ns-demo-1",
+		VMName:   "vk-ns.demo-1",
 		Image:    "snapshot-repo:latest",
 		Mode:     "clone",
-		ForkFrom: "vk-ns-demo-0",
+		ForkFrom: "vk-ns.demo-0",
 	})
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
@@ -479,22 +479,22 @@ func TestCreatePodForkFromReusesExistingSnapshot(t *testing.T) {
 	if rt.snapshotSaveCount != 0 {
 		t.Fatalf("SnapshotSave should be skipped when snapshot exists, got count=%d", rt.snapshotSaveCount)
 	}
-	if rt.cloned == nil || rt.cloned.From != "fork-vk-ns-demo-0" {
-		t.Fatalf("clone source = %q, want fork-vk-ns-demo-0", rt.cloned.From)
+	if rt.cloned == nil || rt.cloned.From != "fork-vk-ns.demo-0" {
+		t.Fatalf("clone source = %q, want fork-vk-ns.demo-0", rt.cloned.From)
 	}
 }
 
 func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
-	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns.demo-0"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:   "vk-ns-demo-2",
+		VMName:   "vk-ns.demo-2",
 		Image:    "https://registry.example.org/windows/win11",
 		Mode:     "run",
 		OS:       "windows",
-		ForkFrom: "vk-ns-demo-0",
+		ForkFrom: "vk-ns.demo-0",
 	})
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
@@ -505,8 +505,8 @@ func TestCreatePodForkFromOverridesRunMode(t *testing.T) {
 	if rt.cloned == nil {
 		t.Fatalf("Runtime.Clone was not called")
 	}
-	if rt.cloned.From != "fork-vk-ns-demo-0" {
-		t.Fatalf("clone source = %q, want fork-vk-ns-demo-0", rt.cloned.From)
+	if rt.cloned.From != "fork-vk-ns.demo-0" {
+		t.Fatalf("clone source = %q, want fork-vk-ns.demo-0", rt.cloned.From)
 	}
 }
 
@@ -516,7 +516,7 @@ func TestCreatePodCloneFromDirAnnotationDispatches(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "ignored-when-from-dir-set",
 		Mode:   "clone",
 	})
@@ -549,7 +549,7 @@ func TestCreatePodCloneFromDirAnnotationConflictsWithRunMode(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "ubuntu-22.04",
 		Mode:   "run",
 	})
@@ -564,15 +564,15 @@ func TestCreatePodCloneFromDirAnnotationConflictsWithRunMode(t *testing.T) {
 }
 
 func TestCreatePodCloneFromDirAnnotationConflictsWithForkFrom(t *testing.T) {
-	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns-demo-0"}}
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "source-vm-id", Name: "vk-ns.demo-0"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:   "vk-ns-demo-1",
+		VMName:   "vk-ns.demo-1",
 		Image:    "snap:latest",
 		Mode:     "clone",
-		ForkFrom: "vk-ns-demo-0",
+		ForkFrom: "vk-ns.demo-0",
 	})
 	pod.Annotations[meta.AnnotationCloneFromDir] = "/snaps/foo"
 
@@ -590,7 +590,7 @@ func TestCreatePodCloneFromDirAnnotationRejectsRelativePath(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "ignored",
 		Mode:   "clone",
 	})
@@ -607,7 +607,7 @@ func TestCreatePodCloneFromDirAnnotationRejectsNonCanonicalPath(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "ignored",
 		Mode:   "clone",
 	})
@@ -631,7 +631,7 @@ func TestCreatePodCloneFromDirAnnotationWhitespaceTreatedAsAbsent(t *testing.T) 
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snap-x:latest",
 		Mode:   "clone",
 	})
@@ -657,7 +657,7 @@ func TestCreatePodCloneFromDirRuntimeFailureSurfacesError(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "ignored",
 		Mode:   "clone",
 	})
@@ -681,7 +681,7 @@ func TestCreatePodRunMode(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-toolbox",
+		VMName: "vk-ns.toolbox",
 		Image:  "ubuntu-22.04",
 		Mode:   "run",
 	})
@@ -719,7 +719,7 @@ func TestCreatePodRunModeBurstableCPUPolicy(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-burst",
+		VMName: "vk-ns.burst",
 		Image:  "ubuntu-22.04",
 		Mode:   "run",
 	})
@@ -749,7 +749,7 @@ func TestCreatePodCloneModePassesCPUPolicy(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-clone-policy",
+		VMName: "vk-ns.clone-policy",
 		Image:  "golden",
 	})
 	pod.Spec.Containers = []corev1.Container{{
@@ -811,7 +811,7 @@ func TestPodCPUPolicy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-policy"})
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.policy"})
 			pod.Spec.Containers = []corev1.Container{{Resources: tt.resources}}
 			if policy := podCPUPolicy(pod); policy != tt.want {
 				t.Errorf("podCPUPolicy = %+v, want %+v", policy, tt.want)
@@ -905,7 +905,7 @@ func TestCreatePodCloneModePropagatesBackend(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-fc",
+		VMName:  "vk-ns.demo-fc",
 		Image:   "snapshot-repo:latest",
 		Mode:    "clone",
 		Backend: "firecracker",
@@ -935,7 +935,7 @@ func TestCreatePodCloneModeRejectsBackendMismatch(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-fc",
+		VMName:  "vk-ns.demo-fc",
 		Image:   "snapshot-repo:latest",
 		Mode:    "clone",
 		Backend: "firecracker",
@@ -955,7 +955,7 @@ func TestCreatePodRunModePropagatesBackend(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-fc-run",
+		VMName:  "vk-ns.fc-run",
 		Image:   "ghcr.io/x/y:1",
 		Mode:    "run",
 		Backend: "firecracker",
@@ -984,7 +984,7 @@ func TestCreatePodCloneModeWithTag(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snapshot-repo:v2",
 		Mode:   "clone",
 	})
@@ -1010,14 +1010,14 @@ func TestCreatePodCloneErrorPropagates(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-demo-0",
+		VMName: "vk-ns.demo-0",
 		Image:  "snapshot-repo:latest",
 		Mode:   "clone",
 	})
 	if err := p.CreatePod(t.Context(), pod); err == nil {
 		t.Fatalf("expected clone error to surface, got nil")
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
 	}
 }
@@ -1028,14 +1028,14 @@ func TestCreatePodRunErrorPropagates(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns-run",
+		VMName: "vk-ns.run",
 		Image:  "ubuntu-22.04",
 		Mode:   "run",
 	})
 	if err := p.CreatePod(t.Context(), pod); err == nil {
 		t.Fatalf("expected run error to surface, got nil")
 	}
-	if got := p.vmByName("vk-ns-run"); got != nil {
+	if got := p.vmByName("vk-ns.run"); got != nil {
 		t.Errorf("failed CreatePod should not track a VM, got %#v", got)
 	}
 }
@@ -1458,10 +1458,10 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:         "vk-ns-demo-0",
+		VMName:         "vk-ns.demo-0",
 		SnapshotPolicy: "never",
 	})
-	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns.demo-0"})
 	p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
@@ -1470,14 +1470,14 @@ func TestDeletePodRemovesAndForgetsVM(t *testing.T) {
 	if rt.removedID != "vmid-del" {
 		t.Errorf("Runtime.Remove got id=%q, want vmid-del", rt.removedID)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("DeletePod should forget the VM, still tracked as %#v", got)
 	}
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Errorf("DeletePod should drop the pod from the in-memory table")
 	}
 	gotSnapRemovals := slices.Sorted(slices.Values(rt.snapshotRemoveCalls))
-	wantSnapRemovals := slices.Sorted(slices.Values([]string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")}))
+	wantSnapRemovals := slices.Sorted(slices.Values([]string{"vk-ns.demo-0", forkSnapshotName("vk-ns.demo-0")}))
 	if !slices.Equal(gotSnapRemovals, wantSnapRemovals) {
 		t.Errorf("snapshot removes = %v, want %v", gotSnapRemovals, wantSnapRemovals)
 	}
@@ -1489,7 +1489,7 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 	p.Runtime = rt
 
 	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
-	meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false}.Apply(pod)
+	meta.VMSpec{VMName: "vk-ns.static", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.99"}.Apply(pod)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
@@ -1503,14 +1503,14 @@ func TestCreatePodUnmanagedAdoptsExistingVM(t *testing.T) {
 func TestStartupReconcileAdoptsAnUnmanagedPodFromItsAnnotations(t *testing.T) {
 	for _, local := range []bool{false, true} {
 		pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
-		meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+		meta.VMSpec{VMName: "vk-ns.cs-db", Mode: "static", Managed: false}.Apply(pod)
 		pod.Spec.NodeName = "cocoon-pool"
 		meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 		meta.HibernateState(true).Apply(pod)
 
 		rt := &fakeRuntime{}
 		if local {
-			rt.listVMs = []vm.VM{{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9"}}
+			rt.listVMs = []vm.VM{{ID: "extern-vm-1", Name: "vk-ns.cs-db", IP: "10.0.0.9"}}
 		}
 		p := newTestProvider(t)
 		p.NodeName = "cocoon-pool"
@@ -1537,12 +1537,12 @@ func TestStartupReconcileAdoptsAnUnmanagedPodFromItsAnnotations(t *testing.T) {
 }
 
 func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
 	meta.VMRuntime{VMID: "adopted-vmid", IP: "10.0.0.42"}.Apply(pod)
 
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "adopted-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+		listVMs: []vm.VM{{ID: "adopted-vmid", Name: "vk-ns.demo-0", IP: "10.0.0.42"}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -1552,7 +1552,7 @@ func TestStartupReconcileAdoptsAnnotatedPods(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "adopted-vmid" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "adopted-vmid" {
 		t.Fatalf("adopted VM not tracked, got %#v", got)
 	}
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err != nil {
@@ -1580,7 +1580,7 @@ func TestStartupReconcileOrphanDestroyRemovesUnmatchedVM(t *testing.T) {
 
 func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns.demo-0", IP: "10.0.0.42"}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -1591,7 +1591,7 @@ func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "live-vmid" {
 		t.Fatalf("orphan VM must be indexed by name so CreatePod can adopt it, got %#v", got)
 	}
 	if rt.removedID != "" {
@@ -1601,7 +1601,7 @@ func TestStartupReconcileOrphanAlertIndexesByName(t *testing.T) {
 
 func TestStartupReconcileOrphanKeepIndexesByName(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns.demo-0", IP: "10.0.0.42"}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -1612,17 +1612,17 @@ func TestStartupReconcileOrphanKeepIndexesByName(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "live-vmid" {
 		t.Fatalf("OrphanKeep must index by name, got %#v", got)
 	}
 }
 
 func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	pod.Spec.NodeName = "cocoon-pool"
 
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns-demo-0", IP: "10.0.0.42"}},
+		listVMs: []vm.VM{{ID: "live-vmid", Name: "vk-ns.demo-0", IP: "10.0.0.42"}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -1633,7 +1633,7 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "live-vmid" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "live-vmid" {
 		t.Fatalf("VM should be re-adopted by name, got %#v", got)
 	}
 	if rt.removedID != "" {
@@ -1649,7 +1649,7 @@ func TestStartupReconcileAdoptsByVMNameWhenAnnotationMissing(t *testing.T) {
 }
 
 func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone", Managed: true})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone", Managed: true})
 	pod.Spec.NodeName = "cocoon-pool"
 	meta.HibernateState(true).Apply(pod)
 
@@ -1671,7 +1671,7 @@ func TestStartupReconcileTracksHibernatedPodWithoutVM(t *testing.T) {
 }
 
 func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	cs := fake.NewSimpleClientset(pod)
 	cs.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("api server unreachable")
@@ -1680,7 +1680,7 @@ func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	p.Clientset = cs
-	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.evictPod(t.Context(), key, pod, "VMGone", "vm no longer exists")
@@ -1694,13 +1694,13 @@ func TestEvictPodKeepsStateOnAPIFailure(t *testing.T) {
 }
 
 func TestEvictPodIdempotentOnNotFound(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	cs := fake.NewSimpleClientset()
 
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	p.Clientset = cs
-	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.evictPod(t.Context(), key, pod, "VMGone", "vm no longer exists")
@@ -1715,12 +1715,12 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 
 func TestHandleVMGoneReleasesTrackedLeaseForSparseEvent(t *testing.T) {
 	releaser := &recordingLeaseReleaser{}
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{inspectErr: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.LeaseReleaser = releaser
-	p.trackPod(pod, &vm.VM{ID: "vmid-g", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-g", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
 
 	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-g"})
 
@@ -1738,11 +1738,11 @@ func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	meta.HibernateState(true).Apply(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-h", Name: "vk-ns.demo-0"})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-h", Name: "vk-ns.demo-0"})
 
 	if rt.inspectN != 0 {
 		t.Errorf("inspect must not be called for hibernating pod, got %d calls", rt.inspectN)
@@ -1753,18 +1753,18 @@ func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 }
 
 func TestHandleVMGoneSkippedWhenPodDeleting(t *testing.T) {
-	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0", State: "stopped"}}
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-d", Name: "vk-ns.demo-0", State: "stopped"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns.demo-0"})
 	p.mu.Lock()
 	p.deleting[meta.PodKey("ns", "demo-0")] = struct{}{}
 	p.mu.Unlock()
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns.demo-0"})
 
 	if len(rt.startCalls) != 0 {
 		t.Errorf("restart must not run for a pod mid-delete, got %v", rt.startCalls)
@@ -1778,7 +1778,7 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 	rt := &fakeRuntime{
 		inspectSeq: []fakeInspectStep{
 			{err: errors.New("exec: broken pipe")},
-			{vm: &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0", State: vm.StateRunning}},
+			{vm: &vm.VM{ID: "vmid-r", Name: "vk-ns.demo-0", State: vm.StateRunning}},
 		},
 	}
 	p := newTestProvider(t)
@@ -1786,10 +1786,10 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 	p.inlineInspectBaseDelay = 1 * time.Millisecond
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-r", Name: "vk-ns.demo-0"})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-r", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-r", Name: "vk-ns.demo-0"})
 
 	if got := p.vmForPod("ns", "demo-0"); got == nil {
 		t.Fatalf("running VM should still be tracked after inline retry recovery")
@@ -1812,9 +1812,9 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 	p.Runtime = rt
 	releaser := &recordingLeaseReleaser{}
 	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:01"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:01"})
 	p.inlineInspectBaseDelay = 1 * time.Millisecond
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 20 * time.Millisecond
@@ -1829,7 +1829,7 @@ func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
 		}
 	})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns.demo-0"})
 
 	select {
 	case <-evicted:
@@ -1850,9 +1850,9 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 	p.Runtime = rt
 	releaser := &recordingLeaseReleaser{}
 	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:02"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:02"})
 	p.inlineInspectBaseDelay = 1 * time.Millisecond
 	p.deferredRecheckInitialDelay = 5 * time.Millisecond
 	p.deferredRecheckMaxDelay = 10 * time.Millisecond
@@ -1873,7 +1873,7 @@ func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
 		}
 	})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 
 	select {
 	case got := <-reasons:
@@ -1897,9 +1897,9 @@ func TestHandleVMGoneDeferredTimeoutKeepsLeaseWhenRemovalFails(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-safe", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:03"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-safe", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:03"})
 	p.inlineInspectBaseDelay = time.Millisecond
 	p.deferredRecheckInitialDelay = time.Millisecond
 	p.deferredRecheckMaxDelay = 2 * time.Millisecond
@@ -1921,8 +1921,8 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-x", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-x", Name: "vk-ns.demo-0"})
 	p.deferredRecheckInitialDelay = 20 * time.Millisecond
 	p.deferredRecheckMaxDelay = 50 * time.Millisecond
 
@@ -1951,7 +1951,7 @@ func TestHandleVMGoneDeferredRecheckDedups(t *testing.T) {
 }
 
 func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
@@ -1959,16 +1959,16 @@ func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
 	p := newTestProvider(t)
 	client := fake.NewSimpleClientset(podB)
 	p.Clientset = client
-	base := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: "stopped"}}
+	base := &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0", State: "stopped"}}
 	p.Runtime = &recreatingRuntime{fakeRuntime: base, recreate: sync.OnceFunc(func() {
-		p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+		p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 	})}
-	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 	p.mu.Lock()
 	p.lastRestart["vmid-a"] = time.Now()
 	p.mu.Unlock()
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 
 	if base.removedID != "" {
 		t.Errorf("removed VM %q while the successor incarnation owns the pod key", base.removedID)
@@ -1987,7 +1987,7 @@ func TestHandleVMGoneCooldownKeepsRecreatedIncarnation(t *testing.T) {
 }
 
 func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
@@ -2004,20 +2004,20 @@ func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
 	})
 	p.Clientset = client
 	base := &fakeRuntime{
-		inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0", State: "stopped"},
-		runVM:     &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0", State: vm.StateRunning},
+		inspectVM: &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0", State: "stopped"},
+		runVM:     &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0", State: vm.StateRunning},
 	}
 	var replacementErr error
 	base.onRemove = func() {
 		replacementErr = p.UpdatePod(t.Context(), podB)
 	}
 	p.Runtime = base
-	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.trackPod(podA, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 	p.mu.Lock()
 	p.lastRestart["vmid-a"] = time.Now()
 	p.mu.Unlock()
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"})
 
 	if replacementErr == nil || !strings.Contains(replacementErr.Error(), "delete operation still in flight") {
 		t.Fatalf("replacement update error = %v, want in-flight deletion", replacementErr)
@@ -2037,13 +2037,13 @@ func TestHandleVMGoneRemovalFencesRecreatedIncarnation(t *testing.T) {
 }
 
 func TestCreatePodCreatesAfreshWhenTheIndexedVMIsGone(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
-	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0", State: vm.StateRunning}}
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	rt := &fakeRuntime{runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns.demo-0", State: vm.StateRunning}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.mu.Lock()
-	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-gone", Name: "vk-ns-demo-0"})
+	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-gone", Name: "vk-ns.demo-0"})
 	p.mu.Unlock()
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
@@ -2055,20 +2055,20 @@ func TestCreatePodCreatesAfreshWhenTheIndexedVMIsGone(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got == nil || got.ID != "vmid-new" {
 		t.Fatalf("tracked VM = %#v, want vmid-new", got)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-new" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "vmid-new" {
 		t.Fatalf("VM by name = %#v, want vmid-new", got)
 	}
 }
 
 func TestCreatePodRetriesWhenTheIndexedVMInspectIsInconclusive(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
-	rt := &fakeRuntime{inspectErr: errors.New("cocoon: transient"), runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0"}}
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	rt := &fakeRuntime{inspectErr: errors.New("cocoon: transient"), runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns.demo-0"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.inlineInspectBaseDelay = time.Millisecond
 	p.mu.Lock()
-	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-old", Name: "vk-ns-demo-0"})
+	p.indexOrphanByNameLocked(&vm.VM{ID: "vmid-old", Name: "vk-ns.demo-0"})
 	p.mu.Unlock()
 
 	if err := p.CreatePod(t.Context(), pod); err == nil {
@@ -2083,15 +2083,15 @@ func TestCreatePodRetriesWhenTheIndexedVMInspectIsInconclusive(t *testing.T) {
 	if _, err := p.GetPod(t.Context(), "ns", "demo-0"); err == nil {
 		t.Fatal("the failed create kept its provisional pod claim")
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-old" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "vmid-old" {
 		t.Fatalf("VM by name = %#v, want the index kept for the retry", got)
 	}
 }
 
 func TestCreatePodAdoptsTheIndexedVMWhileItLives(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
-	live := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", State: vm.StateRunning}
-	rt := &fakeRuntime{inspectVM: live, runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns-demo-0"}}
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Image: "registry.example/cocoon/ubuntu:24.04", Mode: "run"})
+	live := &vm.VM{ID: "vmid-live", Name: "vk-ns.demo-0", State: vm.StateRunning}
+	rt := &fakeRuntime{inspectVM: live, runVM: &vm.VM{ID: "vmid-new", Name: "vk-ns.demo-0"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset(pod)
@@ -2111,13 +2111,13 @@ func TestCreatePodAdoptsTheIndexedVMWhileItLives(t *testing.T) {
 }
 
 func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
 	p := newTestProvider(t)
-	vmA := &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}
-	vmB := &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"}
+	vmA := &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"}
+	vmB := &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"}
 	p.trackPod(podA, vmA)
 	key := meta.PodKey("ns", "demo-0")
 	p.mu.Lock()
@@ -2129,13 +2129,13 @@ func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
 	}
 	p.forgetPod("ns", "demo-0")
 
-	if got := p.vmByName("vk-ns-demo-0"); got == nil || got.ID != "vmid-b" {
+	if got := p.vmByName("vk-ns.demo-0"); got == nil || got.ID != "vmid-b" {
 		t.Fatalf("orphan by name = %#v, want vmid-b kept for adoption", got)
 	}
 }
 
 func TestEvictGoneIncarnationSkipsWhenSuccessorOwnsTheKey(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
@@ -2149,10 +2149,10 @@ func TestEvictGoneIncarnationSkipsWhenSuccessorOwnsTheKey(t *testing.T) {
 	})
 	p.Clientset = client
 	p.Runtime = &fakeRuntime{}
-	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 
 	key := meta.PodKey("ns", "demo-0")
-	p.evictGoneIncarnation(t.Context(), key, podA, &vm.VM{ID: "vmid-a", Name: "vk-ns-demo-0"}, "VMGone", "vm no longer exists")
+	p.evictGoneIncarnation(t.Context(), key, podA, &vm.VM{ID: "vmid-a", Name: "vk-ns.demo-0"}, "VMGone", "vm no longer exists")
 
 	if deletes != 0 {
 		t.Fatalf("apiserver deletes = %d, want none when a successor owns the key", deletes)
@@ -2169,12 +2169,12 @@ func TestEvictGoneIncarnationSkipsWhenSuccessorOwnsTheKey(t *testing.T) {
 }
 
 func TestReconcileRuntimeEndpointsReportsSupersededWhenPodIsGone(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	pod.UID = "a"
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset()
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
 
 	if p.reconcileRuntimeEndpoints(t.Context(), pod, "192.0.2.10") {
 		t.Error("a pod the apiserver no longer holds must report supersession")
@@ -2186,8 +2186,8 @@ func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Clientset = fake.NewSimpleClientset()
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns.demo-0"})
 	p.deferredRecheckInitialDelay = 5 * time.Second
 	p.deferredRecheckMaxDelay = 10 * time.Second
 
@@ -2219,8 +2219,8 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 
 	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
 
 	status, err := p.GetPodStatus(t.Context(), "ns", "demo-0")
 	if err != nil {
@@ -2236,11 +2236,11 @@ func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
 
 func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	p := newTestProvider(t)
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	client := fake.NewSimpleClientset(pod)
 	p.Clientset = client
-	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-adopt", Name: "vk-ns-demo-0", IP: "192.0.2.10", State: vm.StateRunning}}
-	p.trackPod(pod, &vm.VM{ID: "vmid-adopt", Name: "vk-ns-demo-0", IP: "192.0.2.10"})
+	p.Runtime = &fakeRuntime{inspectVM: &vm.VM{ID: "vmid-adopt", Name: "vk-ns.demo-0", IP: "192.0.2.10", State: vm.StateRunning}}
+	p.trackPod(pod, &vm.VM{ID: "vmid-adopt", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
 
 	var mu sync.Mutex
 	var seq []string
@@ -2288,7 +2288,7 @@ func TestCreatePodStaticToolboxPublishesReadyWithoutPostClone(t *testing.T) {
 		Mode:    cocoonv1.ToolboxModeStatic,
 		OS:      cocoonv1.OSWindows,
 		Backend: cocoonv1.BackendCloudHypervisor,
-	}, "vk-ns-cs-db", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	}, "vk-ns.cs-db", cocoonv1.SnapshotPolicyAlways).Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 	spec := meta.ParseVMSpec(pod)
 	if spec.Managed {
@@ -2329,7 +2329,7 @@ func TestCreateAndDeleteStaticMacosToolboxSkipTheMacosLifecycle(t *testing.T) {
 		Name: "mac",
 		Mode: cocoonv1.ToolboxModeStatic,
 		OS:   cocoonv1.OSMacos,
-	}, "vk-ns-cs-mac", cocoonv1.SnapshotPolicyAlways).Apply(pod)
+	}, "vk-ns.cs-mac", cocoonv1.SnapshotPolicyAlways).Apply(pod)
 	meta.VMRuntime{VMID: "extern-mac-1", IP: "10.0.0.12"}.Apply(pod)
 
 	if err := p.CreatePod(t.Context(), pod); err != nil {
@@ -2347,14 +2347,14 @@ func TestCreateAndDeleteStaticMacosToolboxSkipTheMacosLifecycle(t *testing.T) {
 }
 
 func TestHandleVMGoneLeavesAnUnmanagedVMAlone(t *testing.T) {
-	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", State: "stopped"}}
+	rt := &fakeRuntime{inspectVM: &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db", State: "stopped"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
-	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
-	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+	meta.VMSpec{VMName: "vk-ns.cs-db", Mode: "static", Managed: false}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db", IP: "10.0.0.9", State: vm.StateRunning})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db"})
+	p.handleVMGone(t.Context(), &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db"})
 	if len(rt.startCalls) != 0 || rt.removedID != "" {
 		t.Fatalf("the watcher acted on an unmanaged VM: starts=%v removed=%q", rt.startCalls, rt.removedID)
 	}
@@ -2370,7 +2370,7 @@ func TestEnsureForkSnapshotAbandonsTheFlightOnCallerCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.ensureForkSnapshot(ctx, "vk-ns-main-0")
+		_, err := p.ensureForkSnapshot(ctx, "vk-ns.main-0")
 		done <- err
 	}()
 	<-entered
@@ -2391,7 +2391,7 @@ func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.ensureForkSnapshot(t.Context(), "vk-ns-main-0")
+		_, err := p.ensureForkSnapshot(t.Context(), "vk-ns.main-0")
 		done <- err
 	}()
 	<-entered
@@ -2823,7 +2823,7 @@ func newWedgedForkFixture(t *testing.T) (*Provider, *fakeRuntime, chan struct{},
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.mu.Lock()
-	p.vmsByName["vk-ns-main-0"] = &vm.VM{ID: "vmid-main", Name: "vk-ns-main-0", State: vm.StateRunning}
+	p.vmsByName["vk-ns.main-0"] = &vm.VM{ID: "vmid-main", Name: "vk-ns.main-0", State: vm.StateRunning}
 	p.mu.Unlock()
 	return p, rt, entered, release
 }

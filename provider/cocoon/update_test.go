@@ -69,11 +69,11 @@ func TestHibernateDropsNICOnCHWindows(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}
 
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
 		t.Fatalf("hibernate: %v", err)
@@ -106,11 +106,11 @@ func TestHibernateSkipsNICDropOnNonCHWindows(t *testing.T) {
 			p.Runtime = rt
 
 			pod := newPodWithSpec(meta.VMSpec{
-				VMName:  "vk-ns-demo-0",
+				VMName:  "vk-ns.demo-0",
 				Backend: tc.backend,
 				OS:      tc.os,
 			})
-			v := &vm.VM{ID: "vmid-x", Name: "vk-ns-demo-0"}
+			v := &vm.VM{ID: "vmid-x", Name: "vk-ns.demo-0"}
 
 			if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
 				t.Fatalf("hibernate: %v", err)
@@ -134,7 +134,7 @@ func TestHibernateClearsVMIDBeforeRemove(t *testing.T) {
 		atRemove = maps.Clone(pod.Annotations)
 	}
 
-	v := &vm.VM{ID: "vmid-pre", Name: "vk-ns-demo-0"}
+	v := &vm.VM{ID: "vmid-pre", Name: "vk-ns.demo-0"}
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 	rt := &fakeRuntime{removeErr: rmErr}
 	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
 
-	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
+	v := &vm.VM{ID: "vmid-live", Name: "vk-ns.demo-0", IP: "10.0.0.7"}
 	err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v)
 	if !errors.Is(err, rmErr) {
 		t.Fatalf("hibernate must wrap removeErr, got %v", err)
@@ -172,17 +172,17 @@ func TestHibernateRestoresVMIDOnRemoveFailure(t *testing.T) {
 }
 
 func TestHibernateRemoveFailureKeepsAStaticNICsFreshIP(t *testing.T) {
-	fresh := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.8", MAC: "02:00:00:00:00:02", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.8"}}}}
+	fresh := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", IP: "10.0.0.8", MAC: "02:00:00:00:00:02", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.8"}}}}
 	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: fresh}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
 	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.7"}}}}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01", NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.7"}}}}
 	p.trackPod(pod, v)
 
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
@@ -197,16 +197,16 @@ func TestHibernateRemoveFailureKeepsAStaticNICsFreshIP(t *testing.T) {
 }
 
 func TestHibernateRemoveFailureRepublishesTheLiveNICNotTheReleasedIP(t *testing.T) {
-	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", MAC: "02:00:00:00:00:02"}}
+	rt := &fakeRuntime{removeErr: errors.New("remove boom"), inspectVM: &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", MAC: "02:00:00:00:00:02"}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
 	meta.VMRuntime{VMID: "vmid-1", IP: "10.0.0.7"}.Apply(pod)
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01"}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", IP: "10.0.0.7", MAC: "02:00:00:00:00:01"}
 	p.trackPod(pod, v)
 
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
@@ -228,7 +228,7 @@ func TestHibernateKeepsVMIDOnSaveFailure(t *testing.T) {
 	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom")}
 	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
 
-	v := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0", IP: "10.0.0.7"}
+	v := &vm.VM{ID: "vmid-live", Name: "vk-ns.demo-0", IP: "10.0.0.7"}
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err == nil {
 		t.Fatalf("hibernate must fail when SnapshotSave fails")
 	}
@@ -244,11 +244,11 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	v := &vm.VM{ID: "vmid-3", Name: "vk-ns-demo-0"}
+	v := &vm.VM{ID: "vmid-3", Name: "vk-ns.demo-0"}
 
 	err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v)
 	if err == nil {
@@ -266,18 +266,18 @@ func TestHibernateFailsOnNICDropGenericErr(t *testing.T) {
 }
 
 func TestResolveWakeSourceUsesLocalSnapshot(t *testing.T) {
-	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{"vk-ns-demo-0": {Name: "vk-ns-demo-0"}}}
+	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{"vk-ns.demo-0": {Name: "vk-ns.demo-0"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
-	if src.localName != "vk-ns-demo-0" || src.dir != "" {
-		t.Errorf("source = %+v, want local snapshot vk-ns-demo-0", src)
+	if src.localName != "vk-ns.demo-0" || src.dir != "" {
+		t.Errorf("source = %+v, want local snapshot vk-ns.demo-0", src)
 	}
-	if src.snapshot == nil || src.snapshot.Name != "vk-ns-demo-0" {
+	if src.snapshot == nil || src.snapshot.Name != "vk-ns.demo-0" {
 		t.Errorf("snapshot metadata = %+v, want the local snapshot", src.snapshot)
 	}
 	src.release()
@@ -291,7 +291,7 @@ func TestResolveWakeSourceErrorsWhenLocalMissingAndNoPuller(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	if _, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0"); err == nil {
+	if _, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0"); err == nil {
 		t.Fatal("expected error when local snapshot is missing and no Puller is set")
 	}
 }
@@ -437,11 +437,11 @@ func TestHibernateReleasesLeaseBeforeNICDrop(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}
 
 	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), v); err != nil {
 		t.Fatalf("hibernate: %v", err)
@@ -460,11 +460,11 @@ func TestHibernateReleaseFailureDoesNotBlock(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err != nil {
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err != nil {
 		t.Fatalf("hibernate must proceed past a failed release: %v", err)
 	}
 	if rt.removedID != "vmid-1" {
@@ -478,11 +478,11 @@ func TestHibernateSkipsReleaseOnNonDropNIC(t *testing.T) {
 	p.Runtime = rt
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSLinux),
 	})
-	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err != nil {
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
 	if len(rt.execCalls) != 0 {
@@ -497,11 +497,11 @@ func TestHibernateRollbackRenews(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err == nil {
 		t.Fatal("hibernate should fail on snapshot save error")
 	}
 	got := execArgvs(rt)
@@ -520,11 +520,11 @@ func TestHibernateRenewsWhenNICDropFails(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err == nil {
 		t.Fatal("hibernate should fail when the NIC drop fails")
 	}
 	got := execArgvs(rt)
@@ -543,11 +543,11 @@ func TestHibernateRenewsEvenWhenReleaseVerdictUnknown(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+	if err := p.hibernate(t.Context(), pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err == nil {
 		t.Fatal("hibernate should fail when the NIC drop fails")
 	}
 	got := execArgvs(rt)
@@ -566,11 +566,11 @@ func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
 	rt.onExec = func() { cancel() }
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(ctx, pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+	if err := p.hibernate(ctx, pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err == nil {
 		t.Fatal("hibernate should fail when the NIC drop fails")
 	}
 	got := execArgvs(rt)
@@ -587,11 +587,11 @@ func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
 	p.Clientset = fake.NewSimpleClientset()
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	if err := p.hibernate(ctx, pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"}); err == nil {
+	if err := p.hibernate(ctx, pod, meta.ParseVMSpec(pod), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"}); err == nil {
 		t.Fatal("hibernate should fail on snapshot save error")
 	}
 	if len(rt.netResizeCalls) != 2 || rt.netResizeCalls[1].target != 1 {
@@ -605,10 +605,10 @@ func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
 func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
 	p := newTestProvider(t)
 	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.10")
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns.demo-0"})
 
-	stale := &vm.VM{ID: "vmid-old", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"}
+	stale := &vm.VM{ID: "vmid-old", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff"}
 	if ip := p.resolveVMIP("ns", "demo-0", stale); ip != "" {
 		t.Errorf("stale VM's lease resolved to %q, want refused", ip)
 	}
@@ -620,7 +620,7 @@ func TestResolveVMIPRefusesWriteToSwappedVM(t *testing.T) {
 func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
 	p, pod, _ := newDropNICWakeFixture(t, 500*time.Millisecond, 10*time.Millisecond)
 	rt := p.Runtime.(*fakeRuntime)
-	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0", IP: "10.0.0.9"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns.demo-0", IP: "10.0.0.9"})
 
 	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
 		t.Fatal("waiter armed for a replaced VM must fail, not adopt the successor")
@@ -667,11 +667,11 @@ func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
 	p.wakeRenewNudgeDelay = 20 * time.Millisecond
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSLinux),
 	})
-	p.trackPod(pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"})
 
 	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-1") {
 		t.Fatal("no IP should time out")
@@ -701,9 +701,9 @@ func TestUpdatePodLeavesAnUnmanagedVMAlone(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
-	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
+	meta.VMSpec{VMName: "vk-ns.cs-db", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
-	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db", IP: "10.0.0.9", State: vm.StateRunning})
 	meta.HibernateState(true).Apply(pod)
 
 	if err := p.UpdatePod(t.Context(), pod); err != nil {
@@ -715,7 +715,7 @@ func TestUpdatePodLeavesAnUnmanagedVMAlone(t *testing.T) {
 }
 
 func TestWakeClearsStalePostCloneMarker(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -736,7 +736,7 @@ func TestWakeClearsStalePostCloneMarker(t *testing.T) {
 }
 
 func TestWakeSupersededSkipsNotify(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	podA := newPodWithSpec(meta.VMSpec{VMName: vmName, Mode: "clone"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
@@ -764,9 +764,9 @@ func TestWakeSupersededSkipsNotify(t *testing.T) {
 
 func TestUpdatePodReadsPodBeforeTracking(t *testing.T) {
 	p := newTestProvider(t)
-	base := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Backend: string(cocoonv1.BackendCloudHypervisor)})
+	base := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Backend: string(cocoonv1.BackendCloudHypervisor)})
 	key := meta.PodKey(base.Namespace, base.Name)
-	p.trackPod(base.DeepCopy(), &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0"})
+	p.trackPod(base.DeepCopy(), &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0"})
 
 	hammerPodAnnotation(t, p, key)
 	for range 200 {
@@ -778,7 +778,7 @@ func TestUpdatePodReadsPodBeforeTracking(t *testing.T) {
 
 func TestGetPodsReturnsCopies(t *testing.T) {
 	p := newTestProvider(t)
-	base := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Backend: string(cocoonv1.BackendCloudHypervisor)})
+	base := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Backend: string(cocoonv1.BackendCloudHypervisor)})
 	key := meta.PodKey(base.Namespace, base.Name)
 	p.trackPod(base.DeepCopy(), nil)
 
@@ -795,7 +795,7 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 func TestHibernateStopsTheReadinessProbe(t *testing.T) {
 	rt := &fakeRuntime{}
 	p, pod := newHibernateFixture(t, rt, "vmid-1", "10.0.0.5")
-	v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "10.0.0.5", State: vm.StateRunning}
+	v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", IP: "10.0.0.5", State: vm.StateRunning}
 	p.trackPod(pod, v)
 	p.startProbeIfEnabled(pod)
 
@@ -838,7 +838,7 @@ func newHibernateFixture(t *testing.T, rt *fakeRuntime, vmID, ip string) (*Provi
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSLinux),
 	})
@@ -855,11 +855,11 @@ func newDropNICWakeFixture(t *testing.T, budget, interval time.Duration) (*Provi
 	p.wakeFreshIPInterval = interval
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName:  "vk-ns-demo-0",
+		VMName:  "vk-ns.demo-0",
 		Backend: string(cocoonv1.BackendCloudHypervisor),
 		OS:      string(cocoonv1.OSWindows),
 	})
-	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns-demo-0"}
+	v := &vm.VM{ID: "vmid-wake", Name: "vk-ns.demo-0"}
 	p.trackPod(pod, v)
 	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateCreating, "")
 	return p, pod, v
