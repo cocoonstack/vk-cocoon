@@ -22,8 +22,10 @@ import (
 const (
 	statsSampleTTL = 2 * time.Second
 
-	procStatIdleColumn   = 3
-	procStatIOWaitColumn = 4
+	procStatIdleColumn      = 3
+	procStatIOWaitColumn    = 4
+	procStatGuestColumn     = 8
+	procStatGuestNiceColumn = 9
 )
 
 // cgroupParent must match cocoon's cgroup_parent config; override via COCOON_CGROUP_PARENT when cocoon's does.
@@ -235,7 +237,7 @@ func readNodeCPUSeconds() float64 {
 func busyCPUSecondsFromStat(line string) float64 {
 	var total int64
 	for i, s := range strings.Fields(line)[1:] {
-		if i == procStatIdleColumn || i == procStatIOWaitColumn {
+		if i == procStatIdleColumn || i == procStatIOWaitColumn || i == procStatGuestColumn || i == procStatGuestNiceColumn {
 			continue
 		}
 		v, _ := strconv.ParseInt(s, 10, 64)

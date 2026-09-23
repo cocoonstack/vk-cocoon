@@ -105,3 +105,9 @@ func TestBusyCPUSecondsFromStatExcludesIdleAndIOWait(t *testing.T) {
 		t.Errorf("busy cpu seconds = %v, want 1.56 (user+nice+system+irq+softirq+steal over USER_HZ)", got)
 	}
 }
+
+func TestBusyCPUSecondsFromStatDoesNotCountGuestTimeTwice(t *testing.T) {
+	if got := busyCPUSecondsFromStat("cpu  100 20 30 5000 40 1 2 3 80 10"); got != 1.56 {
+		t.Errorf("busy cpu seconds = %v, want 1.56 with guest time already in user and nice", got)
+	}
+}
