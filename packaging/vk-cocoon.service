@@ -30,7 +30,6 @@ CPUWeight=1000
 # to "an IP was resolved == Ready", which is still correct but
 # weaker than a real end-to-end ping.
 AmbientCapabilities=CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target

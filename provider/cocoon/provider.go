@@ -66,7 +66,6 @@ const (
 	defaultDeferredRecheckInitialDelay = 1 * time.Second
 	defaultDeferredRecheckMaxDelay     = 30 * time.Second
 
-	// defaultDeferredRecheckBudget caps one recheck loop; on timeout the pod is evicted (VMInspectTimeout).
 	defaultDeferredRecheckBudget = 30 * time.Minute
 )
 
@@ -599,7 +598,7 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 			switch ev.Event {
 			case "DELETED":
 				p.handleVMGone(ctx, &ev.VM)
-			case "MODIFIED":
+			case "ADDED", "MODIFIED":
 				if ev.VM.State != vm.StateRunning {
 					p.handleVMGone(ctx, &ev.VM)
 				}
@@ -617,25 +616,25 @@ func (p *Provider) vmWatchLoop(ctx context.Context) {
 }
 
 // handleVMGone re-inspects before acting on a DELETED or stopped/error event, so a transient state cannot evict a live pod.
-func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
+func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) bool {
 	logger := log.WithFunc("Provider.handleVMGone")
 
 	affectedKey, affectedPod, trackedVM := p.podForVMMatch(eventVM.ID, eventVM.Name)
 	if affectedKey == "" || affectedPod == nil {
-		return
+		return false
 	}
 	trackedID := trackedVM.ID
 	if !meta.ParseVMSpec(affectedPod).Managed {
 		logger.Infof(ctx, "vm %s pod %s/%s is unmanaged, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		return
+		return false
 	}
 
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
 	if meta.ReadHibernateState(affectedPod) {
 		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		return
+		return false
 	}
 
 	p.mu.RLock()
@@ -644,7 +643,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 	if midDelete {
 		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
-		return
+		return false
 	}
 
 	inspected, err := p.inspectWithRetry(ctx, trackedID)
@@ -653,6 +652,10 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		logger.Infof(ctx, "vm %s confirmed gone, deleting pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		p.evictGoneIncarnation(ctx, affectedKey, affectedPod, trackedVM, "VMGone", "vm no longer exists")
+		if p.trackedPodMatches(affectedKey, affectedPod.UID) {
+			p.scheduleDeferredRecheck(trackedID)
+			return true
+		}
 
 	case err != nil:
 		// cocoon does not re-emit DELETED and probes only ping IPs, so a deferred recheck must settle a still-transient VM
@@ -660,6 +663,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		metrics.VMInspectTransientFailTotal.Inc()
 		p.scheduleDeferredRecheck(trackedID)
+		return true
 
 	case inspected.State == vm.StateRunning:
 		logger.Debugf(ctx, "vm %s still running after event, ignoring", trackedID)
@@ -674,14 +678,12 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 		p.mu.Unlock()
 		if !cooldownElapsed {
 			logger.Warnf(ctx, "vm %s state=%s, restart cooldown not elapsed, removing VM and evicting pod", trackedID, inspected.State)
-			p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
-			return
+			return p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartCooldown", "restart cooldown not elapsed")
 		}
 		logger.Infof(ctx, "vm %s state=%s, restarting", trackedID, inspected.State)
 		if startErr := p.Runtime.Start(ctx, trackedID); startErr != nil {
 			logger.Errorf(ctx, startErr, "restart vm %s failed, removing VM and evicting pod", trackedID)
-			p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartFailed", startErr.Error())
-			return
+			return p.removeThenEvict(ctx, inspected, affectedKey, affectedPod, "RestartFailed", startErr.Error())
 		}
 		if fresh, inspectErr := p.Runtime.Inspect(ctx, trackedID); inspectErr == nil {
 			p.updateTrackedVM(affectedPod.Namespace, affectedPod.Name, trackedID, func(v *vm.VM) {
@@ -689,22 +691,28 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) {
 			})
 		}
 	}
+	return false
 }
 
 // removeThenEvict keeps the pod when the VM remove fails: evicting would orphan the live VM and collide on recreate.
-func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) {
+func (p *Provider) removeThenEvict(ctx context.Context, v *vm.VM, key string, pod *corev1.Pod, reason, message string) bool {
 	logger := log.WithFunc("Provider.removeThenEvict")
 	if !p.claimDeletingIncarnation(key, pod.UID, v.ID) {
 		logger.Infof(ctx, "vm %s tracking changed before %s eviction of pod %s/%s, skipping",
 			v.ID, reason, pod.Namespace, pod.Name)
-		return
+		return false
 	}
 	defer p.finishDeleting(key)
 	if err := p.removeVM(ctx, v); err != nil {
 		logger.Errorf(ctx, err, "remove vm %s (%s), keeping pod for investigation", v.ID, reason)
-		return
+		return false
 	}
 	p.evictPod(ctx, key, pod, reason, message)
+	if p.trackedPodMatches(key, pod.UID) {
+		p.scheduleDeferredRecheck(v.ID)
+		return true
+	}
+	return false
 }
 
 func (p *Provider) evictGoneIncarnation(ctx context.Context, key string, pod *corev1.Pod, v *vm.VM, reason, message string) {
@@ -777,21 +785,27 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			logger.Infof(ctx, "deferred recheck: vm %s confirmed gone, evicting pod %s/%s",
 				vmID, pod.Namespace, pod.Name)
 			p.evictGoneIncarnation(ctx, key, pod, tracked, "VMGone", "vm no longer exists")
-			return
+			if !p.trackedPodMatches(key, pod.UID) {
+				return
+			}
+			delay = min(delay*2, maxDelay)
 		case err != nil:
 			if time.Now().After(deadline) {
 				logger.Warnf(ctx, "deferred recheck: vm %s inspect unresolved after %s, removing before eviction of pod %s/%s",
 					vmID, budget, pod.Namespace, pod.Name)
-				p.removeThenEvict(ctx, tracked, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget")
-				return
+				if !p.removeThenEvict(ctx, tracked, key, pod, "VMInspectTimeout", "vm inspect did not resolve within budget") {
+					return
+				}
 			}
 			delay = min(delay*2, maxDelay)
 		case v.State != vm.StateRunning:
 			// a synthetic event keeps the restart-cooldown bookkeeping in one place
 			logger.Infof(ctx, "deferred recheck: vm %s non-running (state=%s), replaying event",
 				vmID, v.State)
-			p.handleVMGone(ctx, v)
-			return
+			if !p.handleVMGone(ctx, v) {
+				return
+			}
+			delay = min(delay*2, maxDelay)
 		default:
 			return
 		}

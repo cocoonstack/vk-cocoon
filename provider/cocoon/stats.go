@@ -19,7 +19,14 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-const statsSampleTTL = 2 * time.Second
+const (
+	statsSampleTTL = 2 * time.Second
+
+	procStatIdleColumn      = 3
+	procStatIOWaitColumn    = 4
+	procStatGuestColumn     = 8
+	procStatGuestNiceColumn = 9
+)
 
 // cgroupParent must match cocoon's cgroup_parent config; override via COCOON_CGROUP_PARENT when cocoon's does.
 var cgroupParent = sync.OnceValue(func() string {
@@ -222,14 +229,21 @@ func readNodeCPUSeconds() float64 {
 		if !strings.HasPrefix(line, "cpu ") {
 			continue
 		}
-		var total int64
-		for _, s := range strings.Fields(line)[1:] {
-			v, _ := strconv.ParseInt(s, 10, 64)
-			total += v
-		}
-		return float64(total) / 100 // USER_HZ
+		return busyCPUSecondsFromStat(line)
 	}
 	return 0
+}
+
+func busyCPUSecondsFromStat(line string) float64 {
+	var total int64
+	for i, s := range strings.Fields(line)[1:] {
+		if i == procStatIdleColumn || i == procStatIOWaitColumn || i == procStatGuestColumn || i == procStatGuestNiceColumn {
+			continue
+		}
+		v, _ := strconv.ParseInt(s, 10, 64)
+		total += v
+	}
+	return float64(total) / 100 // USER_HZ
 }
 
 func readNodeMemoryWorkingSet() int64 {

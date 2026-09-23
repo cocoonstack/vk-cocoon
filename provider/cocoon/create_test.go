@@ -2406,6 +2406,74 @@ func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
 	}
 }
 
+func TestVMWatchLoopRestartsAStoppedVMSeenAtStreamStart(t *testing.T) {
+	stopped := &vm.VM{ID: "vmid-s", Name: "vk-ns.demo-0", State: "stopped"}
+	rt := &fakeRuntime{inspectVM: stopped, events: []vm.VMEvent{{Event: "ADDED", VM: *stopped}}}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-s", Name: "vk-ns.demo-0"})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		p.vmWatchLoop(ctx)
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rt.started()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got := rt.started(); !slices.Equal(got, []string{"vmid-s"}) {
+		t.Fatalf("started VMs = %v, want the stopped VM restarted from its ADDED event", got)
+	}
+}
+
+func TestHandleVMGoneRetriesEvictionUntilTheAPIRecovers(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	cs := fake.NewSimpleClientset(pod)
+	var deletes atomic.Int32
+	cs.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if deletes.Add(1) <= 3 {
+			return true, nil, errors.New("api server unreachable")
+		}
+		return false, nil, nil
+	})
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	p.Clientset = cs
+	p.deferredRecheckInitialDelay = 5 * time.Millisecond
+	p.deferredRecheckMaxDelay = 20 * time.Millisecond
+	p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
+
+	evicted := make(chan struct{}, 1)
+	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
+		if np.Status.Phase == corev1.PodFailed {
+			select {
+			case evicted <- struct{}{}:
+			default:
+			}
+		}
+	})
+
+	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
+
+	select {
+	case <-evicted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("eviction did not resume after the API recovered")
+	}
+	if got := p.vmForPod("ns", "demo-0"); got != nil {
+		t.Fatalf("pod still tracked after the API recovered: %#v", got)
+	}
+	if n := deletes.Load(); n < 4 {
+		t.Fatalf("deletes = %d, want the eviction retried past the inline budget", n)
+	}
+}
+
 type fakeInspectStep struct {
 	vm  *vm.VM
 	err error
@@ -2468,6 +2536,7 @@ type fakeRuntime struct {
 	netResizeNeedsStart bool
 
 	startCalls []string
+	events     []vm.VMEvent
 
 	mu              sync.Mutex
 	snapshotImports []string
@@ -2729,9 +2798,19 @@ func (f *fakeRuntime) Logs(_ context.Context, vmID string, tail int) (io.ReadClo
 }
 
 func (f *fakeRuntime) WatchEvents(_ context.Context) (<-chan vm.VMEvent, error) {
-	ch := make(chan vm.VMEvent)
+	ch := make(chan vm.VMEvent, len(f.events))
+	for _, ev := range f.events {
+		ch <- ev
+	}
+	f.events = nil
 	close(ch)
 	return ch, nil
+}
+
+func (f *fakeRuntime) started() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.startCalls)
 }
 
 func (f *fakeRuntime) registerSnapshot(name string) {
@@ -2747,12 +2826,6 @@ func (f *fakeRuntime) staleCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.staleCreateCalls)
-}
-
-func (f *fakeRuntime) started() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.startCalls)
 }
 
 type recreatingRuntime struct {
