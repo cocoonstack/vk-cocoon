@@ -272,11 +272,11 @@ func readProcStat(pid int) string {
 
 // procStatFields splits a /proc/<pid>/stat line after the parenthesized comm; proc(5) field N lands at index N-3.
 func procStatFields(s string) []string {
-	idx := strings.LastIndex(s, ")")
-	if idx < 0 || idx+2 >= len(s) {
+	_, after, found := strings.CutLast(s, ")")
+	if !found {
 		return nil
 	}
-	return strings.Fields(s[idx+2:])
+	return strings.Fields(after)
 }
 
 func parseProcStatCPUSeconds(s string) float64 {
