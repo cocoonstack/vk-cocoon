@@ -2,6 +2,8 @@ package cocoon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -22,25 +24,33 @@ func (p *Provider) removeSnapshotDetached(ctx context.Context, name string) {
 	}
 }
 
-// saveAndPushSnapshot saves and pushes a snapshot; errors are logged and counted but not returned since the delete path treats them as non-fatal.
-func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *vm.VM, tag, image string) {
-	logger := log.WithFunc("Provider.saveAndPushSnapshot")
+// saveAndPushSnapshot saves and pushes a running VM's snapshot; a VM that is not running has no live state to capture and is skipped.
+func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *vm.VM, tag, image string) error {
+	current, err := p.Runtime.Inspect(ctx, v.ID)
+	switch {
+	case errors.Is(err, vm.ErrVMNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("inspect vm %s: %w", v.ID, err)
+	case current.State != vm.StateRunning:
+		log.WithFunc("Provider.saveAndPushSnapshot").Warnf(ctx, "vm %s is %s, deleting it without a snapshot", v.ID, current.State)
+		return nil
+	}
 
 	saveStart := time.Now()
 	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
-		logger.Errorf(ctx, err, "snapshot save %s", v.Name)
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
-		return
+		return fmt.Errorf("save snapshot %s: %w", v.Name, err)
 	}
 	metrics.SnapshotSaveDuration.WithLabelValues(pod.Namespace).Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 
 	pushStart := time.Now()
 	if err := p.Pusher.PushSnapshot(ctx, v.Name, "", tag, image); err != nil {
-		logger.Errorf(ctx, err, "push snapshot %s", v.Name)
 		metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-		return
+		return fmt.Errorf("push snapshot %s: %w", v.Name, err)
 	}
 	metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 	metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
+	return nil
 }
