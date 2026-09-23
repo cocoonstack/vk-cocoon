@@ -86,12 +86,17 @@ backoff from 1 s to 60 s, reset on successful connect). Normal stream
 closes (cocoon restart) use a fixed 2 s reconnect delay. When an event
 arrives:
 
-| Inspect result (after a `DELETED` or non-running `MODIFIED` event) | Action |
+| Inspect result (after a `DELETED` event, or an `ADDED` / `MODIFIED` event for a non-running VM) | Action |
 |---|---|
 | VM not found | `evictPod`: delete pod (phase=`Failed`, reason=`VMGone`) → operator recreates |
 | Inspect inconclusive (transient error) | Deferred recheck loop; on budget exhaustion (30 min) removes the VM and evicts the pod (phase=`Failed`, reason=`VMInspectTimeout`) |
 | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network); on failure removes the VM and evicts the pod (phase=`Failed`, reason=`RestartFailed`) |
 | state = running | False alarm — ignore |
+
+Every stream connect opens with an `ADDED` event per VM, so a VM that stopped
+while vk-cocoon was down is restarted or evicted the same way. When the pod
+delete of an eviction fails, the deferred recheck keeps retrying it under its
+backoff until the apiserver accepts it.
 
 A 30-second **restart cooldown** (`restartCooldown`) prevents tight
 restart loops when a VM keeps crashing. If the cooldown has not elapsed

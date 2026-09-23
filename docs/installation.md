@@ -18,9 +18,10 @@ The unit reads `/etc/cocoon/kubeconfig` for cluster credentials and
 `/etc/cocoon/vk-cocoon.env` for the [configuration](configuration.md)
 variables. It grants `AmbientCapabilities=CAP_NET_RAW` so the readiness
 probe can open an ICMP raw socket (see [Readiness probing](probes.md)).
-On Linux, transfer pipes grow toward 8 MiB. The packaged unit deliberately
-does not grant `CAP_SYS_RESOURCE`, so kernels with the default limit fall back
-to `/proc/sys/fs/pipe-max-size` without failing the transfer.
+The unit runs as root with the full capability bounding set: the cocoon CLI it
+execs creates network namespaces, TAP devices and TC redirects. On Linux,
+transfer pipes therefore grow to 8 MiB; a process without `CAP_SYS_RESOURCE`
+falls back to `/proc/sys/fs/pipe-max-size` without failing the transfer.
 
 ## Building from source
 
