@@ -193,12 +193,22 @@ func TestMacosVNCOffWithoutPassword(t *testing.T) {
 	}
 }
 
-func TestValidateMacosVNCPasswordRejectsControlChars(t *testing.T) {
-	if err := ValidateMacosVNCPassword("pw\n"); err == nil {
-		t.Fatal("control characters must be rejected")
-	}
-	if err := ValidateMacosVNCPassword(""); err != nil {
-		t.Fatalf("empty means VNC off, got %v", err)
+func TestValidateMacosVNCPasswordRejectsWhatOneHMPTokenCannotCarry(t *testing.T) {
+	for _, tc := range []struct {
+		pw string
+		ok bool
+	}{
+		{"", true},
+		{"s3cr3t!", true},
+		{"pw\n", false},
+		{"ab cd", false},
+		{"ab\tcd", false},
+		{`"abcd"`, false},
+		{"123456789", false},
+	} {
+		if err := ValidateMacosVNCPassword(tc.pw); (err == nil) != tc.ok {
+			t.Errorf("ValidateMacosVNCPassword(%q) = %v, want ok=%v", tc.pw, err, tc.ok)
+		}
 	}
 }
 
