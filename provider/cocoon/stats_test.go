@@ -43,7 +43,7 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 func TestStatsReportThePodStartTime(t *testing.T) {
 	p := newTestProvider(t)
 	started := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
-	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}}
+	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}}
 	p.statsAt = time.Now()
 
 	summary, err := p.GetStatsSummary(t.Context())
@@ -70,10 +70,10 @@ func TestStatsReportThePodStartTime(t *testing.T) {
 
 func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
 	p := newTestProvider(t)
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-static", Mode: "static", Managed: false})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.static", Mode: "static", Managed: false})
 	pod.Namespace = "ns"
 	pod.Name = "static"
-	p.trackPod(pod, &vm.VM{ID: "qemu-1", Name: "vk-ns-static"})
+	p.trackPod(pod, &vm.VM{ID: "qemu-1", Name: "vk-ns.static"})
 
 	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
 	if len(snaps) != 0 {
@@ -86,7 +86,7 @@ func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
 
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
-	seeded := provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns-demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}}
+	seeded := provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}}
 	p.stats, p.statsAt = seeded, time.Now()
 
 	s := p.CollectVMStats()

@@ -25,7 +25,7 @@ func TestDeletePodSnapshotRetention(t *testing.T) {
 	}{
 		{
 			name:          "forgotten vm removes snapshots",
-			wantSnapshots: []string{"vk-ns-demo-0", forkSnapshotName("vk-ns-demo-0")},
+			wantSnapshots: []string{"vk-ns.demo-0", forkSnapshotName("vk-ns.demo-0")},
 		},
 		{
 			name: "seat release keeps snapshots",
@@ -33,7 +33,7 @@ func TestDeletePodSnapshotRetention(t *testing.T) {
 		},
 		{
 			name:          "seat release with live vm removes only the vm",
-			track:         &vm.VM{ID: "live-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning},
+			track:         &vm.VM{ID: "live-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning},
 			keep:          true,
 			wantRemovedID: "live-vmid",
 		},
@@ -44,7 +44,7 @@ func TestDeletePodSnapshotRetention(t *testing.T) {
 			p := newTestProvider(t)
 			p.Runtime = rt
 
-			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 			if tt.keep {
 				meta.MarkKeepSnapshotOnDelete(pod)
 			}
@@ -76,8 +76,8 @@ func TestDeletePodLeavesAnUnmanagedVMAlone(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
-	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
-	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
+	meta.VMSpec{VMName: "vk-ns.cs-db", Mode: "static", Managed: false}.Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db", IP: "10.0.0.9", State: vm.StateRunning})
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -91,12 +91,12 @@ func TestDeletePodLeavesAnUnmanagedVMAlone(t *testing.T) {
 }
 
 func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.trackPod(pod, &vm.VM{ID: "resume-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning})
+	p.trackPod(pod, &vm.VM{ID: "resume-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	if !p.claimResume(key) {
@@ -119,11 +119,11 @@ func TestDeletePodBacksOffWhileResumeInFlight(t *testing.T) {
 }
 
 func TestDeletePodRejectsWhileDeleteInFlight(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.trackPod(pod, &vm.VM{ID: "vmid-inflight", Name: "vk-ns-demo-0"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-inflight", Name: "vk-ns.demo-0"})
 	key := meta.PodKey("ns", "demo-0")
 	p.mu.Lock()
 	p.deleting[key] = struct{}{}
@@ -149,14 +149,14 @@ func TestDeletePodRejectsWhileDeleteInFlight(t *testing.T) {
 }
 
 func TestDeletePodSkipsASupersededIncarnation(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 
 	if err := p.DeletePod(t.Context(), podA); err != nil {
 		t.Fatalf("DeletePod of the superseded incarnation: %v", err)
@@ -173,14 +173,14 @@ func TestDeletePodSkipsASupersededIncarnation(t *testing.T) {
 }
 
 func TestDeletePodSkipsASupersededIncarnationWhileAnotherDeleteIsInFlight(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
 	podA.UID = "a"
 	podB := podA.DeepCopy()
 	podB.UID = "b"
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0"})
+	p.trackPod(podB, &vm.VM{ID: "vmid-b", Name: "vk-ns.demo-0"})
 	key := meta.PodKey("ns", "demo-0")
 	p.mu.Lock()
 	p.deleting[key] = struct{}{}
@@ -206,10 +206,10 @@ func TestDeletePodReleasesAllDHCPLeases(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	p.trackPod(pod, &vm.VM{
 		ID:   "vmid-del",
-		Name: "vk-ns-demo-0",
+		Name: "vk-ns.demo-0",
 		NetworkConfigs: []*vm.NetworkConfig{
 			{MAC: "aa:bb:cc:dd:ee:02"},
 			{MAC: "aa:bb:cc:dd:ee:01"},
@@ -235,8 +235,8 @@ func TestDeletePodLeaseReleaseFailureDoesNotResurrectVM(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.LeaseReleaser = &recordingLeaseReleaser{err: errors.New("cocoon-net unavailable")}
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
 
 	if err := p.DeletePod(t.Context(), pod); err != nil {
 		t.Fatalf("lease cleanup after a successful VM remove must be best effort: %v", err)
@@ -251,8 +251,8 @@ func TestDeletePodDoesNotReleaseLeaseWhenVMRemovalFails(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{removeErr: errors.New("still running")}
 	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
+	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff"})
 
 	if err := p.DeletePod(t.Context(), pod); err == nil {
 		t.Fatal("expected VM removal error")

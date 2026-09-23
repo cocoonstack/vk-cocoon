@@ -29,17 +29,17 @@ import (
 
 func TestResolveWakeSourceVerifiedLocalHit(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{
-		"vk-ns-demo-0": {Name: "vk-ns-demo-0", ID: "SNAP-1"},
+		"vk-ns.demo-0": {Name: "vk-ns.demo-0", ID: "SNAP-1"},
 	}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Registry = newWakeVerifyRegistry(t, "SNAP-1")
 
-	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
-	if src.localName != "vk-ns-demo-0" || src.snapshot == nil || src.snapshot.ID != "SNAP-1" {
+	if src.localName != "vk-ns.demo-0" || src.snapshot == nil || src.snapshot.ID != "SNAP-1" {
 		t.Errorf("source = %+v, want verified local snapshot", src)
 	}
 	if len(rt.snapshotRemoveCalls) != 0 {
@@ -49,31 +49,31 @@ func TestResolveWakeSourceVerifiedLocalHit(t *testing.T) {
 
 func TestResolveWakeSourceStaleLocalDiscardsAndPulls(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{
-		"vk-ns-demo-0": {Name: "vk-ns-demo-0", ID: "SNAP-OLD"},
+		"vk-ns.demo-0": {Name: "vk-ns.demo-0", ID: "SNAP-OLD"},
 	}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Registry = newWakeVerifyRegistry(t, "SNAP-NEW")
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to pull path", err)
 	}
-	if !slices.Contains(rt.snapshotRemoveCalls, "vk-ns-demo-0") ||
-		!slices.Contains(rt.snapshotRemoveCalls, forkSnapshotName("vk-ns-demo-0")) {
+	if !slices.Contains(rt.snapshotRemoveCalls, "vk-ns.demo-0") ||
+		!slices.Contains(rt.snapshotRemoveCalls, forkSnapshotName("vk-ns.demo-0")) {
 		t.Errorf("stale local must be removed, got %v", rt.snapshotRemoveCalls)
 	}
 }
 
 func TestResolveWakeSourceNoTagDiscardsLocal(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{
-		"vk-ns-demo-0": {Name: "vk-ns-demo-0", ID: "SNAP-1"},
+		"vk-ns.demo-0": {Name: "vk-ns.demo-0", ID: "SNAP-1"},
 	}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Registry = wakeVerifyRegistry{tagExists: false}
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to pull path", err)
 	}
@@ -84,13 +84,13 @@ func TestResolveWakeSourceNoTagDiscardsLocal(t *testing.T) {
 
 func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{
-		"vk-ns-demo-0": {Name: "vk-ns-demo-0", ID: "SNAP-1"},
+		"vk-ns.demo-0": {Name: "vk-ns.demo-0", ID: "SNAP-1"},
 	}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Registry = wakeVerifyRegistry{manifestErr: errors.New("registry down")}
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "registry down") {
 		t.Fatalf("err = %v, want fail-closed verification error", err)
 	}
@@ -102,14 +102,14 @@ func TestResolveWakeSourceRegistryErrorFailsClosed(t *testing.T) {
 func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 	p, rt := newPeerWakeFixture(t, "SNAP-REMOTE")
 
-	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	src, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err != nil {
 		t.Fatalf("resolveWakeSource: %v", err)
 	}
 	if src.dir == "" || src.localName != "" {
 		t.Fatalf("source = %+v, want a staged dir", src)
 	}
-	if src.snapshot == nil || src.snapshot.ID != "SNAP-REMOTE" || src.snapshot.Name != "vk-ns-demo-0" {
+	if src.snapshot == nil || src.snapshot.ID != "SNAP-REMOTE" || src.snapshot.Name != "vk-ns.demo-0" {
 		t.Fatalf("snapshot meta = %+v", src.snapshot)
 	}
 	if got, readErr := os.ReadFile(filepath.Join(src.dir, "memory-ranges")); readErr != nil || string(got) != "peer-mem-bytes" {
@@ -119,7 +119,7 @@ func TestWakeStagesFromPeerAndClonesFromDir(t *testing.T) {
 		t.Fatalf("staged envelope missing: %v", statErr)
 	}
 
-	spec := meta.VMSpec{VMName: "vk-ns-demo-0", Network: "cocoon-dhcp"}
+	spec := meta.VMSpec{VMName: "vk-ns.demo-0", Network: "cocoon-dhcp"}
 	if _, cloneErr := p.cloneFromHibernate(t.Context(), spec, src, vm.CPUPolicy{}); cloneErr != nil {
 		t.Fatalf("cloneFromHibernate: %v", cloneErr)
 	}
@@ -137,7 +137,7 @@ func TestWakePeerMismatchFallsBackToPull(t *testing.T) {
 	reg.manifestRaw = withManifestAnnotation(t, reg.manifestRaw, snapshots.AnnotationFromNode, "node-src")
 	p.Registry = reg
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
@@ -147,7 +147,7 @@ func TestWakePeerUnreachableFallsBackToPull(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.PeerPort = "1"
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
@@ -157,7 +157,7 @@ func TestWakePeerSelfNodeSkipsPeerPath(t *testing.T) {
 	p, _ := newPeerWakeFixture(t, "SNAP-REMOTE")
 	p.NodeName = "node-src"
 
-	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns-demo-0")
+	_, err := p.resolveWakeSource(t.Context(), "ns", "vk-ns.demo-0")
 	if err == nil || !strings.Contains(err.Error(), "no puller configured") {
 		t.Fatalf("err = %v, want fall-through to the registry pull path", err)
 	}
@@ -266,7 +266,7 @@ func newPeerWakeFixture(t *testing.T, snapshotID string) (*Provider, *fakeRuntim
 		t.Fatal(err)
 	}
 	sourceRT := &fakeRuntime{snapshots: map[string]*vm.Snapshot{
-		"vk-ns-demo-0": {Name: "vk-ns-demo-0", ID: snapshotID},
+		"vk-ns.demo-0": {Name: "vk-ns.demo-0", ID: snapshotID},
 	}}
 	peerSrv := httptest.NewServer((&snapshots.PeerServer{Snapshots: sourceRT, StoreDir: storeRoot}).Handler())
 	t.Cleanup(peerSrv.Close)

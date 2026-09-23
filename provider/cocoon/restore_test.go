@@ -22,7 +22,7 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const vmName = "vk-ns-demo-0"
+			const vmName = "vk-ns.demo-0"
 			rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 			p := newTestProvider(t)
 			p.Runtime = rt
@@ -63,7 +63,7 @@ func TestBringUpVMRestoreFromHibernate(t *testing.T) {
 }
 
 func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{
 		snapshots: map[string]*vm.Snapshot{
 			vmName: {
@@ -98,7 +98,7 @@ func TestBringUpVMRestoreEnsuresOCIRefBaseImage(t *testing.T) {
 }
 
 func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{
 		snapshots: map[string]*vm.Snapshot{
 			vmName: {
@@ -135,7 +135,7 @@ func TestBringUpVMRestoreSkipsEnsureWhenDigestPresent(t *testing.T) {
 }
 
 func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{
 		snapshots: map[string]*vm.Snapshot{
 			vmName: {
@@ -170,7 +170,7 @@ func TestBringUpVMRestorePullsHTTPBase(t *testing.T) {
 }
 
 func TestCreatePodDerivesRestoreFromLocalEvidence(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -209,7 +209,7 @@ func TestCreatePodEvidenceFailClosedOnRegistryError(t *testing.T) {
 	p.Runtime = rt
 	p.Registry = wakeVerifyRegistry{manifestErr: errors.New("registry down")}
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Image: "snapshot-repo:latest", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Image: "snapshot-repo:latest", Mode: "clone"})
 	err := p.CreatePod(t.Context(), pod)
 	if err == nil || !strings.Contains(err.Error(), "registry down") {
 		t.Fatalf("err = %v, want fail-closed evidence error", err)
@@ -220,7 +220,7 @@ func TestCreatePodEvidenceFailClosedOnRegistryError(t *testing.T) {
 }
 
 func TestCreatePodEvidenceImageConflictRefusesBoot(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -237,7 +237,7 @@ func TestCreatePodEvidenceImageConflictRefusesBoot(t *testing.T) {
 }
 
 func TestCreatePodEvidenceMatchingImageRestores(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -256,7 +256,7 @@ func TestCreatePodEvidenceMatchingImageRestores(t *testing.T) {
 }
 
 func TestCreatePodEvidenceLegacyManifestRestores(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -272,12 +272,12 @@ func TestCreatePodEvidenceLegacyManifestRestores(t *testing.T) {
 }
 
 func TestCreatePodEvidenceForkFromConflict(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, ForkFrom: "vk-ns-main-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, ForkFrom: "vk-ns.main-0", Mode: "run"})
 	err := p.CreatePod(t.Context(), pod)
 	if err == nil || !strings.Contains(err.Error(), "explicit clone source") {
 		t.Fatalf("err = %v, want explicit-source conflict", err)
@@ -288,7 +288,7 @@ func TestCreatePodEvidenceForkFromConflict(t *testing.T) {
 }
 
 func TestCreatePodPreMarkedRestoreStillRefusesImageConflict(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -306,13 +306,13 @@ func TestCreatePodPreMarkedRestoreStillRefusesImageConflict(t *testing.T) {
 }
 
 func TestCreatePodPreMarkedRestoreKeepsForkFrom(t *testing.T) {
-	const vmName = "vk-ns-demo-1"
+	const vmName = "vk-ns.demo-1"
 	rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{vmName: {Name: vmName, ID: "SNAP-1"}}}
 	p := newTestProvider(t)
 	p.Runtime = rt
 	p.Registry = newWakeVerifyRegistryWithImage(t, "SNAP-1", "reg.example/agent:v1")
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v1", ForkFrom: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Image: "reg.example/agent:v1", ForkFrom: "vk-ns.demo-0", Mode: "clone"})
 	pod.Annotations[meta.AnnotationRestoreFromHibernate] = "true"
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)

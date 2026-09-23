@@ -14,7 +14,7 @@ import (
 )
 
 func TestStartupReconcileRejectsIncompatibleBoundPod(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
 	pod.Spec.NodeSelector = map[string]string{
 		meta.LabelSnapshotCompatibilityClass: "n2-cascade-lake-v1",
@@ -33,11 +33,11 @@ func TestStartupReconcileRejectsIncompatibleBoundPod(t *testing.T) {
 }
 
 func TestStartupReconcileSkeletonCollectedNotAdopted(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
 
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs: []vm.VM{{ID: "skel-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -50,7 +50,7 @@ func TestStartupReconcileSkeletonCollectedNotAdopted(t *testing.T) {
 	if calls := rt.staleCalls(); len(calls) != 1 || calls[0] != "skel-vmid" {
 		t.Errorf("reconcile-stale-create calls = %v, want [skel-vmid]", calls)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("skeleton must not be indexed by name, got %#v", got)
 	}
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
@@ -63,7 +63,7 @@ func TestStartupReconcileSkeletonCollectedNotAdopted(t *testing.T) {
 
 func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
 	}
 	p := newTestProvider(t)
@@ -74,7 +74,7 @@ func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("in-flight clone must not be indexed, got %#v", got)
 	}
 	if rt.removedID != "" {
@@ -84,14 +84,14 @@ func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 
 func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
 		inspectSeq: []fakeInspectStep{
-			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
-			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
-			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreated}},
 		},
-		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -105,7 +105,7 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		if got := p.vmByName("vk-ns.demo-0"); got != nil {
 			if got.ID != "inflight-vmid" || got.State != vm.StateRunning {
 				t.Fatalf("indexed VM = %#v, want the committed running record", got)
 			}
@@ -119,9 +119,9 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
 	removed := make(chan struct{})
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
-		inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: "error"},
+		inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: "error"},
 		onRemove:            func() { close(removed) },
 	}
 	p := newTestProvider(t)
@@ -144,18 +144,18 @@ func TestStartupReconcileBusyCreateDeadOnArrivalGetsOrphanPolicy(t *testing.T) {
 	if rt.removedID != "inflight-vmid" {
 		t.Errorf("removed %q, want inflight-vmid", rt.removedID)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("dead record must not be indexed, got %#v", got)
 	}
 }
 
 func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs: []vm.VM{{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateSeq: map[string][]vm.StaleCreateOutcome{
 			"inflight-vmid": {vm.StaleCreateBusy, vm.StaleCreateBusy, vm.StaleCreateCollected},
 		},
-		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating},
+		inspectVM: &vm.VM{ID: "inflight-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -180,7 +180,7 @@ func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	if calls := rt.staleCalls(); len(calls) != 3 {
 		t.Errorf("verb calls = %v, want the watch to stop once the record was collected", calls)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("reclaimed record must not be indexed, got %#v", got)
 	}
 	if rt.removedID != "" {
@@ -189,13 +189,13 @@ func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 }
 
 func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
 
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
-		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -205,7 +205,7 @@ func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 	if err := p.StartupReconcile(t.Context()); err != nil {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
-	got := p.vmByName("vk-ns-demo-0")
+	got := p.vmByName("vk-ns.demo-0")
 	if got == nil || got.ID != "won-vmid" || got.State != vm.StateRunning {
 		t.Fatalf("committed clone must be re-inspected and adopted, got %#v", got)
 	}
@@ -213,13 +213,13 @@ func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 
 func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
 		inspectSeq: []fakeInspectStep{
-			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
-			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreated}},
+			{vm: &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreated}},
 		},
-		inspectVM: &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectVM: &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -233,7 +233,7 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		if got := p.vmByName("vk-ns.demo-0"); got != nil {
 			if got.State != vm.StateRunning {
 				t.Fatalf("indexed VM state = %q, want running only", got.State)
 			}
@@ -246,10 +246,10 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 
 func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
 		inspectSeq:          []fakeInspectStep{{err: errors.New("cli hiccup")}},
-		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -263,7 +263,7 @@ func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		if got := p.vmByName("vk-ns.demo-0"); got != nil {
 			if got.State != vm.StateRunning {
 				t.Fatalf("indexed VM state = %q, want running", got.State)
 			}
@@ -276,9 +276,9 @@ func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
 
 func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
-		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: "stopped"},
+		inspectVM:           &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: "stopped"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -292,16 +292,16 @@ func TestStartupReconcileNotCreatingDeadRecordGetsOrphanPolicy(t *testing.T) {
 	if rt.removedID != "won-vmid" {
 		t.Errorf("stopped-without-running record must be removed under OrphanDestroy, removed %q", rt.removedID)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("dead record must not be indexed, got %#v", got)
 	}
 }
 
 func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:        []vm.VM{{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:        []vm.VM{{ID: "skel-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateErr: errors.New("cli hiccup"),
-		inspectVM:      &vm.VM{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating},
+		inspectVM:      &vm.VM{ID: "skel-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -315,7 +315,7 @@ func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
 		t.Fatalf("StartupReconcile: %v", err)
 	}
 	p.Close()
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("still-creating record must not be indexed, got %#v", got)
 	}
 	if rt.removedID != "" {
@@ -325,9 +325,9 @@ func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
 
 func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
 	rt := &fakeRuntime{
-		listVMs:        []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs:        []vm.VM{{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 		staleCreateErr: errors.New("cli hiccup"),
-		inspectVM:      &vm.VM{ID: "won-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
+		inspectVM:      &vm.VM{ID: "won-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning, IP: "10.0.0.7"},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -341,7 +341,7 @@ func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if got := p.vmByName("vk-ns-demo-0"); got != nil {
+		if got := p.vmByName("vk-ns.demo-0"); got != nil {
 			if got.State != vm.StateRunning {
 				t.Fatalf("indexed VM state = %q, want running", got.State)
 			}
@@ -353,12 +353,12 @@ func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
 }
 
 func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
 	meta.VMRuntime{VMID: "skel-vmid", IP: ""}.Apply(pod)
 
 	rt := &fakeRuntime{
-		listVMs: []vm.VM{{ID: "skel-vmid", Name: "vk-ns-demo-0", State: vm.StateCreating}},
+		listVMs: []vm.VM{{ID: "skel-vmid", Name: "vk-ns.demo-0", State: vm.StateCreating}},
 	}
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
@@ -371,7 +371,7 @@ func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {
 	if got := p.vmForPod("ns", "demo-0"); got != nil {
 		t.Errorf("pod must not adopt the skeleton via its VMID annotation, got %#v", got)
 	}
-	if got := p.vmByName("vk-ns-demo-0"); got != nil {
+	if got := p.vmByName("vk-ns.demo-0"); got != nil {
 		t.Errorf("skeleton must not be indexed by name, got %#v", got)
 	}
 }

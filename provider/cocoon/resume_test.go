@@ -22,7 +22,7 @@ import (
 
 func TestStartupDispatchOwedWork(t *testing.T) {
 	const (
-		vmName = "vk-ns-demo-0"
+		vmName = "vk-ns.demo-0"
 		vmID   = "resume-vmid"
 	)
 	running := vm.VM{ID: vmID, Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
@@ -225,7 +225,7 @@ func TestStartupDispatchOwedWork(t *testing.T) {
 
 func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T) {
 	const (
-		vmName = "vk-ns-demo-0"
+		vmName = "vk-ns.demo-0"
 		vmID   = "resume-vmid"
 	)
 	pod := newPodWithSpec(meta.VMSpec{
@@ -262,7 +262,7 @@ func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T
 }
 
 func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	staticVM := vm.VM{
 		ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9",
 		NetworkConfigs: []*vm.NetworkConfig{{Network: &vm.NetworkInfo{IP: "10.0.0.9"}}},
@@ -292,7 +292,7 @@ func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
 }
 
 func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  vmName,
@@ -324,7 +324,7 @@ func TestStartupDispatchClassifyRetriesRegistryErrors(t *testing.T) {
 }
 
 func TestStartupDispatchClassifyFailsLoudOnHangingRegistry(t *testing.T) {
-	const vmName = "vk-ns-demo-0"
+	const vmName = "vk-ns.demo-0"
 	winVM := vm.VM{ID: "resume-vmid", Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
 	pod := newPodWithSpec(meta.VMSpec{
 		VMName:  vmName,
@@ -357,13 +357,13 @@ func TestStartupDispatchClassifyFailsLoudOnHangingRegistry(t *testing.T) {
 }
 
 func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	meta.HibernateState(true).Apply(pod)
 
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	p.trackPod(pod, &vm.VM{ID: "resume-vmid", Name: "vk-ns-demo-0", State: vm.StateRunning})
+	p.trackPod(pod, &vm.VM{ID: "resume-vmid", Name: "vk-ns.demo-0", State: vm.StateRunning})
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	if !p.claimResume(key) {
@@ -386,7 +386,7 @@ func TestUpdatePodBacksOffWhileResumeInFlight(t *testing.T) {
 }
 
 func TestClassifyNICRecoveryStopsAtBudgetWithoutRetryingEvidence(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 	registry := &staleEvidenceRegistry{}
 
 	p := newTestProvider(t)
@@ -394,7 +394,7 @@ func TestClassifyNICRecoveryStopsAtBudgetWithoutRetryingEvidence(t *testing.T) {
 	p.deferredRecheckInitialDelay = 50 * time.Millisecond
 	p.deferredRecheckBudget = 10 * time.Millisecond
 
-	evidence, ok := p.classifyNICRecovery(pod, "vk-ns-demo-0")
+	evidence, ok := p.classifyNICRecovery(pod, "vk-ns.demo-0")
 
 	if ok {
 		t.Errorf("classification = (%t, %t), want no verdict once the budget expired", evidence, ok)
@@ -408,11 +408,11 @@ func TestResumeReadyWaitPublishesReadyForAnUnmanagedPod(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = &fakeRuntime{}
 	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
-	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false, OS: string(cocoonv1.OSWindows)}.Apply(pod)
+	meta.VMSpec{VMName: "vk-ns.cs-db", Mode: "static", Managed: false, OS: string(cocoonv1.OSWindows)}.Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
-	v := &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning}
+	v := &vm.VM{ID: "extern-vm-1", Name: "vk-ns.cs-db", IP: "10.0.0.9", State: vm.StateRunning}
 	p.trackPod(pod, v)
 
 	p.dispatchResume(meta.PodKey("ns", "cs-db"), pod, v, resumeOpReadyWait)

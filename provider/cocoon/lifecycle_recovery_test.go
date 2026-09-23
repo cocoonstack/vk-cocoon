@@ -27,7 +27,7 @@ func TestHibernateFailureRefreshesRuntime(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				failure := errors.New("hibernate failed")
-				v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", IP: "192.0.2.7", MAC: "02:00:00:00:00:01"}
+				v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", IP: "192.0.2.7", MAC: "02:00:00:00:00:01"}
 				fresh := &vm.VM{ID: v.ID, Name: v.Name, IP: "192.0.2.8", MAC: "02:00:00:00:00:02"}
 				fresh.NetworkConfigs = []*vm.NetworkConfig{{MAC: fresh.MAC}}
 				wantIP := ""
@@ -92,11 +92,11 @@ func TestDeletePodRetryCompletesWhenVMIsAlreadyGone(t *testing.T) {
 			releaser := &recordingLeaseReleaser{}
 			p := newTestProvider(t)
 			p.Runtime, p.LeaseReleaser = rt, releaser
-			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0", Mode: "clone"})
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone"})
 			if keep {
 				meta.MarkKeepSnapshotOnDelete(pod)
 			}
-			v := &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0", MAC: "02:00:00:00:00:01"}
+			v := &vm.VM{ID: "vmid-1", Name: "vk-ns.demo-0", MAC: "02:00:00:00:00:01"}
 			p.trackPod(pod, v)
 			key := meta.PodKey(pod.Namespace, pod.Name)
 			p.Probes.Set(key, probes.Result{Ready: true})
