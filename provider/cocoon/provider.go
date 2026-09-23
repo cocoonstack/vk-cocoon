@@ -102,7 +102,7 @@ type Provider struct {
 	Recorder         record.EventRecorder
 
 	startTime time.Time
-	//nolint:containedctx // deferred recheck must outlive the watcher ctx (which cycles on event-stream reconnect) and be cancelable only by Close
+	// lifecycleCtx outlives the watcher ctx, which cycles on event-stream reconnect; only Close cancels it.
 	lifecycleCtx   context.Context
 	lifecycleStop  context.CancelFunc
 	mu             sync.RWMutex
