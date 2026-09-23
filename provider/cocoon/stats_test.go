@@ -99,3 +99,9 @@ func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", s.VMs)
 	}
 }
+
+func TestBusyCPUSecondsFromStatExcludesIdleAndIOWait(t *testing.T) {
+	if got := busyCPUSecondsFromStat("cpu  100 20 30 5000 40 1 2 3 0 0"); got != 1.56 {
+		t.Errorf("busy cpu seconds = %v, want 1.56 (user+nice+system+irq+softirq+steal over USER_HZ)", got)
+	}
+}
