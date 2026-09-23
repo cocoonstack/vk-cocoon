@@ -23,7 +23,7 @@ func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
 	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
 
 	if drained == nil {
-		t.Fatal("notify was never called; the framework push is not being modelled")
+		t.Fatal("notify was never called; the framework push is not being modeled")
 	}
 	t.Logf("annotation in the drained copy = %q", meta.ReadLifecycleState(drained))
 

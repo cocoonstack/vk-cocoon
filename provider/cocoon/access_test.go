@@ -10,7 +10,6 @@ import (
 
 	"github.com/virtual-kubelet/virtual-kubelet/node/api"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -83,7 +82,7 @@ func TestRunInContainerNoLiveVMRejected(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ghost-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "ghost-0", Namespace: "ns"}
 	err := p.RunInContainer(t.Context(), pod.Namespace, pod.Name, "", []string{"echo", "hi"}, newStubAttachIO(""))
 	if err == nil || !strings.Contains(err.Error(), "no live VM") {
 		t.Fatalf("expected 'no live VM' error, got %v", err)
@@ -119,7 +118,7 @@ func (*bufferCloser) Close() error { return nil }
 
 func newRunningPod(t *testing.T, p *Provider, name, vmID, ip string, windows bool) *corev1.Pod {
 	t.Helper()
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"}}
+	pod := &corev1.Pod{Name: name, Namespace: "ns"}
 	spec := meta.VMSpec{VMName: "vm-" + name, Managed: true}
 	if windows {
 		spec.OS = "windows"

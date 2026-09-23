@@ -2,7 +2,6 @@ package probes
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,12 +40,11 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 		return true, "ok"
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	first := make(chan struct{})
 	var updates atomic.Int32
 	onUpdate := func(_ context.Context) {
 		if updates.Add(1) == 1 {
-			wg.Done()
+			close(first)
 		}
 	}
 
@@ -56,10 +54,8 @@ func TestStartTriggersOnUpdateOnReadinessChange(t *testing.T) {
 		t.Fatalf("first probe should record NotReady")
 	}
 
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-first:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("onUpdate was not called after probe flipped to ready (updates=%d, calls=%d)",
 			updates.Load(), calls.Load())

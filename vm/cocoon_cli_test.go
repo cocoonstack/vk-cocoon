@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"k8s.io/utils/ptr"
 )
 
 func TestIsCocoonNotFound(t *testing.T) {
@@ -228,22 +226,22 @@ func TestBuildCloneArgs(t *testing.T) {
 		},
 		{
 			name: "nics override appended before positional snapshot",
-			opts: CloneOptions{From: "snap-a", To: "vm-k", NICs: ptr.To(1)},
+			opts: CloneOptions{From: "snap-a", To: "vm-k", NICs: new(1)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-k", "--nics", "1", "snap-a"},
 		},
 		{
 			name: "nics zero override emits --nics 0",
-			opts: CloneOptions{From: "snap-a", To: "vm-l", NICs: ptr.To(0)},
+			opts: CloneOptions{From: "snap-a", To: "vm-l", NICs: new(0)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-l", "--nics", "0", "snap-a"},
 		},
 		{
 			name: "nics combines with restore-mode on CH",
-			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", RestoreMode: RestoreOnDemand, NICs: ptr.To(2)},
+			opts: CloneOptions{From: "snap-a", To: "vm-m", Backend: "cloud-hypervisor", RestoreMode: RestoreOnDemand, NICs: new(2)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-m", "--restore-mode", "ondemand", "--nics", "2", "snap-a"},
 		},
 		{
 			name: "firecracker clone strips --nics",
-			opts: CloneOptions{From: "snap-a", To: "vm-n", Backend: "firecracker", NICs: ptr.To(1)},
+			opts: CloneOptions{From: "snap-a", To: "vm-n", Backend: "firecracker", NICs: new(1)},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-n", "snap-a"},
 		},
 		{

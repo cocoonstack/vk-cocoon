@@ -231,7 +231,7 @@ func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 }
 
 func TestPostCloneErrorsAnnotationTruncated(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{}}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{}}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 	p := newTestProvider(t)
 
@@ -262,7 +262,7 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 
 	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create", false)
@@ -283,7 +283,7 @@ func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -318,7 +318,7 @@ func TestIsClonedBoot(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				Annotations: map[string]string{},
 			}
 			if tc.fromDir != "" {
 				pod.Annotations[meta.AnnotationCloneFromDir] = tc.fromDir
@@ -337,7 +337,7 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	p := newTestProvider(t)
 	p.Runtime = rt
 
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}}
 
 	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create", false)
@@ -390,12 +390,12 @@ func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 func TestMarkPostCloneStateDropsStaleIncarnation(t *testing.T) {
 	t.Parallel()
 
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(podB)
 	p.trackPod(podB, nil)
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	p.markPostCloneState(t.Context(), podA, postCloneStateFailed)
 
 	if got := podB.Annotations[annotationPostCloneState]; got != "" {
@@ -406,12 +406,12 @@ func TestMarkPostCloneStateDropsStaleIncarnation(t *testing.T) {
 func TestSetPodAnnotationDropsStaleIncarnation(t *testing.T) {
 	t.Parallel()
 
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(podB)
 	p.trackPod(podB, nil)
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
 	p.setPodAnnotation(t.Context(), podA, annotationPostCloneHint, "stale")
 
 	got, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
@@ -426,8 +426,8 @@ func TestSetPodAnnotationDropsStaleIncarnation(t *testing.T) {
 func TestPostClonePatchRejectsRecreatedAPIPod(t *testing.T) {
 	t.Parallel()
 
-	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "a"}}
-	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", UID: "b"}}
+	podA := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "a"}
+	podB := &corev1.Pod{Name: "demo-0", Namespace: "ns", UID: "b"}
 	p := newTestProvider(t)
 	client := fake.NewSimpleClientset(podB)
 	client.PrependReactor("patch", "pods", rejectMismatchedUID(string(podB.UID)))

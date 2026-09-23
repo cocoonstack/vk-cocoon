@@ -11,7 +11,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -576,7 +575,7 @@ func TestHibernateRenewSurvivesCancelledContext(t *testing.T) {
 	}
 	got := execArgvs(rt)
 	if len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
-		t.Errorf("exec calls = %v, want the renew to outlive the cancelled request", got)
+		t.Errorf("exec calls = %v, want the renew to outlive the canceled request", got)
 	}
 }
 
@@ -596,7 +595,7 @@ func TestHibernateRollbackSurvivesCancelledContext(t *testing.T) {
 		t.Fatal("hibernate should fail on snapshot save error")
 	}
 	if len(rt.netResizeCalls) != 2 || rt.netResizeCalls[1].target != 1 {
-		t.Errorf("NetResize calls = %#v, want the NIC re-add to outlive the cancelled request", rt.netResizeCalls)
+		t.Errorf("NetResize calls = %#v, want the NIC re-add to outlive the canceled request", rt.netResizeCalls)
 	}
 	if got := execArgvs(rt); len(got) != 2 || got[1] != "cmd /c ipconfig /renew" {
 		t.Errorf("exec calls = %v, want the rollback renew to share the detached lifetime", got)
@@ -701,7 +700,7 @@ func TestUpdatePodLeavesAnUnmanagedVMAlone(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cs-db", Namespace: "ns"}}
+	pod := &corev1.Pod{Name: "cs-db", Namespace: "ns"}
 	meta.VMSpec{VMName: "vk-ns-cs-db", Mode: "static", Managed: false}.Apply(pod)
 	meta.VMRuntime{VMID: "extern-vm-1", IP: "10.0.0.9"}.Apply(pod)
 	p.trackPod(pod, &vm.VM{ID: "extern-vm-1", Name: "vk-ns-cs-db", IP: "10.0.0.9", State: vm.StateRunning})
