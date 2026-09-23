@@ -79,17 +79,6 @@ type RestoreMode string
 // StaleCreateOutcome mirrors `cocoon vm reconcile-stale-create` outcomes.
 type StaleCreateOutcome string
 
-// ParseRestoreMode validates a configured restore mode, normalizing case.
-func ParseRestoreMode(s string) (RestoreMode, error) {
-	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
-	case RestoreCopy, RestoreOnDemand, RestoreMmap:
-		return m, nil
-	default:
-		return "", fmt.Errorf("restore mode must be %s, %s or %s, got %q",
-			RestoreCopy, RestoreOnDemand, RestoreMmap, s)
-	}
-}
-
 // CPUPolicy carries the host-side cgroup CPU knobs cocoon applies to a VM; zero values mean Guaranteed-at-N defaults.
 type CPUPolicy struct {
 	CPUWeight   int
@@ -157,4 +146,15 @@ type Runtime interface {
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 	// NetResize hot-resizes a live VM's NIC count.
 	NetResize(ctx context.Context, vmID string, target int) error
+}
+
+// ParseRestoreMode validates a configured restore mode, normalizing case.
+func ParseRestoreMode(s string) (RestoreMode, error) {
+	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
+	case RestoreCopy, RestoreOnDemand, RestoreMmap:
+		return m, nil
+	default:
+		return "", fmt.Errorf("restore mode must be %s, %s or %s, got %q",
+			RestoreCopy, RestoreOnDemand, RestoreMmap, s)
+	}
 }

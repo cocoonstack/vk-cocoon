@@ -238,35 +238,6 @@ func (s *PeerServer) snapshotDir(id string) (string, error) {
 	return filepath.Join(s.StoreDir, id), nil
 }
 
-// coalesceExtents merges data runs whose separating hole is at most maxGap.
-func coalesceExtents(extents []extent, maxGap int64) []extent {
-	var out []extent
-	for _, e := range extents {
-		if n := len(out); n > 0 && e.offset-(out[n-1].offset+out[n-1].length) <= maxGap {
-			out[n-1].length = e.offset + e.length - out[n-1].offset
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
-// splitExtents caps each transfer slice at limit bytes.
-func splitExtents(extents []extent, limit int64) []peerSlice {
-	var out []peerSlice
-	for _, e := range extents {
-		for off := e.offset; off < e.offset+e.length; off += limit {
-			out = append(out, peerSlice{Offset: off, Length: min(limit, e.offset+e.length-off)})
-		}
-	}
-	return out
-}
-
-// isPlainName rejects path components that could escape their directory.
-func isPlainName(s string) bool {
-	return s != "" && s != "." && s != ".." && s == filepath.Base(s)
-}
-
 // RestoredSnapshot is a staged, clone-ready snapshot directory.
 type RestoredSnapshot struct {
 	Dir      string
@@ -491,6 +462,35 @@ func (s stallReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	s.timer.Reset(peerSliceStallTimeout)
 	return n, err
+}
+
+// coalesceExtents merges data runs whose separating hole is at most maxGap.
+func coalesceExtents(extents []extent, maxGap int64) []extent {
+	var out []extent
+	for _, e := range extents {
+		if n := len(out); n > 0 && e.offset-(out[n-1].offset+out[n-1].length) <= maxGap {
+			out[n-1].length = e.offset + e.length - out[n-1].offset
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// splitExtents caps each transfer slice at limit bytes.
+func splitExtents(extents []extent, limit int64) []peerSlice {
+	var out []peerSlice
+	for _, e := range extents {
+		for off := e.offset; off < e.offset+e.length; off += limit {
+			out = append(out, peerSlice{Offset: off, Length: min(limit, e.offset+e.length-off)})
+		}
+	}
+	return out
+}
+
+// isPlainName rejects path components that could escape their directory.
+func isPlainName(s string) bool {
+	return s != "" && s != "." && s != ".." && s == filepath.Base(s)
 }
 
 // writeSkippingZeros writes data at off, eliding zeroSkipBytes-granular all-zero chunks so skipped regions stay sparse.
