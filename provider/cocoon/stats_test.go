@@ -43,8 +43,7 @@ func TestParseProcStatCPUSeconds(t *testing.T) {
 func TestStatsReportThePodStartTime(t *testing.T) {
 	p := newTestProvider(t)
 	started := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
-	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}}
-	p.statsAt = time.Now()
+	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", PodName: "demo-0", Namespace: "ns", StartedAt: started}}, CollectedAt: time.Now()}
 
 	summary, err := p.GetStatsSummary(t.Context())
 	if err != nil {
@@ -86,17 +85,38 @@ func TestSnapshotTrackedVMsCountsUnmanagedVM(t *testing.T) {
 
 func TestSampleStatsServesCachedWithinTTL(t *testing.T) {
 	p := newTestProvider(t)
-	seeded := provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}}
-	p.stats, p.statsAt = seeded, time.Now()
+	p.stats = provider.Sample{VMs: []provider.VMStats{{VMName: "vk-ns.demo-0", CPUSeconds: 7}}, Node: provider.NodeStats{CPUSeconds: 42}, CollectedAt: time.Now()}
 
 	s := p.CollectVMStats()
 	if len(s.VMs) != 1 || s.VMs[0].CPUSeconds != 7 || s.Node.CPUSeconds != 42 {
 		t.Fatalf("within TTL must serve the cached sample, got %+v", s)
 	}
 
-	p.statsAt = time.Now().Add(-2 * statsSampleTTL)
+	p.stats.CollectedAt = time.Now().Add(-2 * statsSampleTTL)
 	if s = p.CollectVMStats(); len(s.VMs) != 0 {
 		t.Fatalf("expired TTL must resample (no tracked VMs), got %+v", s.VMs)
+	}
+}
+
+func TestMetricsResourceCarriesTheSampleTime(t *testing.T) {
+	p := newTestProvider(t)
+	collected := time.Now().Add(-time.Second).Truncate(time.Millisecond)
+	p.stats = provider.Sample{
+		VMs:         []provider.VMStats{{VMName: "vk-ns.demo-0", PodName: "demo-0", Namespace: "ns", CPUSeconds: 7}},
+		Node:        provider.NodeStats{CPUSeconds: 42},
+		CollectedAt: collected,
+	}
+
+	families, err := p.GetMetricsResource(t.Context())
+	if err != nil {
+		t.Fatalf("GetMetricsResource: %v", err)
+	}
+	for _, family := range families {
+		for _, m := range family.Metric {
+			if got := m.GetTimestampMs(); got != collected.UnixMilli() {
+				t.Fatalf("%s timestamp = %d, want the sample's collection time %d", family.GetName(), got, collected.UnixMilli())
+			}
+		}
 	}
 }
 
