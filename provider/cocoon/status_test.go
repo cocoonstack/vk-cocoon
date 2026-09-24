@@ -19,14 +19,14 @@ import (
 )
 
 func TestReconcilePodStatusesRepublishesReadinessDrift(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Status = runningPodStatus(corev1.ConditionFalse)
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -48,14 +48,14 @@ func TestReconcilePodStatusesRepublishesReadinessDrift(t *testing.T) {
 }
 
 func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Status = runningPodStatus(corev1.ConditionTrue)
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
 
 	notified := false
 	p.notifyHook = func(*corev1.Pod) {
@@ -69,7 +69,7 @@ func TestReconcilePodStatusesSkipsMatchingStatus(t *testing.T) {
 }
 
 func TestReconcilePodStatusesRepairsIPAnnotationWithoutReadinessTransition(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Annotations[meta.AnnotationIP] = "172.20.0.42"
 	pod.Status = runningPodStatus(corev1.ConditionTrue)
@@ -81,7 +81,7 @@ func TestReconcilePodStatusesRepairsIPAnnotationWithoutReadinessTransition(t *te
 	p.LeaseParser = newLeaseParser(t, "aa:bb:cc:dd:ee:ff", "172.20.0.88")
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
 	p.trackPod(pod, &vm.VM{
-		ID: "vmid", Name: "vk-ns.demo-0", MAC: "aa:bb:cc:dd:ee:ff", IP: "172.20.0.42",
+		ID: "vmid", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:ff", IP: "172.20.0.42",
 	})
 
 	p.reconcilePodStatuses(t.Context())
@@ -106,7 +106,7 @@ func TestReconcilePodStatusesRepairsIPAnnotationWithoutReadinessTransition(t *te
 }
 
 func TestReconcilePodStatusesSkipsRecreatedPodIncarnation(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	podA.UID = "a"
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(podA)
 	podA.Status = runningPodStatus(corev1.ConditionFalse)
@@ -119,7 +119,7 @@ func TestReconcilePodStatusesSkipsRecreatedPodIncarnation(t *testing.T) {
 	client := fake.NewSimpleClientset(podB)
 	p.Clientset = client
 	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
-	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -140,14 +140,14 @@ func TestReconcilePodStatusesSkipsRecreatedPodIncarnation(t *testing.T) {
 }
 
 func TestReconcilePodStatusesRepublishesProbeMessageDrift(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(pod)
 	pod.Status = runningPodStatus(corev1.ConditionTrue)
 
 	p := newTestProvider(t)
 	p.Clientset = fake.NewSimpleClientset(pod)
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true, Message: "tcp ok"})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -166,7 +166,7 @@ func TestReconcilePodStatusesRepublishesProbeMessageDrift(t *testing.T) {
 }
 
 func TestReconcilePodStatusesSkipsSupersededIncarnationBehindStaleLister(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	podA.UID = "a"
 	podA.Annotations[meta.AnnotationIP] = "192.0.2.10"
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(podA)
@@ -183,7 +183,7 @@ func TestReconcilePodStatusesSkipsSupersededIncarnationBehindStaleLister(t *test
 	p.Clientset = client
 	p.Pods = stalePodLister(t, podA)
 	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
-	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.55"})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.55"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -206,7 +206,7 @@ func TestReconcilePodStatusesSkipsSupersededIncarnationBehindStaleLister(t *test
 }
 
 func TestReconcilePodStatusesDropsNotifyWhenTrackingFlipsDuringPatch(t *testing.T) {
-	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	podA.UID = "a"
 	podA.Annotations[meta.AnnotationIP] = "192.0.2.10"
 	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 1}.Apply(podA)
@@ -224,7 +224,7 @@ func TestReconcilePodStatusesDropsNotifyWhenTrackingFlipsDuringPatch(t *testing.
 	p.Clientset = client
 	p.Pods = stalePodLister(t, podA)
 	p.Probes.Set(meta.PodKey(podA.Namespace, podA.Name), probes.Result{Ready: true})
-	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.55"})
+	p.trackPod(podA, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.55"})
 
 	notified := make(chan *corev1.Pod, 1)
 	p.notifyHook = func(updated *corev1.Pod) {
@@ -240,12 +240,12 @@ func TestReconcilePodStatusesDropsNotifyWhenTrackingFlipsDuringPatch(t *testing.
 }
 
 func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "clone", OS: "windows"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone", OS: "windows"})
 	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}.Apply(pod)
 
 	p := newTestProvider(t)
 	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
-	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns.demo-0", IP: "192.0.2.10"})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
 
 	status, err := p.GetPodStatus(t.Context(), pod.Namespace, pod.Name)
 	if err != nil {

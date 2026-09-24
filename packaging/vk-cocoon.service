@@ -25,11 +25,6 @@ LimitNOFILE=65536
 # up — bound it with cocoon's cgroup_cpus fence, not this knob; no
 # AllowedCPUs here so clone's multi-core restore is never confined.
 CPUWeight=1000
-# CAP_NET_RAW lets the probe loop open an ICMPv4 raw socket for
-# its guest-reachability check. Without it the pinger falls back
-# to "an IP was resolved == Ready", which is still correct but
-# weaker than a real end-to-end ping.
-AmbientCapabilities=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target

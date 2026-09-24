@@ -66,11 +66,11 @@ type VM struct {
 
 // Snapshot is the subset of `cocoon snapshot inspect` needed to restore a VM.
 type Snapshot struct {
-	ID          string
-	Name        string
-	Image       string
-	ImageDigest string // resolved image digest (e.g. "sha256:abc...")
-	Hypervisor  string
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	ImageDigest string `json:"image_digest"` // resolved image digest (e.g. "sha256:abc...")
+	Hypervisor  string `json:"hypervisor"`
 }
 
 // RestoreMode maps to `cocoon vm clone --restore-mode`; RestoreMmap needs a CH build with mmap restore support.
@@ -78,17 +78,6 @@ type RestoreMode string
 
 // StaleCreateOutcome mirrors `cocoon vm reconcile-stale-create` outcomes.
 type StaleCreateOutcome string
-
-// ParseRestoreMode validates a configured restore mode, normalizing case.
-func ParseRestoreMode(s string) (RestoreMode, error) {
-	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
-	case RestoreCopy, RestoreOnDemand, RestoreMmap:
-		return m, nil
-	default:
-		return "", fmt.Errorf("restore mode must be %s, %s or %s, got %q",
-			RestoreCopy, RestoreOnDemand, RestoreMmap, s)
-	}
-}
 
 // CPUPolicy carries the host-side cgroup CPU knobs cocoon applies to a VM; zero values mean Guaranteed-at-N defaults.
 type CPUPolicy struct {
@@ -157,4 +146,15 @@ type Runtime interface {
 	WatchEvents(ctx context.Context) (<-chan VMEvent, error)
 	// NetResize hot-resizes a live VM's NIC count.
 	NetResize(ctx context.Context, vmID string, target int) error
+}
+
+// ParseRestoreMode validates a configured restore mode, normalizing case.
+func ParseRestoreMode(s string) (RestoreMode, error) {
+	switch m := RestoreMode(strings.ToLower(strings.TrimSpace(s))); m {
+	case RestoreCopy, RestoreOnDemand, RestoreMmap:
+		return m, nil
+	default:
+		return "", fmt.Errorf("restore mode must be %s, %s or %s, got %q",
+			RestoreCopy, RestoreOnDemand, RestoreMmap, s)
+	}
 }

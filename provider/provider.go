@@ -47,6 +47,7 @@ type Sample struct {
 	VMs                   []VMStats
 	Node                  NodeStats
 	TrackedVMsByNamespace map[string]int
+	CollectedAt           time.Time
 }
 
 // ParseOrphanPolicy validates a configured orphan policy, normalizing case.

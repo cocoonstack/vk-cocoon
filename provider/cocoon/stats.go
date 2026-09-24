@@ -78,16 +78,16 @@ func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, e
 }
 
 func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, error) {
-	nowMs := time.Now().UnixMilli()
 	sample := p.CollectVMStats()
+	sampledMs := sample.CollectedAt.UnixMilli()
 
 	families := []*dto.MetricFamily{
 		newCounterFamily("node_cpu_usage_seconds_total",
 			"Cumulative cpu time consumed by the node in core-seconds",
-			newCounter(sample.Node.CPUSeconds, nowMs, nil)),
+			newCounter(sample.Node.CPUSeconds, sampledMs, nil)),
 		newGaugeFamily("node_memory_working_set_bytes",
 			"Current working set of the node in bytes",
-			newGauge(float64(sample.Node.MemoryUsedBytes), nowMs, nil)),
+			newGauge(float64(sample.Node.MemoryUsedBytes), sampledMs, nil)),
 	}
 
 	var containerCPU, containerMem, containerStart, podCPU, podMem, throttledSec, throttledPeriods []*dto.Metric
@@ -100,20 +100,20 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 			{Name: new("pod"), Value: new(s.PodName)},
 			{Name: new("container"), Value: new(containerName)},
 		}
-		containerCPU = append(containerCPU, newCounter(cpuSec, nowMs, containerLabels))
-		containerMem = append(containerMem, newGauge(memBytes, nowMs, containerLabels))
-		throttledSec = append(throttledSec, newCounter(s.CPUThrottledSeconds, nowMs, containerLabels))
-		throttledPeriods = append(throttledPeriods, newCounter(float64(s.CPUThrottledPeriods), nowMs, containerLabels))
+		containerCPU = append(containerCPU, newCounter(cpuSec, sampledMs, containerLabels))
+		containerMem = append(containerMem, newGauge(memBytes, sampledMs, containerLabels))
+		throttledSec = append(throttledSec, newCounter(s.CPUThrottledSeconds, sampledMs, containerLabels))
+		throttledPeriods = append(throttledPeriods, newCounter(float64(s.CPUThrottledPeriods), sampledMs, containerLabels))
 		if !s.StartedAt.IsZero() {
-			containerStart = append(containerStart, newGauge(float64(s.StartedAt.Unix()), nowMs, containerLabels))
+			containerStart = append(containerStart, newGauge(float64(s.StartedAt.Unix()), sampledMs, containerLabels))
 		}
 
 		podLabels := []*dto.LabelPair{
 			{Name: new("namespace"), Value: new(s.Namespace)},
 			{Name: new("pod"), Value: new(s.PodName)},
 		}
-		podCPU = append(podCPU, newCounter(cpuSec, nowMs, podLabels))
-		podMem = append(podMem, newGauge(memBytes, nowMs, podLabels))
+		podCPU = append(podCPU, newCounter(cpuSec, sampledMs, podLabels))
+		podMem = append(podMem, newGauge(memBytes, sampledMs, podLabels))
 	}
 
 	if len(containerCPU) > 0 {
@@ -145,7 +145,7 @@ func (p *Provider) GetMetricsResource(_ context.Context) ([]*dto.MetricFamily, e
 func (p *Provider) CollectVMStats() provider.Sample {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
-	if time.Since(p.statsAt) < statsSampleTTL {
+	if time.Since(p.stats.CollectedAt) < statsSampleTTL {
 		return p.stats
 	}
 	snaps, trackedVMsByNamespace := p.snapshotTrackedVMs()
@@ -171,7 +171,7 @@ func (p *Provider) CollectVMStats() provider.Sample {
 	}
 	node := provider.NodeStats{CPUSeconds: readNodeCPUSeconds(), MemoryUsedBytes: readNodeMemoryWorkingSet()}
 	node.StorageTotal, node.StorageAvailable = provider.StorageBytes()
-	p.stats, p.statsAt = provider.Sample{VMs: vms, Node: node, TrackedVMsByNamespace: trackedVMsByNamespace}, time.Now()
+	p.stats = provider.Sample{VMs: vms, Node: node, TrackedVMsByNamespace: trackedVMsByNamespace, CollectedAt: time.Now()}
 	return p.stats
 }
 
@@ -272,11 +272,11 @@ func readProcStat(pid int) string {
 
 // procStatFields splits a /proc/<pid>/stat line after the parenthesized comm; proc(5) field N lands at index N-3.
 func procStatFields(s string) []string {
-	idx := strings.LastIndex(s, ")")
-	if idx < 0 || idx+2 >= len(s) {
+	_, after, found := strings.CutLast(s, ")")
+	if !found {
 		return nil
 	}
-	return strings.Fields(s[idx+2:])
+	return strings.Fields(after)
 }
 
 func parseProcStatCPUSeconds(s string) float64 {

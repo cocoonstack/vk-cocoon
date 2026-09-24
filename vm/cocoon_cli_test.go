@@ -68,12 +68,12 @@ func TestSnapshotNameTakenPhrases(t *testing.T) {
 	}{
 		{
 			name: "preflight rejection",
-			out:  `Error: snapshot name "vk-ns.demo-0" already exists`,
+			out:  `Error: snapshot name "vk-ns-demo-0-505043" already exists`,
 			want: true,
 		},
 		{
 			name: "name index rejection",
-			out:  `Error: save snapshot: snapshot name "vk-ns.demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
+			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0-505043" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
 			want: true,
 		},
 		{name: "unrelated failure", out: "Error: vm is paused (snapshot or hibernate in flight)", want: false},
@@ -98,17 +98,17 @@ func TestSnapshotNameHolderID(t *testing.T) {
 	}{
 		{
 			name: "name index rejection",
-			out:  `Error: save snapshot: snapshot name "vk-ns.demo-0" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
+			out:  `Error: save snapshot: snapshot name "vk-ns-demo-0-505043" already in use by MPT5A6ZS2FNZWQGFN24AZLREWQ`,
 			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
 		},
 		{
 			name: "preflight rejection names the holder",
-			out:  `Error: snapshot name "vk-ns.demo-0" already exists (held by MPT5A6ZS2FNZWQGFN24AZLREWQ)`,
+			out:  `Error: snapshot name "vk-ns-demo-0-505043" already exists (held by MPT5A6ZS2FNZWQGFN24AZLREWQ)`,
 			want: "MPT5A6ZS2FNZWQGFN24AZLREWQ",
 		},
 		{
 			name: "preflight rejection without a holder",
-			out:  `Error: snapshot name "vk-ns.demo-0" already exists`,
+			out:  `Error: snapshot name "vk-ns-demo-0-505043" already exists`,
 			want: "",
 		},
 		{name: "unrelated output", out: "Error: no space left on device", want: ""},

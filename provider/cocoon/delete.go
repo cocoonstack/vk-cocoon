@@ -58,7 +58,10 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 
 	if meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName)) && p.Pusher != nil && v.Name != "" {
-		p.saveAndPushSnapshot(ctx, pod, v, meta.DefaultSnapshotTag, spec.Image)
+		if err := p.saveAndPushSnapshot(ctx, pod, v, meta.DefaultSnapshotTag, spec.Image); err != nil {
+			metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "snapshot").Inc()
+			return fmt.Errorf("snapshot vm %s before delete: %w", v.ID, err)
+		}
 	}
 
 	if err := p.removeVM(ctx, v); err != nil {

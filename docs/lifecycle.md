@@ -157,6 +157,10 @@ cannot wedge node registration. Rejected create/update calls count on
    - `main-only`: same, but only for the main agent (role `RoleMain`,
      i.e. slot 0 of its CocoonSet).
    - `never`: skip snapshots entirely.
+
+   Only a running VM is snapshotted; when its save or push fails, DeletePod
+   returns the error and keeps the VM, so the pod stays Terminating while
+   virtual-kubelet retries the delete.
 3. `Runtime.Remove(vmID)` destroys the VM; an already absent VM also
    completes this step. Then release each DHCP-backed NIC lease through
    cocoon-net's local control socket. Lease cleanup is best-effort after

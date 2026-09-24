@@ -18,7 +18,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-func TestNeedsPostClone(t *testing.T) {
+func TestPostCloneNeeded(t *testing.T) {
 	t.Parallel()
 
 	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
@@ -38,9 +38,9 @@ func TestNeedsPostClone(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := needsPostClone(tc.backend, tc.nics)
+			got := postCloneNeeded(meta.VMSpec{Backend: tc.backend}, &vm.VM{NetworkConfigs: tc.nics})
 			if got != tc.want {
-				t.Errorf("needsPostClone(%q, %d nics) = %v, want %v", tc.backend, len(tc.nics), got, tc.want)
+				t.Errorf("postCloneNeeded(%q, %d nics) = %v, want %v", tc.backend, len(tc.nics), got, tc.want)
 			}
 		})
 	}
@@ -203,7 +203,7 @@ func TestPlanPostClone(t *testing.T) {
 func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	rt := &fakeRuntime{
 		runVM: &vm.VM{
-			ID: "vmid", Name: "vk-ns.win-0",
+			ID: "vmid", Name: "vk-ns-win-0-4bafe1",
 			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}},
 		},
 	}
@@ -212,7 +212,7 @@ func TestCreatePodWindowsRunModeSACFailureKeepsFailed(t *testing.T) {
 	p.GuestSAC = failingSACDialer{}
 
 	pod := newPodWithSpec(meta.VMSpec{
-		VMName: "vk-ns.win-0",
+		VMName: "vk-ns-win-0-4bafe1",
 		OS:     "windows",
 		Mode:   "run",
 	})
@@ -358,7 +358,7 @@ func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 
 	rt := &fakeRuntime{
 		cloneVM: &vm.VM{
-			ID: "vmid", Name: "vk-ns.win-0",
+			ID: "vmid", Name: "vk-ns-win-0-4bafe1",
 			NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}},
 		},
 	}
@@ -373,7 +373,7 @@ func TestCreatePodWindowsClonedRunsSACAfterPostCloneExec(t *testing.T) {
 	p.Runtime = rt
 	p.GuestSAC = orderRecordingSACDialer{mu: &mu, order: &order, done: sacDone}
 
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.win-0", OS: "windows"})
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-win-0-4bafe1", OS: "windows"})
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("create: %v", err)
 	}

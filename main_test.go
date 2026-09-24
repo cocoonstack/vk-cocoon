@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/virtual-kubelet/virtual-kubelet/node"
@@ -54,29 +55,31 @@ func TestApplyNodeLabels(t *testing.T) {
 }
 
 func TestPodQueuesFollowTheClientBudget(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		qps       float32
-		burst     int
-		undelayed int
-		limited   bool
-		pastMax   time.Duration
-	}{
-		{"configured", 100, 400, 400, true, 10 * time.Millisecond},
-		{"client-go defaults", 0, 0, rest.DefaultBurst, true, time.Second / time.Duration(rest.DefaultQPS)},
-		{"unlimited", -1, 0, 1000, false, podRetryBaseDelay},
-	} {
-		for queue, l := range podQueues(t, tc.qps, tc.burst) {
-			for i := range tc.undelayed {
-				if d := l.When(i); d > podRetryBaseDelay {
-					t.Fatalf("%s: %s queue delayed pod %d by %v inside the client's burst", tc.name, queue, i, d)
+	synctest.Test(t, func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			qps       float32
+			burst     int
+			undelayed int
+			limited   bool
+			pastMax   time.Duration
+		}{
+			{"configured", 100, 400, 400, true, 10 * time.Millisecond},
+			{"client-go defaults", 0, 0, rest.DefaultBurst, true, time.Second / time.Duration(rest.DefaultQPS)},
+			{"unlimited", -1, 0, 1000, false, podRetryBaseDelay},
+		} {
+			for queue, l := range podQueues(t, tc.qps, tc.burst) {
+				for i := range tc.undelayed {
+					if d := l.When(i); d > podRetryBaseDelay {
+						t.Fatalf("%s: %s queue delayed pod %d by %v inside the client's burst", tc.name, queue, i, d)
+					}
+				}
+				if d := l.When(tc.undelayed); d > tc.pastMax || tc.limited && d <= podRetryBaseDelay {
+					t.Fatalf("%s: %s queue delayed pod %d past the client's burst by %v, want at most %v", tc.name, queue, tc.undelayed, d, tc.pastMax)
 				}
 			}
-			if d := l.When(tc.undelayed); d > tc.pastMax || tc.limited && d <= podRetryBaseDelay {
-				t.Fatalf("%s: %s queue delayed pod %d past the client's burst by %v, want at most %v", tc.name, queue, tc.undelayed, d, tc.pastMax)
-			}
 		}
-	}
+	})
 }
 
 func TestPodQueuesBackOffAFailingPod(t *testing.T) {

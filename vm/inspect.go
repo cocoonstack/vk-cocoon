@@ -15,20 +15,7 @@ type inspectJSON struct {
 	Config     struct {
 		Name string `json:"name"`
 	} `json:"config"`
-	NetworkConfigs []struct {
-		Tap     string       `json:"tap"`
-		Mac     string       `json:"mac"`
-		Network *NetworkInfo `json:"network,omitempty"`
-	} `json:"network_configs,omitempty"`
-}
-
-// snapshotJSON is the wire format of `cocoon snapshot inspect`.
-type snapshotJSON struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	ImageDigest string `json:"image_digest"`
-	Hypervisor  string `json:"hypervisor"`
+	NetworkConfigs []*NetworkConfig `json:"network_configs,omitempty"`
 }
 
 func parseInspectJSON(raw []byte) (*VM, error) {
@@ -62,36 +49,24 @@ func parseVMListJSON(raw []byte) ([]VM, error) {
 }
 
 func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
-	var d snapshotJSON
-	if err := json.Unmarshal(raw, &d); err != nil {
+	var s Snapshot
+	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, fmt.Errorf("decode snapshot inspect: %w", err)
 	}
-	return &Snapshot{
-		ID:          d.ID,
-		Name:        d.Name,
-		Image:       d.Image,
-		ImageDigest: d.ImageDigest,
-		Hypervisor:  d.Hypervisor,
-	}, nil
+	return &s, nil
 }
 
 func inspectJSONToVM(d inspectJSON) *VM {
 	v := &VM{
-		ID:         d.ID,
-		Hypervisor: d.Hypervisor,
-		Name:       d.Config.Name,
-		State:      d.State,
-		PID:        d.PID,
-	}
-	for _, nc := range d.NetworkConfigs {
-		v.NetworkConfigs = append(v.NetworkConfigs, &NetworkConfig{
-			Tap:     nc.Tap,
-			MAC:     nc.Mac,
-			Network: nc.Network,
-		})
+		ID:             d.ID,
+		Hypervisor:     d.Hypervisor,
+		Name:           d.Config.Name,
+		State:          d.State,
+		PID:            d.PID,
+		NetworkConfigs: d.NetworkConfigs,
 	}
 	if len(d.NetworkConfigs) > 0 {
-		v.MAC = d.NetworkConfigs[0].Mac
+		v.MAC = d.NetworkConfigs[0].MAC
 		if d.NetworkConfigs[0].Network != nil {
 			v.IP = d.NetworkConfigs[0].Network.IP
 		}

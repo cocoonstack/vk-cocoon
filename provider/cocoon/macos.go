@@ -484,8 +484,8 @@ func ValidateMacosVNCPassword(pw string) error {
 	if pw == "" {
 		return nil
 	}
-	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, unicode.IsControl) {
-		return fmt.Errorf("must be at most %d bytes with no control characters", maxVNCPasswordBytes)
+	if len(pw) > maxVNCPasswordBytes || strings.ContainsFunc(pw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) || r == '"' }) {
+		return fmt.Errorf("must be at most %d bytes with no whitespace, control characters or double quotes", maxVNCPasswordBytes)
 	}
 	return nil
 }

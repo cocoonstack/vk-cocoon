@@ -9,10 +9,6 @@ import (
 // NodeProvider is the stateless node.NodeProvider for the virtual cocoon node.
 type NodeProvider struct{}
 
-func NewNodeProvider() *NodeProvider {
-	return &NodeProvider{}
-}
-
 func (*NodeProvider) Ping(_ context.Context) error {
 	return nil
 }

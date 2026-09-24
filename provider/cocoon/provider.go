@@ -129,7 +129,6 @@ type Provider struct {
 
 	// Shared scrape sample; see CollectVMStats.
 	statsMu sync.Mutex
-	statsAt time.Time
 	stats   provider.Sample
 
 	// Zero values fall back to the defaultXxx constants; tests shrink them before exercising handleVMGone.
