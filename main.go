@@ -207,7 +207,7 @@ func main() {
 				})
 			}
 		}
-		return p, cocoon.NewNodeProvider(), nil
+		return p, &cocoon.NodeProvider{}, nil
 	}
 
 	kubeletMux := http.NewServeMux()
