@@ -68,5 +68,5 @@ dial, and macOS pods keep their SSH-banner probe. The degraded branch is
 weaker than a real end-to-end ping but still strictly better than the
 previous behaviour of marking the pod Ready the instant
 `cocoon vm clone/run` returned. The systemd unit in
-`packaging/vk-cocoon.service` grants `AmbientCapabilities=CAP_NET_RAW` so
-the production path gets the real pinger.
+`packaging/vk-cocoon.service` runs vk-cocoon as root, so the production path
+gets the real pinger.
