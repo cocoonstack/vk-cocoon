@@ -22,15 +22,6 @@ type inspectJSON struct {
 	} `json:"network_configs,omitempty"`
 }
 
-// snapshotJSON is the wire format of `cocoon snapshot inspect`.
-type snapshotJSON struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Image       string `json:"image"`
-	ImageDigest string `json:"image_digest"`
-	Hypervisor  string `json:"hypervisor"`
-}
-
 func parseInspectJSON(raw []byte) (*VM, error) {
 	var d inspectJSON
 	if err := json.Unmarshal(raw, &d); err != nil {
@@ -62,17 +53,11 @@ func parseVMListJSON(raw []byte) ([]VM, error) {
 }
 
 func parseSnapshotJSON(raw []byte) (*Snapshot, error) {
-	var d snapshotJSON
-	if err := json.Unmarshal(raw, &d); err != nil {
+	var s Snapshot
+	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, fmt.Errorf("decode snapshot inspect: %w", err)
 	}
-	return &Snapshot{
-		ID:          d.ID,
-		Name:        d.Name,
-		Image:       d.Image,
-		ImageDigest: d.ImageDigest,
-		Hypervisor:  d.Hypervisor,
-	}, nil
+	return &s, nil
 }
 
 func inspectJSONToVM(d inspectJSON) *VM {

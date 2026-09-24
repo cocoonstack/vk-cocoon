@@ -66,11 +66,11 @@ type VM struct {
 
 // Snapshot is the subset of `cocoon snapshot inspect` needed to restore a VM.
 type Snapshot struct {
-	ID          string
-	Name        string
-	Image       string
-	ImageDigest string // resolved image digest (e.g. "sha256:abc...")
-	Hypervisor  string
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	ImageDigest string `json:"image_digest"` // resolved image digest (e.g. "sha256:abc...")
+	Hypervisor  string `json:"hypervisor"`
 }
 
 // RestoreMode maps to `cocoon vm clone --restore-mode`; RestoreMmap needs a CH build with mmap restore support.
