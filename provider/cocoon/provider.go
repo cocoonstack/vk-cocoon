@@ -197,17 +197,6 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-func (p *Provider) RefreshKeepSnapshotOnDelete(pod *corev1.Pod) {
-	if !meta.ReadKeepSnapshotOnDelete(pod) {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; ok && tracked.UID == pod.UID {
-		meta.MarkKeepSnapshotOnDelete(tracked)
-	}
-}
-
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -220,6 +209,17 @@ func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 // StartVMWatcher subscribes to cocoon's VM event stream in the background.
 func (p *Provider) StartVMWatcher(ctx context.Context) {
 	go p.vmWatchLoop(ctx)
+}
+
+func (p *Provider) RefreshKeepSnapshotOnDelete(pod *corev1.Pod) {
+	if !meta.ReadKeepSnapshotOnDelete(pod) {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; ok && tracked.UID == pod.UID {
+		meta.MarkKeepSnapshotOnDelete(tracked)
+	}
 }
 
 // goBackground spawns f under p.mu so bgWG.Go cannot race Close's Wait (add-after-wait misuse).

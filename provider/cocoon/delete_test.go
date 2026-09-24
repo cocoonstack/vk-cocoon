@@ -409,36 +409,6 @@ func (r *snapshotExportRuntime) SnapshotExport(context.Context, string) (io.Read
 	return io.NopCloser(bytes.NewReader(r.export)), func() error { return nil }, nil
 }
 
-func newSnapshotDeleteFixture(t *testing.T, rt *snapshotExportRuntime, v *vm.VM) (*Provider, *corev1.Pod) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Pusher = &snapshots.Pusher{Runtime: rt, Registry: fakeRegistry{}}
-	pod := newPodWithSpec(meta.VMSpec{VMName: v.Name, Mode: "clone", SnapshotPolicy: "always"})
-	p.trackPod(pod, v)
-	return p, pod
-}
-
-func snapshotExportTar(t *testing.T, name string) []byte {
-	t.Helper()
-	envelope, err := commonsnapshot.MarshalEnvelope(&manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: "SNAP-1"}, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Name: "snapshot.json", Mode: 0o644, Size: int64(len(envelope))}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(envelope); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
 type recordingLeaseReleaser struct {
 	mu   sync.Mutex
 	macs []string
@@ -469,4 +439,34 @@ func (r *recordingLeaseReleaser) awaitReleases(t *testing.T, want int) []string 
 	}
 	t.Fatalf("releases = %v, want %d entries within 2s", r.released(), want)
 	return nil
+}
+
+func newSnapshotDeleteFixture(t *testing.T, rt *snapshotExportRuntime, v *vm.VM) (*Provider, *corev1.Pod) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Pusher = &snapshots.Pusher{Runtime: rt, Registry: fakeRegistry{}}
+	pod := newPodWithSpec(meta.VMSpec{VMName: v.Name, Mode: "clone", SnapshotPolicy: "always"})
+	p.trackPod(pod, v)
+	return p, pod
+}
+
+func snapshotExportTar(t *testing.T, name string) []byte {
+	t.Helper()
+	envelope, err := commonsnapshot.MarshalEnvelope(&manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: "SNAP-1"}, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "snapshot.json", Mode: 0o644, Size: int64(len(envelope))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
