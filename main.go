@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 
@@ -217,6 +218,7 @@ func main() {
 		nodeutil.AttachProviderRoutes(kubeletMux),
 		withHandler(kubeletMux),
 		withPodQueueLimits(kubeCfg.QPS, kubeCfg.Burst),
+		withKeepSnapshotRefresh(p),
 		nodeutil.WithTLSConfig(func(tc *tls.Config) error {
 			tc.Certificates = []tls.Certificate{tlsCert}
 			tc.ClientAuth = tls.NoClientCert
@@ -378,6 +380,19 @@ func withPodQueueLimits(qps float32, burst int) nodeutil.NodeOpt {
 		c.DeletePodsFromKubernetesRateLimiter = limiter()
 		c.SyncPodStatusFromProviderRateLimiter = limiter()
 		return nil
+	})
+}
+
+func withKeepSnapshotRefresh(p *cocoon.Provider) nodeutil.NodeOpt {
+	return nodeutil.WithPodControllerConfigOverrides(func(c *node.PodControllerConfig) error {
+		_, err := c.PodInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+			UpdateFunc: func(_, obj any) {
+				if pod, ok := obj.(*corev1.Pod); ok {
+					p.RefreshKeepSnapshotOnDelete(pod)
+				}
+			},
+		})
+		return err
 	})
 }
 
