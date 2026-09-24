@@ -2858,7 +2858,7 @@ func (fakeRegistry) GetBlob(context.Context, string, string) (io.ReadCloser, err
 
 func (fakeRegistry) HasBlob(context.Context, string, string) (bool, error) { return false, nil }
 
-func (fakeRegistry) PutBlob(context.Context, string, string, io.Reader, int64) error { return nil }
+func (fakeRegistry) PutBlob(context.Context, string, string, io.ReadSeeker, int64) error { return nil }
 
 func (fakeRegistry) PutManifest(context.Context, string, string, []byte, string) error { return nil }
 
