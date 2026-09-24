@@ -30,8 +30,8 @@ github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506 h1:ASDL+UJcILM
 github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506/go.mod h1:Mw7HqKr2kdtu6aYGn3tPmAftiP3QPX63LdK/zcariIo=
 github.com/cockroachdb/redact v1.1.8 h1:8eVLLj6juKxiKrAEw2b8cJvNqWq++U8WOfQFuL7KTaA=
 github.com/cockroachdb/redact v1.1.8/go.mod h1:GceHHpJ0rMDpYARL5In88Alq/xMBUtVlz7Qxix6ZVkw=
-github.com/cocoonstack/cocoon-common v0.3.5 h1:KIa87Z6YTqVLKikFwlQB4DgFt6HyofM18FB3KSNp3II=
-github.com/cocoonstack/cocoon-common v0.3.5/go.mod h1:Gw/zBYqntoxpcT//2rBcXHQz6JErin/IsTsEmoQdGr0=
+github.com/cocoonstack/cocoon-common v0.3.6-0.20260924152119-ed18c4560862 h1:YFWtjygN7NmFNDLSphJsHrPUcQ8zdRPlD2wHeBtfZ54=
+github.com/cocoonstack/cocoon-common v0.3.6-0.20260924152119-ed18c4560862/go.mod h1:Gw/zBYqntoxpcT//2rBcXHQz6JErin/IsTsEmoQdGr0=
 github.com/coreos/go-semver v0.3.1 h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr4=
 github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03VsM8rvUec=
 github.com/coreos/go-systemd/v22 v22.7.0 h1:LAEzFkke61DFROc7zNLX/WA2i5J8gYqe0rSj9KI28KA=
