@@ -197,20 +197,15 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-// RefreshKeepSnapshotOnDelete mirrors the keep-snapshot flag from a pod informer update onto the tracked copy, the pod virtual-kubelet hands DeletePod after force-deleting a hibernated pod without an UpdatePod.
 func (p *Provider) RefreshKeepSnapshotOnDelete(pod *corev1.Pod) {
-	keep := meta.ReadKeepSnapshotOnDelete(pod)
+	if !meta.ReadKeepSnapshotOnDelete(pod) {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]
-	if !ok || tracked.UID != pod.UID || meta.ReadKeepSnapshotOnDelete(tracked) == keep {
-		return
-	}
-	if keep {
+	if tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; ok && tracked.UID == pod.UID {
 		meta.MarkKeepSnapshotOnDelete(tracked)
-		return
 	}
-	delete(tracked.Annotations, meta.AnnotationKeepSnapshotOnDelete)
 }
 
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {

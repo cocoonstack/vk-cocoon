@@ -82,14 +82,11 @@ func TestDeletePodReadsAKeepFlagRefreshedFromTheInformer(t *testing.T) {
 	const name = "vk-ns-demo-0-505043"
 	tests := []struct {
 		name          string
-		trackedKeep   bool
-		updateKeep    bool
 		updateUID     types.UID
 		wantSnapshots []string
 	}{
-		{name: "flag patched after the last update keeps snapshots", updateKeep: true, updateUID: "uid-1"},
-		{name: "a newer incarnation's flag is not this pod's", updateKeep: true, updateUID: "uid-2", wantSnapshots: []string{name, forkSnapshotName(name)}},
-		{name: "flag cleared again drops snapshots", trackedKeep: true, updateUID: "uid-1", wantSnapshots: []string{name, forkSnapshotName(name)}},
+		{name: "flag patched after the last update keeps snapshots", updateUID: "uid-1"},
+		{name: "a newer incarnation's flag is not this pod's", updateUID: "uid-2", wantSnapshots: []string{name, forkSnapshotName(name)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,17 +96,11 @@ func TestDeletePodReadsAKeepFlagRefreshedFromTheInformer(t *testing.T) {
 
 			pod := newPodWithSpec(meta.VMSpec{VMName: name, Mode: "clone"})
 			pod.UID = "uid-1"
-			if tt.trackedKeep {
-				meta.MarkKeepSnapshotOnDelete(pod)
-			}
 			p.trackPod(pod, nil)
 
 			update := pod.DeepCopy()
 			update.UID = tt.updateUID
-			delete(update.Annotations, meta.AnnotationKeepSnapshotOnDelete)
-			if tt.updateKeep {
-				meta.MarkKeepSnapshotOnDelete(update)
-			}
+			meta.MarkKeepSnapshotOnDelete(update)
 			p.RefreshKeepSnapshotOnDelete(update)
 
 			tracked, err := p.GetPod(t.Context(), pod.Namespace, pod.Name)

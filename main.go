@@ -386,11 +386,7 @@ func withPodQueueLimits(qps float32, burst int) nodeutil.NodeOpt {
 func withKeepSnapshotRefresh(p *cocoon.Provider) nodeutil.NodeOpt {
 	return nodeutil.WithPodControllerConfigOverrides(func(c *node.PodControllerConfig) error {
 		_, err := c.PodInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, obj any) {
-				if pod, ok := obj.(*corev1.Pod); ok {
-					p.RefreshKeepSnapshotOnDelete(pod)
-				}
-			},
+			UpdateFunc: func(_, obj any) { p.RefreshKeepSnapshotOnDelete(obj.(*corev1.Pod)) },
 		})
 		return err
 	})
