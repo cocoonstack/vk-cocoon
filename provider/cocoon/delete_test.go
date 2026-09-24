@@ -82,14 +82,11 @@ func TestDeletePodReadsAKeepFlagRefreshedFromTheInformer(t *testing.T) {
 	const name = "vk-ns-demo-0-505043"
 	tests := []struct {
 		name          string
-		trackedKeep   bool
-		updateKeep    bool
 		updateUID     types.UID
 		wantSnapshots []string
 	}{
-		{name: "flag patched after the last update keeps snapshots", updateKeep: true, updateUID: "uid-1"},
-		{name: "a newer incarnation's flag is not this pod's", updateKeep: true, updateUID: "uid-2", wantSnapshots: []string{name, forkSnapshotName(name)}},
-		{name: "flag cleared again drops snapshots", trackedKeep: true, updateUID: "uid-1", wantSnapshots: []string{name, forkSnapshotName(name)}},
+		{name: "flag patched after the last update keeps snapshots", updateUID: "uid-1"},
+		{name: "a newer incarnation's flag is not this pod's", updateUID: "uid-2", wantSnapshots: []string{name, forkSnapshotName(name)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,17 +96,11 @@ func TestDeletePodReadsAKeepFlagRefreshedFromTheInformer(t *testing.T) {
 
 			pod := newPodWithSpec(meta.VMSpec{VMName: name, Mode: "clone"})
 			pod.UID = "uid-1"
-			if tt.trackedKeep {
-				meta.MarkKeepSnapshotOnDelete(pod)
-			}
 			p.trackPod(pod, nil)
 
 			update := pod.DeepCopy()
 			update.UID = tt.updateUID
-			delete(update.Annotations, meta.AnnotationKeepSnapshotOnDelete)
-			if tt.updateKeep {
-				meta.MarkKeepSnapshotOnDelete(update)
-			}
+			meta.MarkKeepSnapshotOnDelete(update)
 			p.RefreshKeepSnapshotOnDelete(update)
 
 			tracked, err := p.GetPod(t.Context(), pod.Namespace, pod.Name)
@@ -418,36 +409,6 @@ func (r *snapshotExportRuntime) SnapshotExport(context.Context, string) (io.Read
 	return io.NopCloser(bytes.NewReader(r.export)), func() error { return nil }, nil
 }
 
-func newSnapshotDeleteFixture(t *testing.T, rt *snapshotExportRuntime, v *vm.VM) (*Provider, *corev1.Pod) {
-	t.Helper()
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Pusher = &snapshots.Pusher{Runtime: rt, Registry: fakeRegistry{}}
-	pod := newPodWithSpec(meta.VMSpec{VMName: v.Name, Mode: "clone", SnapshotPolicy: "always"})
-	p.trackPod(pod, v)
-	return p, pod
-}
-
-func snapshotExportTar(t *testing.T, name string) []byte {
-	t.Helper()
-	envelope, err := commonsnapshot.MarshalEnvelope(&manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: "SNAP-1"}, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Name: "snapshot.json", Mode: 0o644, Size: int64(len(envelope))}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(envelope); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
-
 type recordingLeaseReleaser struct {
 	mu   sync.Mutex
 	macs []string
@@ -478,4 +439,34 @@ func (r *recordingLeaseReleaser) awaitReleases(t *testing.T, want int) []string 
 	}
 	t.Fatalf("releases = %v, want %d entries within 2s", r.released(), want)
 	return nil
+}
+
+func newSnapshotDeleteFixture(t *testing.T, rt *snapshotExportRuntime, v *vm.VM) (*Provider, *corev1.Pod) {
+	t.Helper()
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Pusher = &snapshots.Pusher{Runtime: rt, Registry: fakeRegistry{}}
+	pod := newPodWithSpec(meta.VMSpec{VMName: v.Name, Mode: "clone", SnapshotPolicy: "always"})
+	p.trackPod(pod, v)
+	return p, pod
+}
+
+func snapshotExportTar(t *testing.T, name string) []byte {
+	t.Helper()
+	envelope, err := commonsnapshot.MarshalEnvelope(&manifest.SnapshotConfig{SchemaVersion: "v1", SnapshotID: "SNAP-1"}, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "snapshot.json", Mode: 0o644, Size: int64(len(envelope))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

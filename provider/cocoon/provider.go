@@ -57,7 +57,6 @@ const (
 	// inlineInspectAttempts covers one CLI hiccup; the deferred recheck takes over beyond it.
 	inlineInspectAttempts = 2
 
-	// startupFanOut and statusReconcileFanOut bound separate fan-outs; equal today, tuned separately.
 	startupFanOut         = 8
 	statusReconcileFanOut = 8
 
@@ -112,12 +111,12 @@ type Provider struct {
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
-	recheckWG      sync.WaitGroup       // tracks deferred recheck goroutines so Close can await them
-	bgWG           sync.WaitGroup       // tracks background goroutines so Close can await them
-	forkSnapshotSF singleflight.Group   // dedups concurrent fork-base snapshot creation (self-synchronized)
-	snapshotPullSF singleflight.Group   // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
-	runImageSF     singleflight.Group   // dedups concurrent base-image materialization of one ref (self-synchronized)
-	macosImageSF   singleflight.Group   // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
+	recheckWG      sync.WaitGroup
+	bgWG           sync.WaitGroup
+	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
+	snapshotPullSF singleflight.Group // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
+	runImageSF     singleflight.Group // dedups concurrent base-image materialization of one ref (self-synchronized)
+	macosImageSF   singleflight.Group // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
 	notifyHook     podNotifier
 
 	// macOS test seams; production leaves them nil (real exec / real signal-0 probe).
@@ -197,22 +196,6 @@ func (p *Provider) GetPods(_ context.Context) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-// RefreshKeepSnapshotOnDelete mirrors the keep-snapshot flag from a pod informer update onto the tracked copy, the pod virtual-kubelet hands DeletePod after force-deleting a hibernated pod without an UpdatePod.
-func (p *Provider) RefreshKeepSnapshotOnDelete(pod *corev1.Pod) {
-	keep := meta.ReadKeepSnapshotOnDelete(pod)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]
-	if !ok || tracked.UID != pod.UID || meta.ReadKeepSnapshotOnDelete(tracked) == keep {
-		return
-	}
-	if keep {
-		meta.MarkKeepSnapshotOnDelete(tracked)
-		return
-	}
-	delete(tracked.Annotations, meta.AnnotationKeepSnapshotOnDelete)
-}
-
 func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 	p.mu.Lock()
 	p.notifyHook = notifier
@@ -225,6 +208,17 @@ func (p *Provider) NotifyPods(_ context.Context, notifier func(*corev1.Pod)) {
 // StartVMWatcher subscribes to cocoon's VM event stream in the background.
 func (p *Provider) StartVMWatcher(ctx context.Context) {
 	go p.vmWatchLoop(ctx)
+}
+
+func (p *Provider) RefreshKeepSnapshotOnDelete(pod *corev1.Pod) {
+	if !meta.ReadKeepSnapshotOnDelete(pod) {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if tracked, ok := p.pods[meta.PodKey(pod.Namespace, pod.Name)]; ok && tracked.UID == pod.UID {
+		meta.MarkKeepSnapshotOnDelete(tracked)
+	}
 }
 
 // goBackground spawns f under p.mu so bgWG.Go cannot race Close's Wait (add-after-wait misuse).
@@ -348,7 +342,6 @@ func (p *Provider) trackPodLocked(pod *corev1.Pod, v *vm.VM) {
 	}
 }
 
-// setVMLocked writes v into both VM tables under p.mu; the write half of dropVMLocked.
 func (p *Provider) setVMLocked(key string, v *vm.VM) {
 	p.vmsByPod[key] = v
 	if v.Name != "" {
@@ -548,7 +541,6 @@ func (p *Provider) seedLeaseIP(v *vm.VM) {
 	}
 }
 
-// buildProbe returns a probe that resolves the VM's IP and pings it; ICMP works for Linux and Windows guests.
 func (p *Provider) buildProbe(namespace, name string) probes.Probe {
 	return func(ctx context.Context) (bool, string) {
 		v := p.vmForPod(namespace, name)
@@ -590,7 +582,6 @@ func (p *Provider) probeTCP(ctx context.Context, ip, port string) (bool, string)
 	return true, "tcp ok"
 }
 
-// vmWatchLoop runs the cocoon event stream with automatic restart on failure.
 func (p *Provider) vmWatchLoop(ctx context.Context) {
 	logger := log.WithFunc("Provider.vmWatchLoop")
 	backoff := time.Second
@@ -673,7 +664,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) bool {
 		}
 
 	case err != nil:
-		// cocoon does not re-emit DELETED and probes only ping IPs, so a deferred recheck must settle a still-transient VM
+		// Cocoon does not re-emit DELETED, so only a deferred recheck settles a still-transient VM.
 		logger.Errorf(ctx, err, "inspect vm %s inconclusive, scheduling deferred recheck for pod %s/%s",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		metrics.VMInspectTransientFailTotal.Inc()
@@ -741,7 +732,6 @@ func (p *Provider) evictGoneIncarnation(ctx context.Context, key string, pod *co
 	p.evictPod(ctx, key, pod, reason, message)
 }
 
-// inspectWithRetry returns on a definitive result (success or ErrVMNotFound) and retries other errors with a growing delay.
 func (p *Provider) inspectWithRetry(ctx context.Context, vmID string) (*vm.VM, error) {
 	base := cmp.Or(p.inlineInspectBaseDelay, defaultInlineInspectBaseDelay)
 	var lastErr error
@@ -775,7 +765,6 @@ func (p *Provider) scheduleDeferredRecheck(vmID string) {
 	p.recheckWG.Go(func() { p.runDeferredRecheck(p.lifecycleCtx, vmID) })
 }
 
-// runDeferredRecheck loops until the VM resolves or the pod stops being tracked.
 func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 	logger := log.WithFunc("Provider.runDeferredRecheck")
 	defer func() {
@@ -814,7 +803,7 @@ func (p *Provider) runDeferredRecheck(ctx context.Context, vmID string) {
 			}
 			delay = min(delay*2, maxDelay)
 		case v.State != vm.StateRunning:
-			// a synthetic event keeps the restart-cooldown bookkeeping in one place
+			// A synthetic event keeps the restart-cooldown bookkeeping in one place.
 			logger.Infof(ctx, "deferred recheck: vm %s non-running (state=%s), replaying event",
 				vmID, v.State)
 			if !p.handleVMGone(ctx, v) {
@@ -838,7 +827,7 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for key, tracked := range p.vmsByPod {
-		// a name-colliding CH event must match the CH record, never a cocoon-macos guest
+		// A name-colliding CH event matches the CH record, never a cocoon-macos guest.
 		if isMacosVM(tracked) {
 			continue
 		}
@@ -931,7 +920,6 @@ func (p *Provider) patchPod(ctx context.Context, namespace, name string, patch [
 	return nil
 }
 
-// clearRuntimeAnnotations drops VMID, IP and the post-clone marker in memory (under p.mu) and on the apiserver.
 func (p *Provider) clearRuntimeAnnotations(ctx context.Context, pod *corev1.Pod) error {
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.mu.Lock()

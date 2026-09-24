@@ -173,11 +173,11 @@ cannot wedge node registration. Rejected create/update calls count on
    kept as the warm-wake cache that lets a wake landing back on this node
    skip the registry pull. `resolveWakeSource` still verifies any local copy
    against the tag's `SnapshotID`, so keeping it cannot restore stale state.
-   A missing flag only costs a pull, never correctness. The flag is read from
-   vk-cocoon's tracked copy of the pod, which mirrors it straight from the pod
-   informer: virtual-kubelet force-deletes a hibernated pod (no container
-   status) without an `UpdatePod` and hands `DeletePod` that tracked copy, so
-   a flag patched right before the delete would otherwise never arrive.
+   A missing flag only costs a pull, never correctness. For a hibernated pod
+   (no container status) virtual-kubelet force-deletes without an `UpdatePod`
+   and hands `DeletePod` vk-cocoon's tracked copy; that copy takes the flag
+   from the pod informer, so a flag patched right before the delete still
+   arrives.
 5. Forget the pod from the in-memory tables.
 
 ## UpdatePod
