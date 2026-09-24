@@ -362,7 +362,7 @@ func planPostClone(spec meta.VMSpec, v *vm.VM, sourceImage string) (postClonePla
 
 // postCloneNeeded is planPostClone's decision alone, cheap and syscall-free, so lock-holders can ask directly.
 func postCloneNeeded(spec meta.VMSpec, v *vm.VM) bool {
-	return spec.OS == string(cocoonv1.OSWindows) || needsPostClone(spec.Backend, v.NetworkConfigs)
+	return spec.OS == string(cocoonv1.OSWindows) || spec.Backend == vm.BackendFirecracker || slices.ContainsFunc(v.NetworkConfigs, isStaticNIC)
 }
 
 func truncate(s string, n int) string {
@@ -370,14 +370,6 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-// needsPostClone is true for every FC clone (MAC re-apply) and for CH only with a static-IP NIC.
-func needsPostClone(backend string, networkConfigs []*vm.NetworkConfig) bool {
-	if backend == vm.BackendFirecracker {
-		return true
-	}
-	return slices.ContainsFunc(networkConfigs, isStaticNIC)
 }
 
 // buildWindowsPostCloneArgv passes -PresentOnly because ghost Net PnP entries make Disable-PnpDevice return 0x80041001 first.

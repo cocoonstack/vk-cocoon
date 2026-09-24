@@ -18,7 +18,7 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-func TestNeedsPostClone(t *testing.T) {
+func TestPostCloneNeeded(t *testing.T) {
 	t.Parallel()
 
 	staticNIC := []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.2", Prefix: 24, Gateway: "10.0.0.1"}}}
@@ -38,9 +38,9 @@ func TestNeedsPostClone(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := needsPostClone(tc.backend, tc.nics)
+			got := postCloneNeeded(meta.VMSpec{Backend: tc.backend}, &vm.VM{NetworkConfigs: tc.nics})
 			if got != tc.want {
-				t.Errorf("needsPostClone(%q, %d nics) = %v, want %v", tc.backend, len(tc.nics), got, tc.want)
+				t.Errorf("postCloneNeeded(%q, %d nics) = %v, want %v", tc.backend, len(tc.nics), got, tc.want)
 			}
 		})
 	}
