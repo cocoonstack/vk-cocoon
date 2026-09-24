@@ -25,9 +25,6 @@ import (
 )
 
 const (
-	// hibernateImportSuffix avoids name collision with the live VM the Clone produces.
-	hibernateImportSuffix = "-hibernate-import"
-
 	// defaultWakeFreshIPBudget bounds waitForFreshIP; the budget is generous.
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
@@ -525,7 +522,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, namespace, vmName stri
 	if p.Puller == nil {
 		return wakeSource{}, fmt.Errorf("wake %s: no local snapshot and no puller configured", vmName)
 	}
-	importName := vmName + hibernateImportSuffix
+	importName := vmName + meta.HibernateImportSuffix
 	pullStart := time.Now()
 	if pullErr := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); pullErr != nil {
 		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()

@@ -16,7 +16,7 @@ import (
 
 func TestVMGoneEvictionContinuesPastInspectBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 		cs := fake.NewSimpleClientset(pod)
 		deletes := 0
 		cs.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -32,9 +32,9 @@ func TestVMGoneEvictionContinuesPastInspectBudget(t *testing.T) {
 		p.deferredRecheckInitialDelay = time.Millisecond
 		p.deferredRecheckMaxDelay = 2 * time.Millisecond
 		p.deferredRecheckBudget = time.Millisecond
-		p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
+		p.trackPod(pod, &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0-505043"})
 
-		p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0"})
+		p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0-505043"})
 		time.Sleep(time.Second)
 		synctest.Wait()
 		if got := p.vmForPod("ns", "demo-0"); got != nil {
@@ -47,8 +47,8 @@ func TestVMRemovalEvictionRetriesAfterAPIRecovery(t *testing.T) {
 	for _, path := range []string{"watch event", "deferred restart", "inspect timeout"} {
 		t.Run(path, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns.demo-0", Mode: "run"})
-				stopped := &vm.VM{ID: "vmid-evict", Name: "vk-ns.demo-0", State: "stopped"}
+				pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+				stopped := &vm.VM{ID: "vmid-evict", Name: "vk-ns-demo-0-505043", State: "stopped"}
 				cs := fake.NewSimpleClientset(pod)
 				deletes := 0
 				cs.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
