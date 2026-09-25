@@ -113,6 +113,7 @@ type Provider struct {
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
 	busyCreates    map[string]chan struct{}
+	macosLeftover  map[string]types.UID
 	recheckWG      sync.WaitGroup
 	bgWG           sync.WaitGroup
 	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
@@ -163,6 +164,7 @@ func NewProvider(ctx context.Context) *Provider {
 		pendingRecheck:  map[string]struct{}{},
 		resumedOps:      map[string]struct{}{},
 		busyCreates:     map[string]chan struct{}{},
+		macosLeftover:   map[string]types.UID{},
 		lifecycleIntent: map[string]lifecycleEntry{},
 		deleting:        map[string]struct{}{},
 		hibernating:     map[string]struct{}{},
@@ -424,6 +426,7 @@ func (p *Provider) untrackLocked(key string) {
 	p.dropVMLocked(key)
 	delete(p.pods, key)
 	delete(p.macosVNC, key)
+	delete(p.macosLeftover, key)
 	delete(p.lifecycleIntent, key)
 }
 

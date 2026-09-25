@@ -149,7 +149,10 @@ cannot wedge node registration. Rejected create/update calls count on
 1. Decode `meta.VMSpec`. Unmanaged pods are only forgotten; their VMs
    remain under the external owner's control. Managed `os=macos` pods
    tear down via `cocoon-macos vm rm`, release their DHCP leases, and
-   skip the snapshot logic below.
+   skip the snapshot logic below. A macOS pod whose create failed but left
+   a VM record never reaches DeletePod, because virtual-kubelet removes a
+   pod that never ran straight from the API; vk-cocoon runs the same
+   teardown for it when the pod's delete event arrives.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via

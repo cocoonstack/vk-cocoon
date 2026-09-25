@@ -755,6 +755,77 @@ func TestCreateMacosPodFailureReleasesTheVNCPortOnlyWithoutAVM(t *testing.T) {
 	}
 }
 
+func TestDeletingTheFailedMacosCreatePodRemovesTheRecordItLeft(t *testing.T) {
+	const missing = "Error: read vm record: open /var/lib/cocoon-macos/vms/macos-demo/vm.json: no such file or directory"
+	for _, tc := range []struct {
+		name    string
+		out     string
+		err     error
+		wantRms int
+	}{
+		{name: "record left behind", out: macosInspectJSON, wantRms: 1},
+		{name: "no vm record", out: missing, err: errors.New("exit status 1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod)
+			ran := false
+			calls := stubMacosExec(p, func(args []string) (string, error) {
+				switch {
+				case macosCallIs(args, "vm", "inspect") && ran:
+					return tc.out, tc.err
+				case macosCallIs(args, "vm", "inspect"):
+					return missing, errors.New("exit status 1")
+				case macosCallIs(args, "image", "inspect"):
+					return "{}", nil
+				case macosCallIs(args, "vm", "run"):
+					ran = true
+					return "launch qemu: exit status 1", errors.New("exit status 1")
+				}
+				return "", nil
+			})
+			if err := p.CreatePod(t.Context(), pod); err == nil {
+				t.Fatal("CreatePod must fail when vm run fails")
+			}
+
+			p.DeleteFailedMacosCreate(pod)
+			p.Close()
+
+			if pod.Status.Phase == corev1.PodSucceeded {
+				t.Fatal("the delete hook wrote into the informer's pod")
+			}
+			if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != tc.wantRms {
+				t.Fatalf("vm rm calls = %v, want %d after the failed pod is deleted", rms, tc.wantRms)
+			}
+			if got := p.macosVNCPortFor(meta.PodKey("ns", "demo-0")); got != 0 {
+				t.Fatalf("VNC reservation after the delete = %d, want released", got)
+			}
+		})
+	}
+}
+
+func TestDeletingAPodWhoseDeadMacosRecordSurvivedARestartRemovesIt(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.macosProcessAliveFn = func(int) bool { return false }
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		if macosCallIs(args, "vm", "inspect") {
+			return macosInspectJSON, nil
+		}
+		return "", nil
+	})
+
+	p.reconcileMacosPod(t.Context(), pod, meta.ParseVMSpec(pod))
+	p.DeleteFailedMacosCreate(pod)
+	p.Close()
+
+	if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != 1 || rms[0][2] != "macos-demo" {
+		t.Fatalf("calls %v, want one `vm rm macos-demo` for the pod deleted after the restart", calls())
+	}
+}
+
 func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())

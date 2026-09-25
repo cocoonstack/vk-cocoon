@@ -54,6 +54,22 @@ const (
 	macosInspectRetryEvery = 10 * time.Second
 )
 
+func (p *Provider) DeleteFailedMacosCreate(pod *corev1.Pod) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	_, tracked := p.pods[key]
+	uid, left := p.macosLeftover[key]
+	p.mu.RUnlock()
+	if tracked || !left || uid != pod.UID {
+		return
+	}
+	p.goBackground(func() {
+		if err := p.DeletePod(p.lifecycleCtx, pod.DeepCopy()); err != nil {
+			log.WithFunc("Provider.DeleteFailedMacosCreate").Errorf(p.lifecycleCtx, err, "remove the VM of the failed macOS create of %s", key)
+		}
+	})
+}
+
 // claimMacosVNCPort reserves a node-unique VNC port for key, preferring a previously published one; 0 means exhausted.
 func (p *Provider) claimMacosVNCPort(key string, preferred int) int {
 	if p.MacosVNCPassword == "" {
@@ -382,6 +398,11 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	if rec == nil || !p.macosProcessAlive(rec.PID) {
 		logger.Infof(ctx, "pod %s/%s: no live macOS VM %s; CreatePod will restart it",
 			pod.Namespace, pod.Name, spec.VMName)
+		if rec != nil {
+			p.mu.Lock()
+			p.macosLeftover[meta.PodKey(pod.Namespace, pod.Name)] = pod.UID
+			p.mu.Unlock()
+		}
 		return
 	}
 	logger.Infof(ctx, "adopting live macOS VM %s (pid %d) for pod %s/%s",
