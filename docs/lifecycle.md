@@ -200,9 +200,16 @@ Anything else is a no-op (the operator deletes and recreates the pod for
 genuine spec changes). Unmanaged pods ignore hibernate regardless of OS.
 Managed `os=macos` pods reject hibernate because cocoon-macos snapshots
 are offline disk snapshots with no live save/restore. The rejection marks
-the lifecycle `failed` (`HibernateUnsupported`); an update that clears
-hibernate while the guest is still tracked lifts only that failure and
-republishes Ready once the probe passes, and any other failure stays.
+the lifecycle `failed` (`HibernateUnsupported`). Every failed hibernate
+attempt, that refusal, a cloud-hypervisor NIC drop, save, push or remove
+that failed and left the VM in place, or the start of a hibernate resumed
+after a restart, writes a lifecycle message that starts with
+`hibernate: `. Once hibernate is cleared, an update, a restart of
+vk-cocoon, or a restart of the VM after it stopped lifts only that
+failure: the lifecycle returns to `creating`, then Ready, a macOS guest
+once its probe passes. A cloud-hypervisor VM must answer a live inspect
+as running first; an update whose inspect fails is retried. Any other
+failure stays.
 
 | Transition | Behavior |
 |---|---|

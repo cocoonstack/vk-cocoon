@@ -2595,6 +2595,7 @@ type fakeRuntime struct {
 	netResizeNeedsStart bool
 
 	startCalls []string
+	startErr   error
 	events     []vm.VMEvent
 
 	mu              sync.Mutex
@@ -2806,7 +2807,7 @@ func (f *fakeRuntime) Start(_ context.Context, vmID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.startCalls = append(f.startCalls, vmID)
-	return nil
+	return f.startErr
 }
 
 func (f *fakeRuntime) NetResize(ctx context.Context, vmID string, target int) error {

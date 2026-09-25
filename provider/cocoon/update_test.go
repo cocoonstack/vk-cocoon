@@ -839,6 +839,98 @@ func TestHandleVMGoneActsOnTheVMAFailedHibernateLeftBehind(t *testing.T) {
 	}
 }
 
+func TestUpdatePodLiftsOnlyAFailedHibernateOnceHibernateClears(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		live  string
+		later error
+		want  meta.LifecycleState
+	}{
+		{name: "failed hibernate", live: vm.StateRunning, want: meta.LifecycleStateReady},
+		{name: "failed hibernate whose VM died", live: "stopped", want: meta.LifecycleStateFailed},
+		{name: "another failure", live: vm.StateRunning, later: errors.New("post-clone exec exhausted"), want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: &vm.VM{ID: "vmid-live", State: tc.live}}
+			p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+
+			suspended := pod.DeepCopy()
+			meta.HibernateState(true).Apply(suspended)
+			if err := p.UpdatePod(t.Context(), suspended); err == nil {
+				t.Fatal("UpdatePod must fail when SnapshotSave fails")
+			}
+			if tc.later != nil {
+				p.failOp(t.Context(), suspended, "PostCloneExecExhausted", "create", tc.later)
+			}
+			unsuspended := suspended.DeepCopy()
+			meta.HibernateState(false).Apply(unsuspended)
+			if err := p.UpdatePod(t.Context(), unsuspended); err != nil {
+				t.Fatalf("UpdatePod after hibernate cleared: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after hibernate cleared = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleVMGoneLiftsAFailedHibernateOnceItRestartsTheVM(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hibernate bool
+		want      meta.LifecycleState
+	}{
+		{name: "hibernate cleared", want: meta.LifecycleStateReady},
+		{name: "hibernate still requested", hibernate: true, want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+			running := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+			rt := &fakeRuntime{inspectSeq: []fakeInspectStep{{vm: stopped}, {vm: running}}, inspectVM: running}
+			p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+			meta.HibernateState(tc.hibernate).Apply(pod)
+			meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: hibernateFailurePrefix + "push hibernation snapshot vk-ns-demo-0-505043: read-only"}.Apply(pod)
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: "stopped"})
+			p.seedLifecycleIntentFromPod(pod)
+
+			p.handleVMGone(t.Context(), stopped)
+
+			if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+				t.Fatalf("restarts = %v, want the stopped VM restarted", got)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after the restart = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdatePodRetriesALiftWhoseInspectFails(t *testing.T) {
+	running := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+	rt := &fakeRuntime{inspectSeq: []fakeInspectStep{{err: errors.New("cocoon: inspect busy")}}, inspectVM: running}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: hibernateFailurePrefix + "save snapshot vk-ns-demo-0-505043: save boom"}.Apply(pod)
+	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	p.seedLifecycleIntentFromPod(pod)
+
+	if err := p.UpdatePod(t.Context(), pod); err == nil {
+		t.Fatal("UpdatePod must return the failed inspect so the framework retries the lift")
+	}
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
+		t.Fatalf("lifecycle after the failed inspect = %q, want failed", meta.ReadLifecycleState(got))
+	}
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("retried UpdatePod: %v", err)
+	}
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle after the retry = %q, want ready", meta.ReadLifecycleState(got))
+	}
+}
+
 func hammerPodAnnotation(t *testing.T, p *Provider, key string) {
 	t.Helper()
 	stop := make(chan struct{})

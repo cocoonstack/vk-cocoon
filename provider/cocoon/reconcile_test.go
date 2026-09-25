@@ -427,3 +427,33 @@ func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {
 		t.Errorf("skeleton must not be indexed by name, got %#v", got)
 	}
 }
+
+func TestStartupReconcileLiftsAFailedHibernateClearedWhileDown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    meta.LifecycleState
+	}{
+		{name: "failed hibernate", message: "hibernate: save snapshot vk-ns-demo-0-505043: save boom", want: meta.LifecycleStateReady},
+		{name: "another failure", message: "post-clone exec exhausted", want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+			pod.Spec.NodeName = "cocoon-pool"
+			meta.VMRuntime{VMID: "live-vmid", IP: "10.0.0.42"}.Apply(pod)
+			meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: tc.message}.Apply(pod)
+			p := newTestProvider(t)
+			p.NodeName = "cocoon-pool"
+			live := &vm.VM{ID: "live-vmid", Name: "vk-ns-demo-0-505043", IP: "10.0.0.42", State: vm.StateRunning}
+			p.Runtime = &fakeRuntime{listVMs: []vm.VM{*live}, inspectVM: live}
+			p.Clientset = fake.NewSimpleClientset(pod)
+
+			if err := p.StartupReconcile(t.Context()); err != nil {
+				t.Fatalf("StartupReconcile: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after the restart = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
+	}
+}

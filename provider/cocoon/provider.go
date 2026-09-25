@@ -704,6 +704,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) bool {
 				v.PID, v.NetworkConfigs = fresh.PID, fresh.NetworkConfigs
 			})
 		}
+		p.liftClearedHibernateFailure(ctx, affectedPod)
 	}
 	return false
 }

@@ -67,7 +67,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 		run(func() {
 			// Boot unconditionally: the record still reads running after a SIGKILLed VMM and Start no-ops on a live VM; nothing else re-delivers the hibernate.
 			if err := p.Runtime.Start(p.lifecycleCtx, v.ID); err != nil {
-				p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
+				_ = p.failHibernate(p.lifecycleCtx, pod, "ResumeStartFailed", err)
 				return
 			}
 			if err := p.hibernate(p.lifecycleCtx, pod, spec, v); err != nil {

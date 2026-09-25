@@ -105,6 +105,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		p.trackPod(pod, v)
 		p.seedLifecycleIntentFromPod(pod)
+		p.liftClearedHibernateFailure(ctx, pod)
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
