@@ -152,9 +152,13 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 	}
 	p.failOp(ctx, pod, reason, "create", err)
 	key := meta.PodKey(pod.Namespace, pod.Name)
+	vncFree := p.macosVMAbsent(ctx, meta.ParseVMSpec(pod))
 	p.mu.Lock()
 	if !p.supersededLocked(key, pod.UID) {
 		delete(p.pods, key)
+		if vncFree {
+			delete(p.macosVNC, key)
+		}
 	}
 	p.mu.Unlock()
 	return err

@@ -713,6 +713,48 @@ func TestCreateMacosPodFailsWhenAutoPullFails(t *testing.T) {
 	}
 }
 
+func TestCreateMacosPodFailureReleasesTheVNCPortOnlyWithoutAVM(t *testing.T) {
+	const missing = "Error: read vm record: open /var/lib/cocoon-macos/vms/macos-demo/vm.json: no such file or directory"
+	for _, tc := range []struct {
+		name     string
+		out      string
+		err      error
+		wantPort int
+	}{
+		{name: "no vm record", out: missing, err: errors.New("exit status 1")},
+		{name: "inspect failed", err: errors.New("signal: killed"), wantPort: macosVNCPortBase},
+		{name: "record left behind", out: macosInspectJSON, wantPort: macosVNCPortBase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod)
+			ran := false
+			stubMacosExec(p, func(args []string) (string, error) {
+				switch {
+				case macosCallIs(args, "vm", "inspect") && ran:
+					return tc.out, tc.err
+				case macosCallIs(args, "vm", "inspect"):
+					return missing, errors.New("exit status 1")
+				case macosCallIs(args, "image", "inspect"):
+					return "{}", nil
+				case macosCallIs(args, "vm", "run"):
+					ran = true
+					return "launch qemu: exit status 1", errors.New("exit status 1")
+				}
+				return "", nil
+			})
+
+			if err := p.CreatePod(t.Context(), pod); err == nil {
+				t.Fatal("CreatePod must fail when vm run fails")
+			}
+			if got := p.macosVNCPortFor(meta.PodKey("ns", "demo-0")); got != tc.wantPort {
+				t.Fatalf("VNC reservation after the failed create = %d, want %d", got, tc.wantPort)
+			}
+		})
+	}
+}
+
 func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())

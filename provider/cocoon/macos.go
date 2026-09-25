@@ -173,6 +173,14 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	return nil
 }
 
+func (p *Provider) macosVMAbsent(ctx context.Context, spec meta.VMSpec) bool {
+	if !isMacosSpec(spec) {
+		return false
+	}
+	out, err := p.macosExec(ctx, "vm", "inspect", spec.VMName)
+	return err != nil && macosVMMissing(out)
+}
+
 func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
