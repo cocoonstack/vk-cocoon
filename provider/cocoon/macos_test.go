@@ -833,6 +833,46 @@ func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	}
 }
 
+func TestUpdateMacosPodLiftsOnlyTheHibernateRefusalOnceHibernateClears(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		later error
+		want  meta.LifecycleState
+	}{
+		{name: "hibernate refusal", want: meta.LifecycleStateReady},
+		{name: "another failure", later: errors.New("cocoon-macos vm start macos-demo: exit status 1"), want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			stubMacosExec(p, func([]string) (string, error) { return "", nil })
+			p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+			p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
+
+			suspended := pod.DeepCopy()
+			meta.HibernateState(true).Apply(suspended)
+			if err := p.UpdatePod(t.Context(), suspended); err == nil {
+				t.Fatal("UpdatePod must refuse to hibernate a macOS guest")
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
+				t.Fatalf("lifecycle after the refusal = %q, want failed", meta.ReadLifecycleState(got))
+			}
+			if tc.later != nil {
+				p.failOp(t.Context(), suspended, "CreateBringUpFailed", "create", tc.later)
+			}
+			unsuspended := suspended.DeepCopy()
+			meta.HibernateState(false).Apply(unsuspended)
+			if err := p.UpdatePod(t.Context(), unsuspended); err != nil {
+				t.Fatalf("UpdatePod after hibernate cleared: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after hibernate cleared = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
+	}
+}
+
 func TestStartupReconcileAdoptsLiveMacosVM(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "n1"

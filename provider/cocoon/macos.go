@@ -322,6 +322,23 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 	p.markReadyPublished(ctx, pod)
 }
 
+func (p *Provider) clearMacosHibernateRefusal(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) bool {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.Lock()
+	cur, ok := p.lifecycleIntent[key]
+	if !ok || cur.uid != pod.UID || cur.status.State != meta.LifecycleStateFailed ||
+		cur.status.Message != errMacosHibernateUnsupported(spec.VMName).Error() || !isMacosVM(p.vmsByPod[key]) {
+		p.mu.Unlock()
+		return false
+	}
+	status, applied := p.applyLifecycleLocked(ctx, pod, meta.LifecycleStateCreating, "")
+	p.mu.Unlock()
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
+	}
+	return true
+}
+
 // deleteMacosPod tears down the QEMU guest (`vm rm` also terminates the process); snapshot-on-delete cannot apply.
 func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) error {
 	logger := log.WithFunc("Provider.deleteMacosPod")
@@ -515,6 +532,10 @@ func isMacosSpec(spec meta.VMSpec) bool {
 func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
 
 func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
+
+func errMacosHibernateUnsupported(vmName string) error {
+	return fmt.Errorf("macOS guest %s does not support hibernate", vmName)
+}
 
 func macosCPUs(pod *corev1.Pod) int {
 	cpus := macosDefaultCPUs

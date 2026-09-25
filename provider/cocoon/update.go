@@ -78,12 +78,17 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		return errDeleteInFlight(pod)
 	}
 
-	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.
+	// os=macos cannot hibernate (offline disk snapshots); clearing the request lifts only that refusal.
 	if isMacosSpec(spec) {
 		if wantHibernate {
-			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)
+			err := errMacosHibernateUnsupported(spec.VMName)
 			p.failOp(ctx, pod, "HibernateUnsupported", "update", err)
 			return err
+		}
+		if p.clearMacosHibernateRefusal(ctx, pod, spec) {
+			p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
+			metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
+			return nil
 		}
 		return p.noopUpdate(ctx, pod)
 	}

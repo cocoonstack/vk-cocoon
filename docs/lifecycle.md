@@ -196,7 +196,10 @@ The only update vk-cocoon honors is a `HibernateState` transition.
 Anything else is a no-op (the operator deletes and recreates the pod for
 genuine spec changes). Unmanaged pods ignore hibernate regardless of OS.
 Managed `os=macos` pods reject hibernate because cocoon-macos snapshots
-are offline disk snapshots with no live save/restore.
+are offline disk snapshots with no live save/restore. The rejection marks
+the lifecycle `failed` (`HibernateUnsupported`); an update that clears
+hibernate while the guest is still tracked lifts only that failure and
+republishes Ready once the probe passes, and any other failure stays.
 
 | Transition | Behavior |
 |---|---|
