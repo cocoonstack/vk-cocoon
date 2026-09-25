@@ -125,6 +125,9 @@ func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
 // hibernate runs Save -> Push -> Remove; CH+Windows drops the NIC first to dodge a Windows PnP MAC-swap.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.startHibernate(key)
+	defer p.finishHibernate(key)
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
@@ -186,7 +189,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	if p.Probes != nil {
-		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
+		p.Probes.Forget(key)
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
 	if p.Pusher != nil {
@@ -454,6 +457,18 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
+func (p *Provider) startHibernate(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.hibernating[key] = struct{}{}
+}
+
+func (p *Provider) finishHibernate(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.hibernating, key)
 }
 
 func (p *Provider) hasWakeSource(ctx context.Context, spec meta.VMSpec) (bool, error) {

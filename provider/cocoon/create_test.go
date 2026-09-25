@@ -1734,7 +1734,7 @@ func TestHandleVMGoneReleasesTrackedLeaseForSparseEvent(t *testing.T) {
 	})
 }
 
-func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
+func TestHandleVMGoneSkippedWhileHibernateRuns(t *testing.T) {
 	rt := &fakeRuntime{}
 	p := newTestProvider(t)
 	p.Runtime = rt
@@ -1743,6 +1743,7 @@ func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	meta.HibernateState(true).Apply(pod)
 	p.trackPod(pod, &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0-505043"})
+	p.startHibernate(meta.PodKey("ns", "demo-0"))
 
 	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-h", Name: "vk-ns-demo-0-505043"})
 

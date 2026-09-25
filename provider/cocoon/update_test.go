@@ -819,6 +819,26 @@ func TestHibernateStopsTheReadinessProbe(t *testing.T) {
 	}
 }
 
+func TestHandleVMGoneActsOnTheVMAFailedHibernateLeftBehind(t *testing.T) {
+	stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: stopped}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	meta.HibernateState(true).Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
+
+	if err := p.UpdatePod(t.Context(), pod); err == nil {
+		t.Fatal("UpdatePod must fail when SnapshotSave fails")
+	}
+	if got := rt.started(); len(got) != 0 {
+		t.Fatalf("restarted %v while the hibernate ran", got)
+	}
+	p.handleVMGone(t.Context(), stopped)
+	if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+		t.Fatalf("restarts = %v, want the VM a failed hibernate left behind restarted", got)
+	}
+}
+
 func hammerPodAnnotation(t *testing.T, p *Provider, key string) {
 	t.Helper()
 	stop := make(chan struct{})
