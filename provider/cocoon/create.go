@@ -63,6 +63,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return p.createMacosPod(ctx, pod, spec)
 	}
 
+	p.awaitBusyCreate(ctx, spec.VMName)
 	// A macOS-owned name is never adopted here; only createMacosPod may bind it.
 	existing, adoptErr := p.adoptableVM(ctx, spec.VMName)
 	if adoptErr != nil {
@@ -488,6 +489,20 @@ func (p *Provider) adoptableVM(ctx context.Context, name string) (*vm.VM, error)
 		return nil, nil
 	}
 	return nil, fmt.Errorf("inspect vm %s indexed as %s: %w", existing.ID, name, err)
+}
+
+func (p *Provider) awaitBusyCreate(ctx context.Context, name string) {
+	p.mu.RLock()
+	settled := p.busyCreates[name]
+	p.mu.RUnlock()
+	if settled == nil {
+		return
+	}
+	select {
+	case <-settled:
+	case <-ctx.Done():
+	case <-p.lifecycleCtx.Done():
+	}
 }
 
 // markPodRunning guards the status writes against the probe goroutine's DeepCopy.

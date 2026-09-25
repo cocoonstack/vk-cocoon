@@ -2135,6 +2135,34 @@ func TestCreatePodAdoptingAnUnboundCloneRunsItsPostCloneFixup(t *testing.T) {
 	}
 }
 
+func TestCreatePodWaitsOutAnInFlightCreateOfItsName(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone", Backend: vm.BackendFirecracker})
+		rt := &fakeRuntime{
+			staleCreateSeq: map[string][]vm.StaleCreateOutcome{"vmid-inflight": {vm.StaleCreateBusy, vm.StaleCreateNotCreating}},
+			inspectSeq:     []fakeInspectStep{{vm: &vm.VM{ID: "vmid-inflight", Name: "vk-ns-demo-0-505043", State: vm.StateCreating}}},
+			inspectVM:      &vm.VM{ID: "vmid-inflight", Name: "vk-ns-demo-0-505043", State: vm.StateRunning, IP: "10.0.0.9"},
+			cloneErr:       errors.New(`reserve VM record: vm name "vk-ns-demo-0-505043" already exists`),
+		}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		p.Clientset = fake.NewSimpleClientset(pod)
+		p.watchBusyCreate("vmid-inflight", "vk-ns-demo-0-505043")
+
+		if err := p.CreatePod(t.Context(), pod); err != nil {
+			t.Fatalf("CreatePod: %v", err)
+		}
+		awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+		p.Close()
+		if rt.cloned != nil {
+			t.Fatalf("CreatePod cloned %#v over a create still in flight for its name", rt.cloned)
+		}
+		if len(rt.execCalls) == 0 {
+			t.Fatal("the adopted clone went Ready without its post-clone fixup")
+		}
+	})
+}
+
 func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
 	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	podA.UID = "a"

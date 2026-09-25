@@ -112,6 +112,7 @@ type Provider struct {
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
+	busyCreates    map[string]chan struct{}
 	recheckWG      sync.WaitGroup
 	bgWG           sync.WaitGroup
 	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
@@ -160,6 +161,7 @@ func NewProvider(ctx context.Context) *Provider {
 		lastRestart:     map[string]time.Time{},
 		pendingRecheck:  map[string]struct{}{},
 		resumedOps:      map[string]struct{}{},
+		busyCreates:     map[string]chan struct{}{},
 		lifecycleIntent: map[string]lifecycleEntry{},
 		deleting:        map[string]struct{}{},
 	}

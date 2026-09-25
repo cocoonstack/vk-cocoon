@@ -27,7 +27,10 @@ On every restart vk-cocoon:
    an inspect indexes a committed `running` VM or applies the orphan
    policy to a terminal record. An unresolved `creating`/`created` state
    or transient error remains under bounded retry. A record that already
-   left `creating` is adopted only when `running`. Every verb attempt is
+   left `creating` is adopted only when `running`. While a watcher holds a
+   name, `CreatePod` for that name waits for it to settle instead of
+   failing on the name clash; a pod whose create fails 20 times is dropped
+   by virtual-kubelet until the pod changes. Every verb attempt is
    counted on
    `cocoon_vk_stale_create_reconcile_total`.
 4. Adopts each pod with a `vm.cocoonstack.io/id` annotation by matching
