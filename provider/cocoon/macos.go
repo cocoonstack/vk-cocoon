@@ -1,7 +1,5 @@
 package cocoon
 
-// os=macos pods dispatch to the cocoon-macos binary; a replay adopts or starts the existing record, never runs a second QEMU on the disk.
-
 import (
 	"bytes"
 	"cmp"
@@ -580,7 +578,7 @@ func configureMacosLifecycleCommand(cmd *exec.Cmd) {
 
 func formatMacosArgsForLog(args []string) string {
 	redacted := slices.Clone(args)
-	for i := 0; i+1 < len(redacted); i++ {
+	for i := range len(redacted) - 1 {
 		if redacted[i] == "--vnc-password" {
 			redacted[i+1] = "<redacted>"
 		}
