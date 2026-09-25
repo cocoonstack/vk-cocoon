@@ -1714,22 +1714,24 @@ func TestEvictPodIdempotentOnNotFound(t *testing.T) {
 }
 
 func TestHandleVMGoneReleasesTrackedLeaseForSparseEvent(t *testing.T) {
-	releaser := &recordingLeaseReleaser{}
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
-	p := newTestProvider(t)
-	p.Runtime = &fakeRuntime{inspectErr: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}
-	p.Clientset = fake.NewSimpleClientset(pod)
-	p.LeaseReleaser = releaser
-	p.trackPod(pod, &vm.VM{ID: "vmid-g", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:ff"})
+	synctest.Test(t, func(t *testing.T) {
+		releaser := &recordingLeaseReleaser{}
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		p := newTestProvider(t)
+		p.Runtime = &fakeRuntime{inspectErr: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)}
+		p.Clientset = fake.NewSimpleClientset(pod)
+		p.LeaseReleaser = releaser
+		p.trackPod(pod, &vm.VM{ID: "vmid-g", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:ff"})
 
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-g"})
+		p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-g"})
 
-	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:ff"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
-	}
-	if got := p.vmForPod("ns", "demo-0"); got != nil {
-		t.Fatalf("gone VM should be evicted, still tracked as %#v", got)
-	}
+		if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:ff"}) {
+			t.Fatalf("released MACs = %v, want tracked VM MAC", got)
+		}
+		if got := p.vmForPod("ns", "demo-0"); got != nil {
+			t.Fatalf("gone VM should be evicted, still tracked as %#v", got)
+		}
+	})
 }
 
 func TestHandleVMGoneSkippedWhenPodHibernating(t *testing.T) {
@@ -1800,95 +1802,99 @@ func TestHandleVMGoneInlineRetryRecoversFromTransient(t *testing.T) {
 }
 
 func TestHandleVMGoneDeferredRecheckEvictsOnceDefinitive(t *testing.T) {
-	rt := &fakeRuntime{
-		inspectSeq: []fakeInspectStep{
-			{err: errors.New("exec: broken pipe")},
-			{err: errors.New("exec: broken pipe")},
-			{err: errors.New("exec: broken pipe")},
-			{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)},
-		},
-	}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	releaser := &recordingLeaseReleaser{}
-	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
-	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:01"})
-	p.inlineInspectBaseDelay = 1 * time.Millisecond
-	p.deferredRecheckInitialDelay = 5 * time.Millisecond
-	p.deferredRecheckMaxDelay = 20 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		rt := &fakeRuntime{
+			inspectSeq: []fakeInspectStep{
+				{err: errors.New("exec: broken pipe")},
+				{err: errors.New("exec: broken pipe")},
+				{err: errors.New("exec: broken pipe")},
+				{err: fmt.Errorf("inspect: %w", vm.ErrVMNotFound)},
+			},
+		}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		releaser := &recordingLeaseReleaser{}
+		p.LeaseReleaser = releaser
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		p.Clientset = fake.NewSimpleClientset(pod)
+		p.trackPod(pod, &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:01"})
+		p.inlineInspectBaseDelay = 1 * time.Millisecond
+		p.deferredRecheckInitialDelay = 5 * time.Millisecond
+		p.deferredRecheckMaxDelay = 20 * time.Millisecond
 
-	evicted := make(chan struct{}, 1)
-	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
-		if np.Status.Phase == corev1.PodFailed {
-			select {
-			case evicted <- struct{}{}:
-			default:
+		evicted := make(chan struct{}, 1)
+		p.NotifyPods(t.Context(), func(np *corev1.Pod) {
+			if np.Status.Phase == corev1.PodFailed {
+				select {
+				case evicted <- struct{}{}:
+				default:
+				}
 			}
+		})
+
+		p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0-505043"})
+
+		select {
+		case <-evicted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("deferred recheck did not evict pod within 2s")
+		}
+		if got := p.vmForPod("ns", "demo-0"); got != nil {
+			t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
+		}
+		if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:01"}) {
+			t.Fatalf("released MACs = %v, want tracked VM MAC", got)
 		}
 	})
-
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-d", Name: "vk-ns-demo-0-505043"})
-
-	select {
-	case <-evicted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("deferred recheck did not evict pod within 2s")
-	}
-	if got := p.vmForPod("ns", "demo-0"); got != nil {
-		t.Fatalf("deferred recheck should have evicted pod, still tracked as %#v", got)
-	}
-	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:01"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
-	}
 }
 
 func TestHandleVMGoneDeferredRecheckHitsBudgetAndEvicts(t *testing.T) {
-	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	releaser := &recordingLeaseReleaser{}
-	p.LeaseReleaser = releaser
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
-	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:02"})
-	p.inlineInspectBaseDelay = 1 * time.Millisecond
-	p.deferredRecheckInitialDelay = 5 * time.Millisecond
-	p.deferredRecheckMaxDelay = 10 * time.Millisecond
-	p.deferredRecheckBudget = 30 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		releaser := &recordingLeaseReleaser{}
+		p.LeaseReleaser = releaser
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		p.Clientset = fake.NewSimpleClientset(pod)
+		p.trackPod(pod, &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:02"})
+		p.inlineInspectBaseDelay = 1 * time.Millisecond
+		p.deferredRecheckInitialDelay = 5 * time.Millisecond
+		p.deferredRecheckMaxDelay = 10 * time.Millisecond
+		p.deferredRecheckBudget = 30 * time.Millisecond
 
-	reasons := make(chan string, 4)
-	p.NotifyPods(t.Context(), func(np *corev1.Pod) {
-		if np.Status.Phase != corev1.PodFailed || len(np.Status.ContainerStatuses) == 0 {
-			return
-		}
-		term := np.Status.ContainerStatuses[0].State.Terminated
-		if term == nil {
-			return
-		}
+		reasons := make(chan string, 4)
+		p.NotifyPods(t.Context(), func(np *corev1.Pod) {
+			if np.Status.Phase != corev1.PodFailed || len(np.Status.ContainerStatuses) == 0 {
+				return
+			}
+			term := np.Status.ContainerStatuses[0].State.Terminated
+			if term == nil {
+				return
+			}
+			select {
+			case reasons <- term.Reason:
+			default:
+			}
+		})
+
+		p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0-505043"})
+
 		select {
-		case reasons <- term.Reason:
-		default:
+		case got := <-reasons:
+			if got != "VMInspectTimeout" {
+				t.Fatalf("eviction reason = %q, want VMInspectTimeout", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("budget-timeout eviction did not fire within 2s")
+		}
+		if rt.removedID != "vmid-b" {
+			t.Fatalf("timeout must remove VM before eviction, removed %q", rt.removedID)
+		}
+		if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:02"}) {
+			t.Fatalf("released MACs = %v, want tracked VM MAC", got)
 		}
 	})
-
-	p.handleVMGone(t.Context(), &vm.VM{ID: "vmid-b", Name: "vk-ns-demo-0-505043"})
-
-	select {
-	case got := <-reasons:
-		if got != "VMInspectTimeout" {
-			t.Fatalf("eviction reason = %q, want VMInspectTimeout", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("budget-timeout eviction did not fire within 2s")
-	}
-	if rt.removedID != "vmid-b" {
-		t.Fatalf("timeout must remove VM before eviction, removed %q", rt.removedID)
-	}
-	if got := releaser.awaitReleases(t, 1); !slices.Equal(got, []string{"aa:bb:cc:dd:ee:02"}) {
-		t.Fatalf("released MACs = %v, want tracked VM MAC", got)
-	}
 }
 
 func TestHandleVMGoneDeferredTimeoutKeepsLeaseWhenRemovalFails(t *testing.T) {
@@ -2182,35 +2188,37 @@ func TestReconcileRuntimeEndpointsReportsSupersededWhenPodIsGone(t *testing.T) {
 }
 
 func TestProviderCloseStopsDeferredRecheck(t *testing.T) {
-	rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset()
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
-	p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns-demo-0-505043"})
-	p.deferredRecheckInitialDelay = 5 * time.Second
-	p.deferredRecheckMaxDelay = 10 * time.Second
+	synctest.Test(t, func(t *testing.T) {
+		rt := &fakeRuntime{inspectErr: errors.New("exec: broken pipe")}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		p.Clientset = fake.NewSimpleClientset()
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		p.trackPod(pod, &vm.VM{ID: "vmid-close", Name: "vk-ns-demo-0-505043"})
+		p.deferredRecheckInitialDelay = 5 * time.Second
+		p.deferredRecheckMaxDelay = 10 * time.Second
 
-	p.scheduleDeferredRecheck("vmid-close")
+		p.scheduleDeferredRecheck("vmid-close")
 
-	done := make(chan struct{})
-	go func() {
-		p.Close()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close did not drain deferred recheck goroutine within 2s")
-	}
+		done := make(chan struct{})
+		go func() {
+			p.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not drain deferred recheck goroutine within 2s")
+		}
 
-	p.scheduleDeferredRecheck("vmid-close")
-	p.mu.RLock()
-	n := len(p.pendingRecheck)
-	p.mu.RUnlock()
-	if n != 0 {
-		t.Fatalf("scheduleDeferredRecheck after Close should no-op, pendingRecheck=%d", n)
-	}
+		p.scheduleDeferredRecheck("vmid-close")
+		p.mu.RLock()
+		n := len(p.pendingRecheck)
+		p.mu.RUnlock()
+		if n != 0 {
+			t.Fatalf("scheduleDeferredRecheck after Close should no-op, pendingRecheck=%d", n)
+		}
+	})
 }
 
 func TestGetPodStatusRefreshesIPFromLease(t *testing.T) {
@@ -2364,26 +2372,28 @@ func TestHandleVMGoneLeavesAnUnmanagedVMAlone(t *testing.T) {
 }
 
 func TestEnsureForkSnapshotAbandonsTheFlightOnCallerCancel(t *testing.T) {
-	p, _, entered, release := newWedgedForkFixture(t)
-	t.Cleanup(func() { close(release) })
+	synctest.Test(t, func(t *testing.T) {
+		p, _, entered, release := newWedgedForkFixture(t)
+		t.Cleanup(func() { close(release) })
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		_, err := p.ensureForkSnapshot(ctx, "vk-ns-main-0-f89f7a")
-		done <- err
-	}()
-	<-entered
-	cancel()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.ensureForkSnapshot(ctx, "vk-ns-main-0-f89f7a")
+			done <- err
+		}()
+		<-entered
+		cancel()
 
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v, want context.Canceled", err)
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("ensureForkSnapshot still blocked on the wedged save after the caller canceled")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("ensureForkSnapshot still blocked on the wedged save after the caller canceled")
-	}
+	})
 }
 
 func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
@@ -2407,29 +2417,28 @@ func TestEnsureForkSnapshotSurvivesProviderShutdown(t *testing.T) {
 }
 
 func TestVMWatchLoopRestartsAStoppedVMSeenAtStreamStart(t *testing.T) {
-	stopped := &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0-505043", State: "stopped"}
-	rt := &fakeRuntime{inspectVM: stopped, events: []vm.VMEvent{{Event: "ADDED", VM: *stopped}}}
-	p := newTestProvider(t)
-	p.Runtime = rt
-	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
-	p.Clientset = fake.NewSimpleClientset(pod)
-	p.trackPod(pod, &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0-505043"})
+	synctest.Test(t, func(t *testing.T) {
+		stopped := &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0-505043", State: "stopped"}
+		rt := &fakeRuntime{inspectVM: stopped, events: []vm.VMEvent{{Event: "ADDED", VM: *stopped}}}
+		p := newTestProvider(t)
+		p.Runtime = rt
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		p.Clientset = fake.NewSimpleClientset(pod)
+		p.trackPod(pod, &vm.VM{ID: "vmid-s", Name: "vk-ns-demo-0-505043"})
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		p.vmWatchLoop(ctx)
-		close(done)
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for len(rt.started()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	cancel()
-	<-done
-	if got := rt.started(); !slices.Equal(got, []string{"vmid-s"}) {
-		t.Fatalf("started VMs = %v, want the stopped VM restarted from its ADDED event", got)
-	}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			p.vmWatchLoop(ctx)
+			close(done)
+		}()
+		synctest.Wait()
+		cancel()
+		<-done
+		if got := rt.started(); !slices.Equal(got, []string{"vmid-s"}) {
+			t.Fatalf("started VMs = %v, want the stopped VM restarted from its ADDED event", got)
+		}
+	})
 }
 
 func TestHandleVMGoneRetriesEvictionUntilTheAPIRecovers(t *testing.T) {
