@@ -67,7 +67,7 @@ also serves `/debug/pprof/` and `/debug/pprof/profile`:
 | `cocoon_vk_reconcile_adopt_by_name_total` | Counter | Startup reconcile adoptions matched by VM name |
 | `cocoon_vk_stale_create_reconcile_total{outcome}` | Counter | Stale-create verb attempts by startup reconcile and its bounded watcher (`outcome=collected\|busy\|not-creating\|not-found\|error`) |
 | `cocoon_vk_hibernate_evidence_total{verdict}` | Counter | Fresh boots intercepted by hibernate evidence (`verdict=restored\|image_conflict\|source_conflict\|unavailable`) |
-| `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched by startup reconcile (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
+| `cocoon_vk_startup_resume_total{op}` | Counter | Interrupted operations re-dispatched after a vk restart, by startup reconcile or by CreatePod adopting a VM (`op=hibernate\|post_clone\|ready_wait\|classify_drop_nic`) |
 
 Metrics whose definitions include `namespace` allow the scrape pipeline to
 derive an environment label when multiple environments share a cluster.

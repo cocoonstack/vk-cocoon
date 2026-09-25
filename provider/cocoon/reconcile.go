@@ -99,7 +99,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		v, ok := vmByID[runtime.VMID]
 		if !ok {
-			// the VM was removed during hibernate but the annotation patch failed.
+			// The VM was removed during hibernate but the annotation patch failed.
 			if meta.ReadHibernateState(pod) {
 				p.reconcileStaleHibernate(ctx, pod)
 				continue
@@ -113,7 +113,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
-	// first probes run synchronously (3s worst case) and gate node registration; the two fan-outs touch disjoint state, so overlap them too.
+	// First probes run synchronously (3s worst case) and gate node registration; the two fan-outs touch disjoint state, so overlap them too.
 	var wg sync.WaitGroup
 	wg.Go(func() { fanOut(startupFanOut, probePods, p.startProbeIfEnabled) })
 	wg.Go(func() {
@@ -153,19 +153,19 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 		recordStaleCreateOutcome(outcome, err)
 		if err != nil {
 			logger.Errorf(ctx, err, "reconcile creating placeholder %s (%s); watching for commit", v.ID, v.Name)
-			p.watchBusyCreate(v.ID)
+			p.watchBusyCreate(v.ID, v.Name)
 			return
 		}
 		switch outcome {
 		case vm.StaleCreateNotCreating:
 			if fresh, settled := p.classifySettledCreate(ctx, v.ID); !settled {
-				p.watchBusyCreate(v.ID)
+				p.watchBusyCreate(v.ID, v.Name)
 			} else if fresh != nil {
 				keep[i] = fresh
 			}
 		case vm.StaleCreateBusy:
 			logger.Warnf(ctx, "creating placeholder %s (%s) is owned by an in-flight operation; watching for commit", v.ID, v.Name)
-			p.watchBusyCreate(v.ID)
+			p.watchBusyCreate(v.ID, v.Name)
 		default:
 			logger.Warnf(ctx, "creating placeholder %s (%s): %s", v.ID, v.Name, outcome)
 		}
@@ -180,8 +180,13 @@ func (p *Provider) reconcileStaleCreates(ctx context.Context, vms []vm.VM) []vm.
 }
 
 // watchBusyCreate re-invokes the reclaim verb on an unclassified creating record: only the verb tells a live owner from one that died holding the name.
-func (p *Provider) watchBusyCreate(vmID string) {
+func (p *Provider) watchBusyCreate(vmID, name string) {
+	settled := make(chan struct{})
+	p.mu.Lock()
+	p.busyCreates[name] = settled
+	p.mu.Unlock()
 	p.goBackground(func() {
+		defer p.settleBusyCreate(name, settled)
 		ctx := p.lifecycleCtx
 		logger := log.WithFunc("Provider.watchBusyCreate")
 		delay, maxDelay, budget := p.recheckBackoff()
@@ -198,7 +203,7 @@ func (p *Provider) watchBusyCreate(vmID string) {
 				logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
 				return
 			}
-			// a failing verb must not strand a clone that did commit.
+			// A failing verb must not strand a clone that did commit.
 			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
 				if fresh != nil {
 					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)
@@ -213,6 +218,15 @@ func (p *Provider) watchBusyCreate(vmID string) {
 			delay = min(delay*2, maxDelay)
 		}
 	})
+}
+
+func (p *Provider) settleBusyCreate(name string, settled chan struct{}) {
+	p.mu.Lock()
+	if p.busyCreates[name] == settled {
+		delete(p.busyCreates, name)
+	}
+	p.mu.Unlock()
+	close(settled)
 }
 
 // classifySettledCreate resolves a record past the verb: (vm, true) adoptable, (nil, true) settled, (nil, false) still transitional.

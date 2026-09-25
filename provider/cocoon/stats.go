@@ -42,7 +42,6 @@ type vmSnapshot struct {
 	provider.VMStats
 }
 
-// metrics-server and kubectl top consume this endpoint.
 func (p *Provider) GetStatsSummary(_ context.Context) (*statsv1alpha1.Summary, error) {
 	now := metav1.Now()
 	sample := p.CollectVMStats()

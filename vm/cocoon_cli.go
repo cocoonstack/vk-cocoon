@@ -66,8 +66,7 @@ func (c *CocoonCLI) Clone(ctx context.Context, opts CloneOptions) (*VM, error) {
 	return c.runAndParseVM(ctx, "cocoon vm clone", opts.To, buildCloneArgs(opts))
 }
 
-// Run runs `cocoon vm run --output json` on a locally present image; when cocoon's own post-start
-// inspect failed (State!=running, PID=0) it re-inspects so callers always see live state.
+// Run re-inspects when cocoon's own post-start inspect failed, so callers always see live state.
 func (c *CocoonCLI) Run(ctx context.Context, opts RunOptions) (*VM, error) {
 	v, err := c.runAndParseVM(ctx, "cocoon vm run", opts.Name, buildRunArgs(opts))
 	if err != nil {

@@ -28,7 +28,10 @@ cannot wedge node registration. Rejected create/update calls count on
    Cloud Hypervisor or Firecracker. Unmanaged pods use the operator's
    pre-assigned runtime annotations and skip guest setup.
 2. If a VM with `spec.VMName` already exists locally, adopt it
-   (idempotent on restart). Adoption hinges on `StartupReconcile` having
+   (idempotent on restart) and finish its boot through the owed-work
+   dispatch that [startup reconcile](reconcile.md) step 6 runs, so a clone
+   that committed across a vk restart still gets its post-clone fixup.
+   Adoption hinges on `StartupReconcile` having
    populated `vmsByName`, which is why `main.go` runs it to completion
    before the pod controller starts.
 3. Otherwise `bringUpVM` selects a path. An unmanaged pod (`spec.Managed`
@@ -160,7 +163,9 @@ cannot wedge node registration. Rejected create/update calls count on
 
    Only a running VM is snapshotted; when its save or push fails, DeletePod
    returns the error and keeps the VM, so the pod stays Terminating while
-   virtual-kubelet retries the delete.
+   virtual-kubelet retries the delete. It makes 20 attempts over about 55 minutes
+   on the default backoff; after that the delete runs again only when
+   vk-cocoon restarts or the pod object changes.
 3. `Runtime.Remove(vmID)` destroys the VM; an already absent VM also
    completes this step. Then release each DHCP-backed NIC lease through
    cocoon-net's local control socket. Lease cleanup is best-effort after

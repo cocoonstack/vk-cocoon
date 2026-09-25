@@ -37,14 +37,17 @@ func (p *Provider) dispatchOwedWork() {
 	}
 	p.mu.RUnlock()
 
-	logger := log.WithFunc("Provider.dispatchOwedWork")
 	for _, w := range work {
-		logger.Warnf(p.lifecycleCtx, "resuming interrupted %s for %s/%s (vm %s)",
-			w.op, w.pod.Namespace, w.pod.Name, w.v.ID)
-		metrics.StartupResumeTotal.WithLabelValues(w.op).Inc()
-		p.emitNormalf(w.pod, "ResumedAfterRestart", "op=%s", w.op)
-		p.dispatchResume(w.key, w.pod, w.v, w.op)
+		p.resumeOwedWork(w.key, w.pod, w.v, w.op)
 	}
+}
+
+func (p *Provider) resumeOwedWork(key string, pod *corev1.Pod, v *vm.VM, op string) {
+	log.WithFunc("Provider.resumeOwedWork").Warnf(p.lifecycleCtx, "resuming interrupted %s for %s/%s (vm %s)",
+		op, pod.Namespace, pod.Name, v.ID)
+	metrics.StartupResumeTotal.WithLabelValues(op).Inc()
+	p.emitNormalf(pod, "ResumedAfterRestart", "op=%s", op)
+	p.dispatchResume(key, pod, v, op)
 }
 
 // dispatchResume claims the pod for the whole resumed op: resumes run outside the framework's per-pod serialization; UpdatePod backs off.
@@ -62,7 +65,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 	switch op {
 	case resumeOpHibernate:
 		run(func() {
-			// boot unconditionally: the record still reads running after a SIGKILLed VMM and Start no-ops on a live VM; nothing else re-delivers the hibernate.
+			// Boot unconditionally: the record still reads running after a SIGKILLed VMM and Start no-ops on a live VM; nothing else re-delivers the hibernate.
 			if err := p.Runtime.Start(p.lifecycleCtx, v.ID); err != nil {
 				p.failOp(p.lifecycleCtx, pod, "ResumeStartFailed", "reconcile", err)
 				return
@@ -79,7 +82,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			run(func() { p.markReadyPublished(p.lifecycleCtx, pod) })
 			return
 		}
-		// ambiguous create-tail vs wake-finalize: resumed outcomes skip the wake accounting rather than guess.
+		// Ambiguous create-tail vs wake-finalize: resumed outcomes skip the wake accounting rather than guess.
 		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, false) })
 	case resumeOpClassifyNIC:
 		run(func() {
@@ -164,7 +167,7 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		return ""
 	}
 	lc := meta.ReadLifecycleState(pod)
-	// an empty lifecycle (lost Creating patch) with a marker still records owed work.
+	// An empty lifecycle (lost Creating patch) with a marker still records owed work.
 	resuming := lc == meta.LifecycleStateCreating || lc == ""
 	spec := meta.ParseVMSpec(pod)
 	if !spec.Managed {
@@ -187,7 +190,7 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	case postCloneStateDone:
 		return resumeOpReadyWait
 	default:
-		// marker-less drop-NIC = interrupted restore (PnP must not touch the hot-added NIC) or a pre-marker fresh clone; evidence decides, async.
+		// Marker-less drop-NIC = interrupted restore (PnP must not touch the hot-added NIC) or a pre-marker fresh clone; evidence decides, async.
 		if shouldDropNICBeforeHibernate(spec) {
 			return resumeOpClassifyNIC
 		}

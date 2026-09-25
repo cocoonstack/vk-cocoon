@@ -118,7 +118,7 @@ type RunOptions struct {
 
 // VMEvent is a single event from the cocoon event stream.
 type VMEvent struct {
-	Event string `json:"event"` // ADDED, MODIFIED, DELETED
+	Event string `json:"event"`
 	VM    VM     `json:"vm"`
 }
 

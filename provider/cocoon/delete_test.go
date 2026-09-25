@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -430,15 +430,12 @@ func (r *recordingLeaseReleaser) released() []string {
 
 func (r *recordingLeaseReleaser) awaitReleases(t *testing.T, want int) []string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if got := r.released(); len(got) >= want {
-			return got
-		}
-		time.Sleep(time.Millisecond)
+	synctest.Wait()
+	got := r.released()
+	if len(got) < want {
+		t.Fatalf("releases = %v, want %d entries", got, want)
 	}
-	t.Fatalf("releases = %v, want %d entries within 2s", r.released(), want)
-	return nil
+	return got
 }
 
 func newSnapshotDeleteFixture(t *testing.T, rt *snapshotExportRuntime, v *vm.VM) (*Provider, *corev1.Pod) {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -789,6 +790,13 @@ func TestGetPodsReturnsCopies(t *testing.T) {
 			t.Fatalf("GetPods = %v, %v, want one pod", pods, err)
 		}
 		_ = pods[0].Annotations[annotationPostCloneState]
+	}
+}
+
+func TestGetPodReportsAnUntrackedPodAsNotFound(t *testing.T) {
+	p := newTestProvider(t)
+	if _, err := p.GetPod(t.Context(), "ns", "gone-0"); !errdefs.IsNotFound(err) {
+		t.Fatalf("GetPod on an untracked pod = %v, want an errdefs NotFound", err)
 	}
 }
 

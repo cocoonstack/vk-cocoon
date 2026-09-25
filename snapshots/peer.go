@@ -37,7 +37,7 @@ const (
 	// restoreBufBytes batches stream reads into one write syscall.
 	restoreBufBytes = 4 << 20
 
-	// holes up to this size ride along as zeros instead of costing a ~40ms round trip each.
+	// Holes up to this size ride along as zeros instead of costing a ~40ms round trip each.
 	coalesceGapBytes = 4 << 20
 
 	// 32 concurrent streams saturate the NIC on the measured node classes.
@@ -45,18 +45,18 @@ const (
 
 	peerSliceStreams = 4 * defaultPeerConcurrency
 
-	// interleaved writers on one inode measured 1.6 GB/s vs 2.7 GB/s for disjoint sequential regions.
+	// Interleaved writers on one inode measured 1.6 GB/s vs 2.7 GB/s for disjoint sequential regions.
 	streamsPerFile = 8
 
 	// io.CopyBuffer scratch on both ends; the 32KB default profiled at 12-17% syscall time.
 	copyBufBytes = 1 << 20
 
-	// zero-elision granularity: 4K skipping measured half the throughput of 1 MiB.
+	// Zero-elision granularity: 4K skipping measured half the throughput of 1 MiB.
 	zeroSkipBytes = 1 << 20
 )
 
 var (
-	// hardware CRC: sha256 burned 78-81% of transfer CPU (no SHA-NI on the fleet); guards transport only.
+	// Hardware CRC: sha256 burned 78-81% of transfer CPU (no SHA-NI on the fleet); guards transport only.
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 	// Two concurrent restores saturate disk and NIC; mirrors pullGate.
@@ -64,7 +64,7 @@ var (
 
 	peerSliceGate = semaphore.NewWeighted(peerSliceStreams)
 
-	// one shared transport for connection reuse; dead peers fail fast into the registry fallback.
+	// One shared transport for connection reuse; dead peers fail fast into the registry fallback.
 	peerClient = &http.Client{Transport: &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 		ResponseHeaderTimeout: 10 * time.Second,

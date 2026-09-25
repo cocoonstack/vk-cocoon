@@ -56,7 +56,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	wantHibernate := bool(meta.ReadHibernateState(pod))
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	v, trackedUID, tracked := p.trackedIncarnation(key)
-	// an untracked pod with nothing to wake from is a recreate, not a wake
+	// An untracked pod with nothing to wake from is a recreate, not a wake
 	if !tracked && v == nil && !wantHibernate {
 		hasSource, err := p.hasWakeSource(ctx, spec)
 		if err != nil {
@@ -66,7 +66,7 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 			return p.CreatePod(ctx, pod)
 		}
 	}
-	// a same-name recreate reaches the provider as an update while the old incarnation is still tracked
+	// A same-name recreate reaches the provider as an update while the old incarnation is still tracked
 	if tracked && trackedUID != pod.UID {
 		if !p.detachIncarnation(key, trackedUID, v) {
 			return errDeleteInFlight(pod)
@@ -208,7 +208,7 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, pod *corev1.Pod, v *
 	}
 	if err := p.Runtime.NetResize(ctx, v.ID, 0); err != nil {
 		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "netresize", "failed").Inc()
-		// renew regardless, detached from ctx: an exec error doesn't prove the guest skipped the release.
+		// Renew regardless, detached from ctx: an exec error doesn't prove the guest skipped the release.
 		if renewErr := p.execGuestIpconfig(context.WithoutCancel(ctx), v.ID, "renew"); renewErr != nil {
 			logger.Warnf(ctx, "dhcp renew after failed NIC drop %s: %v", v.Name, renewErr)
 		}
@@ -220,7 +220,7 @@ func (p *Provider) dropNICForHibernate(ctx context.Context, pod *corev1.Pod, v *
 
 func (p *Provider) rollbackHibernate(ctx context.Context, pod *corev1.Pod, v *vm.VM, dropped bool) {
 	logger := log.WithFunc("Provider.rollbackHibernate")
-	// cancel-detached: the triggering failure may be ctx dying, and an online VM must not be left NIC-less.
+	// Cancel-detached: the triggering failure may be ctx dying, and an online VM must not be left NIC-less.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hibernateRollbackTimeout)
 	defer cancel()
 	if dropped {
@@ -244,7 +244,7 @@ func (p *Provider) wake(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec) 
 		return true, nil
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
-	// annotations that survived a failed clear at hibernate must not describe the incarnation this wake creates.
+	// Annotations that survived a failed clear at hibernate must not describe the incarnation this wake creates.
 	if err := p.clearRuntimeAnnotations(ctx, pod); err != nil {
 		log.WithFunc("Provider.wake").Errorf(ctx, err, "clear stale annotations %s/%s", pod.Namespace, pod.Name)
 	}

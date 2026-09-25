@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
@@ -111,6 +112,7 @@ type Provider struct {
 	lastRestart    map[string]time.Time // key=vmID, cooldown for restart loops
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
+	busyCreates    map[string]chan struct{}
 	recheckWG      sync.WaitGroup
 	bgWG           sync.WaitGroup
 	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
@@ -159,6 +161,7 @@ func NewProvider(ctx context.Context) *Provider {
 		lastRestart:     map[string]time.Time{},
 		pendingRecheck:  map[string]struct{}{},
 		resumedOps:      map[string]struct{}{},
+		busyCreates:     map[string]chan struct{}{},
 		lifecycleIntent: map[string]lifecycleEntry{},
 		deleting:        map[string]struct{}{},
 	}
@@ -181,7 +184,7 @@ func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Po
 	defer p.mu.RUnlock()
 	pod, ok := p.pods[meta.PodKey(namespace, name)]
 	if !ok {
-		return nil, fmt.Errorf("pod %s/%s not found", namespace, name)
+		return nil, errdefs.NotFoundf("pod %s/%s not found", namespace, name)
 	}
 	return pod.DeepCopy(), nil
 }
