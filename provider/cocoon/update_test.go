@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
@@ -837,6 +838,27 @@ func TestHandleVMGoneActsOnTheVMAFailedHibernateLeftBehind(t *testing.T) {
 	if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
 		t.Fatalf("restarts = %v, want the VM a failed hibernate left behind restarted", got)
 	}
+}
+
+func TestAVMThatDiesDuringAFailedHibernateIsRestartedOnceItEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+		rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: stopped}
+		p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+		p.deferredRecheckInitialDelay = time.Millisecond
+		meta.HibernateState(true).Apply(pod)
+		p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+		rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
+
+		if err := p.UpdatePod(t.Context(), pod); err == nil {
+			t.Fatal("UpdatePod must fail when SnapshotSave fails")
+		}
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+			t.Fatalf("restarts = %v, want the VM that died during the hibernate restarted once it ended", got)
+		}
+	})
 }
 
 func TestUpdatePodLiftsOnlyAFailedHibernateOnceHibernateClears(t *testing.T) {

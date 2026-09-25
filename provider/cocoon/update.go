@@ -149,7 +149,11 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	logger := log.WithFunc("Provider.hibernate")
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	p.startHibernate(key)
-	defer p.finishHibernate(key)
+	defer func() {
+		if p.finishHibernate(key) {
+			p.scheduleDeferredRecheck(v.ID)
+		}
+	}()
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
@@ -537,13 +541,15 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 func (p *Provider) startHibernate(key string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.hibernating[key] = struct{}{}
+	p.hibernating[key] = false
 }
 
-func (p *Provider) finishHibernate(key string) {
+func (p *Provider) finishHibernate(key string) (vmGone bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	vmGone = p.hibernating[key]
 	delete(p.hibernating, key)
+	return vmGone
 }
 
 func (p *Provider) hasWakeSource(ctx context.Context, spec meta.VMSpec) (bool, error) {
