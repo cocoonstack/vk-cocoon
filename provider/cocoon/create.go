@@ -74,7 +74,11 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 			return nil
 		}
 		p.startProbeIfEnabled(pod)
-		p.markReadyPublished(ctx, pod)
+		if op := owedOpFor(pod, existing); op != "" {
+			p.resumeOwedWork(meta.PodKey(pod.Namespace, pod.Name), pod, existing, op)
+		} else {
+			p.markReadyPublished(ctx, pod)
+		}
 		metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "adopted").Inc()
 		return nil
 	}

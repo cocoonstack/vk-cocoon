@@ -37,14 +37,17 @@ func (p *Provider) dispatchOwedWork() {
 	}
 	p.mu.RUnlock()
 
-	logger := log.WithFunc("Provider.dispatchOwedWork")
 	for _, w := range work {
-		logger.Warnf(p.lifecycleCtx, "resuming interrupted %s for %s/%s (vm %s)",
-			w.op, w.pod.Namespace, w.pod.Name, w.v.ID)
-		metrics.StartupResumeTotal.WithLabelValues(w.op).Inc()
-		p.emitNormalf(w.pod, "ResumedAfterRestart", "op=%s", w.op)
-		p.dispatchResume(w.key, w.pod, w.v, w.op)
+		p.resumeOwedWork(w.key, w.pod, w.v, w.op)
 	}
+}
+
+func (p *Provider) resumeOwedWork(key string, pod *corev1.Pod, v *vm.VM, op string) {
+	log.WithFunc("Provider.resumeOwedWork").Warnf(p.lifecycleCtx, "resuming interrupted %s for %s/%s (vm %s)",
+		op, pod.Namespace, pod.Name, v.ID)
+	metrics.StartupResumeTotal.WithLabelValues(op).Inc()
+	p.emitNormalf(pod, "ResumedAfterRestart", "op=%s", op)
+	p.dispatchResume(key, pod, v, op)
 }
 
 // dispatchResume claims the pod for the whole resumed op: resumes run outside the framework's per-pod serialization; UpdatePod backs off.

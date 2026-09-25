@@ -2116,6 +2116,25 @@ func TestCreatePodAdoptsTheIndexedVMWhileItLives(t *testing.T) {
 	}
 }
 
+func TestCreatePodAdoptingAnUnboundCloneRunsItsPostCloneFixup(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone", Backend: vm.BackendFirecracker})
+	committed := &vm.VM{ID: "vmid-committed", Name: "vk-ns-demo-0-505043", State: vm.StateRunning, IP: "10.0.0.9"}
+	rt := &fakeRuntime{inspectVM: committed}
+	p := newTestProvider(t)
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.indexOrphanByName(committed)
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("CreatePod: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	p.Close()
+	if len(rt.execCalls) == 0 {
+		t.Fatal("adopted a committed clone as Ready without its post-clone fixup")
+	}
+}
+
 func TestUntrackKeepsAnOrphanIndexedUnderTheSameName(t *testing.T) {
 	podA := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
 	podA.UID = "a"
@@ -2269,6 +2288,8 @@ func TestCreatePodAdoptPublishesStatusBeforeReady(t *testing.T) {
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("CreatePod: %v", err)
 	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	p.Close()
 
 	mu.Lock()
 	defer mu.Unlock()

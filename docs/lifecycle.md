@@ -28,7 +28,10 @@ cannot wedge node registration. Rejected create/update calls count on
    Cloud Hypervisor or Firecracker. Unmanaged pods use the operator's
    pre-assigned runtime annotations and skip guest setup.
 2. If a VM with `spec.VMName` already exists locally, adopt it
-   (idempotent on restart). Adoption hinges on `StartupReconcile` having
+   (idempotent on restart) and finish its boot through the owed-work
+   dispatch that [startup reconcile](reconcile.md) step 6 runs, so a clone
+   that committed across a vk restart still gets its post-clone fixup.
+   Adoption hinges on `StartupReconcile` having
    populated `vmsByName`, which is why `main.go` runs it to completion
    before the pod controller starts.
 3. Otherwise `bringUpVM` selects a path. An unmanaged pod (`spec.Managed`
