@@ -24,8 +24,11 @@ On every restart vk-cocoon:
    transient verb or inspect errors hand the record to a bounded
    background watcher. Each watcher tick re-invokes the verb:
    `collected`/`not-found` free the name for a clean recreate; otherwise
-   an inspect indexes a committed `running` VM or applies the orphan
-   policy to a terminal record. An unresolved `creating`/`created` state
+   an inspect settles the record. A committed `running` VM is indexed for
+   adoption while a pod on the node that is not being deleted still names
+   it (a failed pod lookup indexes it too); one whose pod was deleted
+   during the restart gets the orphan policy, as does a terminal record.
+   An unresolved `creating`/`created` state
    or transient error remains under bounded retry. A record that already
    left `creating` is adopted only when `running`. While a watcher holds a
    name, `CreatePod` for that name waits for it to settle instead of

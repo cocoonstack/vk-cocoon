@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -28,15 +29,9 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		vms  []vm.VM
 	)
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		list, err := p.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(gctx, metav1.ListOptions{
-			FieldSelector: "spec.nodeName=" + p.NodeName,
-		})
-		if err != nil {
-			return fmt.Errorf("list pods on %s: %w", p.NodeName, err)
-		}
-		pods = list
-		return nil
+	g.Go(func() (err error) {
+		pods, err = p.listNodePods(gctx)
+		return err
 	})
 	g.Go(func() error {
 		list, err := p.Runtime.List(gctx)
@@ -206,8 +201,7 @@ func (p *Provider) watchBusyCreate(vmID, name string) {
 			// A failing verb must not strand a clone that did commit.
 			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
 				if fresh != nil {
-					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)
-					p.indexOrphanByName(fresh)
+					p.settleCommittedCreate(ctx, fresh)
 				}
 				return
 			}
@@ -218,6 +212,41 @@ func (p *Provider) watchBusyCreate(vmID, name string) {
 			delay = min(delay*2, maxDelay)
 		}
 	})
+}
+
+func (p *Provider) settleCommittedCreate(ctx context.Context, v *vm.VM) {
+	logger := log.WithFunc("Provider.settleCommittedCreate")
+	switch wanted, err := p.vmNameWanted(ctx, v.Name); {
+	case err != nil:
+		logger.Errorf(ctx, err, "in-flight create %s (%s) committed, pod lookup failed; indexing for adoption", v.ID, v.Name)
+	case !wanted:
+		logger.Warnf(ctx, "in-flight create %s (%s) committed with no pod left; applying orphan policy", v.ID, v.Name)
+		p.handleOrphan(ctx, v)
+		return
+	default:
+		logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", v.ID, v.Name)
+	}
+	p.indexOrphanByName(v)
+}
+
+func (p *Provider) vmNameWanted(ctx context.Context, name string) (bool, error) {
+	pods, err := p.listNodePods(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(pods.Items, func(pod corev1.Pod) bool {
+		return pod.DeletionTimestamp == nil && meta.ParseVMSpec(&pod).VMName == name
+	}), nil
+}
+
+func (p *Provider) listNodePods(ctx context.Context) (*corev1.PodList, error) {
+	pods, err := p.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + p.NodeName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pods on %s: %w", p.NodeName, err)
+	}
+	return pods, nil
 }
 
 func (p *Provider) settleBusyCreate(name string, settled chan struct{}) {
