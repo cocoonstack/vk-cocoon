@@ -754,6 +754,22 @@ func TestDeleteMacosPodToleratesMissingVM(t *testing.T) {
 	}
 }
 
+func TestDeleteMacosPodKeepsTheVMWhenRemoveFails(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+	stubMacosExec(p, func([]string) (string, error) {
+		return "qemu still holds the disk lock", errors.New("exit status 1")
+	})
+
+	if err := p.DeletePod(t.Context(), pod); !errors.Is(err, ErrDeleteKeptVM) {
+		t.Fatalf("DeletePod = %v, want the failed vm rm marked for the delete retry", err)
+	}
+	if p.vmForPod("ns", "demo-0") == nil {
+		t.Fatal("a failed vm rm dropped the tracked VM")
+	}
+}
+
 func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())

@@ -15,6 +15,8 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
+var ErrDeleteKeptVM = errors.New("vm kept for the delete retry")
+
 func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	logger := log.WithFunc("Provider.DeletePod")
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
@@ -60,13 +62,13 @@ func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	if meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName)) && p.Pusher != nil && v.Name != "" {
 		if err := p.saveAndPushSnapshot(ctx, pod, v, meta.DefaultSnapshotTag, spec.Image); err != nil {
 			metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "snapshot").Inc()
-			return fmt.Errorf("snapshot vm %s before delete: %w", v.ID, err)
+			return fmt.Errorf("%w: snapshot vm %s before delete: %w", ErrDeleteKeptVM, v.ID, err)
 		}
 	}
 
 	if err := p.removeVM(ctx, v); err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
-		return fmt.Errorf("remove vm %s: %w", v.ID, err)
+		return fmt.Errorf("%w: remove vm %s: %w", ErrDeleteKeptVM, v.ID, err)
 	}
 
 	if !keepSnapshots {

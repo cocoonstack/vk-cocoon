@@ -337,7 +337,7 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
-		return fmt.Errorf("cocoon-macos vm rm %s: %w: %s", vmName, err, strings.TrimSpace(out))
+		return fmt.Errorf("%w: cocoon-macos vm rm %s: %w: %s", ErrDeleteKeptVM, vmName, err, strings.TrimSpace(out))
 	}
 	p.releaseDHCPLeases(ctx, v)
 	p.forgetPod(pod.Namespace, pod.Name)

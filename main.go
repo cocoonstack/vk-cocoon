@@ -376,10 +376,18 @@ func withPodQueueLimits(qps float32, burst int) nodeutil.NodeOpt {
 			)
 		}
 		c.SyncPodsFromKubernetesRateLimiter = limiter()
+		c.SyncPodsFromKubernetesShouldRetryFunc = retryPodSync
 		c.DeletePodsFromKubernetesRateLimiter = limiter()
 		c.SyncPodStatusFromProviderRateLimiter = limiter()
 		return nil
 	})
+}
+
+func retryPodSync(ctx context.Context, key string, timesTried int, originallyAdded time.Time, err error) (*time.Duration, error) {
+	if errors.Is(err, cocoon.ErrDeleteKeptVM) {
+		return nil, nil
+	}
+	return node.DefaultRetryFunc(ctx, key, timesTried, originallyAdded, err)
 }
 
 func withKeepSnapshotRefresh(p *cocoon.Provider) nodeutil.NodeOpt {

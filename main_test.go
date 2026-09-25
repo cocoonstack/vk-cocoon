@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-common/oci"
+	"github.com/cocoonstack/vk-cocoon/provider/cocoon"
 )
 
 func TestBuildRegistry(t *testing.T) {
@@ -93,18 +96,24 @@ func TestPodQueuesBackOffAFailingPod(t *testing.T) {
 	}
 }
 
+func TestPodSyncKeepsRetryingADeleteThatKeptItsVM(t *testing.T) {
+	retry := podControllerConfig(t, 100, 400).SyncPodsFromKubernetesShouldRetryFunc
+	if retry == nil {
+		t.Fatal("pod sync queue keeps virtual-kubelet's default retry limit")
+	}
+	kept := fmt.Errorf("failed to delete pod %q in the provider: %w", "ns/demo-0",
+		fmt.Errorf("%w: snapshot vm vmid before delete: registry unavailable", cocoon.ErrDeleteKeptVM))
+	if _, err := retry(t.Context(), "ns/demo-0", node.MaxRetries+1, time.Now(), kept); err != nil {
+		t.Fatalf("a delete that kept its VM stopped retrying after %d attempts: %v", node.MaxRetries+1, err)
+	}
+	if _, err := retry(t.Context(), "ns/demo-0", node.MaxRetries, time.Now(), errors.New("create failed")); err == nil {
+		t.Fatalf("a failed create kept retrying past %d attempts", node.MaxRetries)
+	}
+}
+
 func podQueues(t *testing.T, qps float32, burst int) map[string]workqueue.TypedRateLimiter[any] {
 	t.Helper()
-	var cfg nodeutil.NodeConfig
-	if err := withPodQueueLimits(qps, burst)(&cfg); err != nil {
-		t.Fatalf("node option: %v", err)
-	}
-	var c node.PodControllerConfig
-	for _, override := range cfg.PodControllerConfigOpts {
-		if err := override(&c); err != nil {
-			t.Fatalf("pod controller override: %v", err)
-		}
-	}
+	c := podControllerConfig(t, qps, burst)
 	queues := map[string]workqueue.TypedRateLimiter[any]{
 		"sync":   c.SyncPodsFromKubernetesRateLimiter,
 		"delete": c.DeletePodsFromKubernetesRateLimiter,
@@ -116,4 +125,19 @@ func podQueues(t *testing.T, qps float32, burst int) map[string]workqueue.TypedR
 		}
 	}
 	return queues
+}
+
+func podControllerConfig(t *testing.T, qps float32, burst int) node.PodControllerConfig {
+	t.Helper()
+	var cfg nodeutil.NodeConfig
+	if err := withPodQueueLimits(qps, burst)(&cfg); err != nil {
+		t.Fatalf("node option: %v", err)
+	}
+	var c node.PodControllerConfig
+	for _, override := range cfg.PodControllerConfigOpts {
+		if err := override(&c); err != nil {
+			t.Fatalf("pod controller override: %v", err)
+		}
+	}
+	return c
 }
