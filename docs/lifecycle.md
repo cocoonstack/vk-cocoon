@@ -160,7 +160,9 @@ cannot wedge node registration. Rejected create/update calls count on
 
    Only a running VM is snapshotted; when its save or push fails, DeletePod
    returns the error and keeps the VM, so the pod stays Terminating while
-   virtual-kubelet retries the delete.
+   virtual-kubelet retries the delete. It makes 20 attempts over about 55 minutes
+   on the default backoff; after that the delete runs again only when
+   vk-cocoon restarts or the pod object changes.
 3. `Runtime.Remove(vmID)` destroys the VM; an already absent VM also
    completes this step. Then release each DHCP-backed NIC lease through
    cocoon-net's local control socket. Lease cleanup is best-effort after
