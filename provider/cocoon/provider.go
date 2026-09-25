@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/log"
+	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
@@ -181,7 +182,7 @@ func (p *Provider) GetPod(_ context.Context, namespace, name string) (*corev1.Po
 	defer p.mu.RUnlock()
 	pod, ok := p.pods[meta.PodKey(namespace, name)]
 	if !ok {
-		return nil, fmt.Errorf("pod %s/%s not found", namespace, name)
+		return nil, errdefs.NotFoundf("pod %s/%s not found", namespace, name)
 	}
 	return pod.DeepCopy(), nil
 }
