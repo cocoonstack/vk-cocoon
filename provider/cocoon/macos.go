@@ -112,7 +112,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 
 	if p.macosAlreadyTracked(key, spec.VMName) {
 		logger.Infof(ctx, "%s: macOS VM %s already tracked; adopting duplicate CreatePod", key, spec.VMName)
-		// keep a live probe agent (a restart discards its state); re-assert Ready since the CreatePod prologue downgraded it.
+		// Keep a live probe agent (a restart discards its state); re-assert Ready since the CreatePod prologue downgraded it.
 		if p.Probes == nil || p.Probes.Get(key).LastSeen.IsZero() {
 			p.startMacosProbe(pod)
 		}
@@ -154,7 +154,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 		}
 		args = append(args, "--exit-on-reboot", "--random-smbios", "--net", "cni", spec.Image)
 		if out, err := p.macosExec(ctx, args...); err != nil {
-			// a failed inspect is indistinguishable from a missing record, so never turn this ambiguous error into `vm rm`.
+			// A failed inspect is indistinguishable from a missing record, so never turn this ambiguous error into `vm rm`.
 			return p.failCreate(ctx, pod, false, "CreateBringUpFailed",
 				fmt.Errorf("cocoon-macos vm run %s: %w: %s", spec.VMName, err, strings.TrimSpace(out)))
 		}
@@ -167,7 +167,7 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	}
 
 	p.markPodRunning(pod)
-	// ready defers to the probe; onUpdate only fires on transitions, so a reachable adoption needs this explicit publish.
+	// Ready defers to the probe; onUpdate only fires on transitions, so a reachable adoption needs this explicit publish.
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
@@ -226,7 +226,7 @@ func (p *Provider) buildMacosProbe(namespace, name string, uid types.UID) probes
 			return false, "vm gone"
 		}
 		if v.MAC == "" {
-			// self-heal a record registered while `vm inspect` was failing: without the MAC the guest's lease can never resolve.
+			// Self-heal a record registered while `vm inspect` was failing: without the MAC the guest's lease can never resolve.
 			if time.Since(lastInspect) >= macosInspectRetryEvery {
 				lastInspect = time.Now()
 				if rec := p.macosInspect(ctx, v.Name); rec != nil && rec.MAC != "" {
@@ -238,7 +238,7 @@ func (p *Provider) buildMacosProbe(namespace, name string, uid types.UID) probes
 			}
 		}
 		if v.PID > 0 && !p.macosProcessAlive(v.PID) {
-			// the CH event stream and orphan scan cannot see QEMU guests, so a crash is repaired here or never.
+			// The CH event stream and orphan scan cannot see QEMU guests, so a crash is repaired here or never.
 			if time.Since(lastRestart) < macosInspectRetryEvery {
 				return false, "qemu process dead"
 			}
@@ -307,7 +307,7 @@ func (p *Provider) publishMacosReadiness(ctx context.Context, namespace, name st
 		p.refreshAndNotify(ctx, pod)
 		return
 	}
-	// reconcile runtime endpoints before flipping Ready; the lease usually resolves post-patch.
+	// Reconcile runtime endpoints before flipping Ready; the lease usually resolves post-patch.
 	if v := p.vmForPod(namespace, name); v != nil && !p.reconcileRuntimeEndpoints(ctx, pod, v.IP) {
 		return
 	}
@@ -361,7 +361,7 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	}
 	logger.Infof(ctx, "adopting live macOS VM %s (pid %d) for pod %s/%s",
 		spec.VMName, rec.PID, pod.Namespace, pod.Name)
-	// seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
+	// Seed before the probe's first run: it may flip Ready, and a later seed would overwrite that.
 	p.seedLifecycleIntentFromPod(pod)
 	if !p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec)) {
 		p.skipSuperseded(ctx, pod, "create")
@@ -373,7 +373,7 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 // ensureMacosImage materializes the image in the node-local cocoon-macos store.
 func (p *Provider) ensureMacosImage(ctx context.Context, image string) error {
 	ch := p.macosImageSF.DoChan(image, func() (any, error) {
-		// detached like the other import flights: one caller's abort must not fail the flight for its remaining waiters.
+		// Detached like the other import flights: one caller's abort must not fail the flight for its remaining waiters.
 		shared, cancel := p.detachedImportContext()
 		defer cancel()
 		if p.macosImagePresent(shared, image) {

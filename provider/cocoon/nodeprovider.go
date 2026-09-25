@@ -14,5 +14,5 @@ func (*NodeProvider) Ping(_ context.Context) error {
 }
 
 func (*NodeProvider) NotifyNodeStatus(_ context.Context, _ func(*corev1.Node)) {
-	// the node controller drives status refresh via Ping.
+	// The node controller drives status refresh via Ping.
 }

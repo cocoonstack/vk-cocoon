@@ -25,12 +25,10 @@ import (
 )
 
 const (
-	// importDetachTimeout backstops a shared import flight: it outlives every
-	// individual caller, so a stalled registry stream needs a deadline of its own.
+	// importDetachTimeout bounds a shared import flight, which outlives every caller that joins it.
 	importDetachTimeout = 30 * time.Minute
 
-	// cpuPeriodUs is the cpu.max period the quota is computed against;
-	// passed alongside the quota so the math never drifts from cocoon's default.
+	// cpuPeriodUs is passed with the quota so the math cannot drift from cocoon's default cpu.max period.
 	cpuPeriodUs = 100000
 	// minQuotaUs is the kernel's cpu.max floor; kubelet clamps sub-10m limits the same way.
 	minQuotaUs = 1000
@@ -60,14 +58,12 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateCreating, "")
 
-	// Dispatch before any cloud-hypervisor machinery (adopt-by-name, hibernate
-	// evidence, snapshot pull) runs; none of it applies to a QEMU guest.
+	// Dispatch before the cloud-hypervisor steps below; none of them apply to a QEMU guest.
 	if isMacosSpec(spec) {
 		return p.createMacosPod(ctx, pod, spec)
 	}
 
-	// A macOS-owned name must not be adopted through the CH path (its probe
-	// and lifecycle verbs would misfire); only createMacosPod may bind it.
+	// A macOS-owned name is never adopted here; only createMacosPod may bind it.
 	existing, adoptErr := p.adoptableVM(ctx, spec.VMName)
 	if adoptErr != nil {
 		return p.failCreate(ctx, pod, false, "CreateAdoptInspectFailed", adoptErr)
@@ -83,8 +79,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 		return nil
 	}
 
-	// A restore reuses wake()'s post-restore path (CH+Windows waits on the fresh
-	// NIC's lease; others run runPostCloneSetup) and skips the base-image post-clone.
+	// A restore takes wake()'s post-restore path and skips the base-image post-clone.
 	restoring := meta.ReadRestoreFromHibernate(pod)
 	if spec.Managed {
 		derived, err := p.deriveRestoreFromEvidence(ctx, pod, spec, restoring)
@@ -145,8 +140,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// failCreate drops the provisional claim (keep intent) so the kubelet's create
-// retry starts clean; a failed restore also counts as a wake failure.
+// failCreate drops the provisional claim so the kubelet's retry starts clean; a failed restore counts as a failed wake.
 func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bool, reason string, err error) error {
 	if restoring {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
@@ -358,8 +352,7 @@ func (p *Provider) ensureSnapshotBaseImage(ctx context.Context, snapshot *vm.Sna
 	return nil
 }
 
-// detachedImportContext scopes shared import work to the provider, not to the
-// caller that happened to start it: Close aborts it, one CreatePod cannot.
+// detachedImportContext scopes shared import work to the provider: Close aborts it, one CreatePod cannot.
 func (p *Provider) detachedImportContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(p.lifecycleCtx, importDetachTimeout)
 }
@@ -369,8 +362,7 @@ func (p *Provider) ensureRunImage(ctx context.Context, image string, force bool)
 	if image == "" {
 		return image, nil
 	}
-	// the key is the raw ref (fallback branches return the leader's spelling verbatim, so a joiner must share it)
-	// plus force, so a force caller never coalesces onto a non-force flight.
+	// The key is the raw ref the leader returns verbatim, plus force, so a force caller never joins a non-force flight.
 	key := image
 	if force {
 		key = "force " + image
@@ -419,8 +411,7 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 	if p.Puller == nil {
 		return nil, nil
 	}
-	// the in-flight re-check matters: SnapshotImport rm's the target name first and cocoon registers it only on
-	// completion, so a joiner that missed the outer check would re-import and rm the snapshot the last flight registered.
+	// Re-check inside the flight: SnapshotImport removes the target name first, so a late joiner would remove the last import.
 	ch := p.snapshotPullSF.DoChan(local, func() (any, error) {
 		shared, cancel := p.detachedImportContext()
 		defer cancel()
@@ -445,8 +436,7 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 func (p *Provider) ensureForkSnapshot(ctx context.Context, sourceVMName string) (string, error) {
 	snapshotName := forkSnapshotName(sourceVMName)
 
-	// singleflight: sub-agents forking the same main would race SnapshotSave into "snapshot name already in use";
-	// the shared save is cancel-detached so one aborted CreatePod cannot fail the rest.
+	// Sub-agents of one main share one cancel-detached save; parallel saves fail with "snapshot name already in use".
 	ch := p.forkSnapshotSF.DoChan(snapshotName, func() (any, error) {
 		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), importDetachTimeout)
 		defer cancel()
@@ -602,8 +592,7 @@ func (p *Provider) refreshStatus(ctx context.Context, pod *corev1.Pod) {
 	if err != nil {
 		return
 	}
-	// the probe's GetPod DeepCopies the tracked pod under RLock, so the write takes the lock;
-	// GetPodStatus RLocks itself and therefore runs first.
+	// The probe's GetPod DeepCopies the tracked pod under RLock, so the write takes the lock.
 	p.mu.Lock()
 	pod.Status = *status
 	p.mu.Unlock()
@@ -624,8 +613,7 @@ func addAnnotationPatch(patch map[string]any, key, current, desired string) {
 	}
 }
 
-// awaitFlight waits on a singleflight result or the caller's cancellation; a canceled caller abandons the flight,
-// which keeps running for its remaining waiters.
+// awaitFlight returns on the flight's result or the caller's cancel; the flight keeps running for its other waiters.
 func awaitFlight[T any](ctx context.Context, ch <-chan singleflight.Result, zero T) (T, error) {
 	select {
 	case res := <-ch:
@@ -714,8 +702,7 @@ func vmResourceOverrides(pod *corev1.Pod) (int, string) {
 	return quantityCPURoundUp(cpu), quantityArg(memory)
 }
 
-// podCPUPolicy caps the quota at the CPU limit (never requests) and tracks the weight from requests (limits when
-// unset, the K8s Guaranteed defaulting) so a BestEffort pod gets kubelet's minimum share, not cocoon's vCPU default.
+// podCPUPolicy caps quota at the CPU limit and weights by requests, so a BestEffort pod gets kubelet's minimum share.
 func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	if len(pod.Spec.Containers) == 0 {
 		return vm.CPUPolicy{}
@@ -731,8 +718,7 @@ func podCPUPolicy(pod *corev1.Pod) vm.CPUPolicy {
 	return policy
 }
 
-// cpuWeightFromMilli mirrors kubelet's cgroup v2 conversion so a VM's
-// contention share matches what kubelet grants the same requests.
+// cpuWeightFromMilli mirrors kubelet's cgroup v2 conversion of CPU requests to cpu.weight.
 func cpuWeightFromMilli(milli int64) int {
 	shares := min(max(milli*1024/1000, minCPUShares), maxCPUShares)
 	return int(1 + (shares-minCPUShares)*9999/(maxCPUShares-minCPUShares))
@@ -756,8 +742,7 @@ func quantityCPURoundUp(q resource.Quantity) int {
 	return int((milli + 999) / 1000)
 }
 
-// quantityArg renders a non-zero quantity as-is; vm.NormalizeSizeArg
-// owns the byte conversion for cocoon's CLI flags.
+// quantityArg leaves the byte conversion to vm.NormalizeSizeArg.
 func quantityArg(q resource.Quantity) string {
 	if q.IsZero() {
 		return ""

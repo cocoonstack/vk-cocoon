@@ -71,7 +71,7 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 		}
 		allocatable[k] = reserveQuantity(v, reservePct)
 	}
-	// storage allocatable is based on fs-available (excludes base images and other existing data), not fs-total.
+	// Storage allocatable is based on fs-available (excludes base images and other existing data), not fs-total.
 	allocatable[corev1.ResourceEphemeralStorage] = reserveQuantity(storageAvail, reservePct)
 	return capacity, allocatable, nil
 }

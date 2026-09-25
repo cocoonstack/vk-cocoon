@@ -99,7 +99,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		}
 		v, ok := vmByID[runtime.VMID]
 		if !ok {
-			// the VM was removed during hibernate but the annotation patch failed.
+			// The VM was removed during hibernate but the annotation patch failed.
 			if meta.ReadHibernateState(pod) {
 				p.reconcileStaleHibernate(ctx, pod)
 				continue
@@ -113,7 +113,7 @@ func (p *Provider) StartupReconcile(ctx context.Context) error {
 		matched[v.ID] = true
 		probePods = append(probePods, pod)
 	}
-	// first probes run synchronously (3s worst case) and gate node registration; the two fan-outs touch disjoint state, so overlap them too.
+	// First probes run synchronously (3s worst case) and gate node registration; the two fan-outs touch disjoint state, so overlap them too.
 	var wg sync.WaitGroup
 	wg.Go(func() { fanOut(startupFanOut, probePods, p.startProbeIfEnabled) })
 	wg.Go(func() {
@@ -198,7 +198,7 @@ func (p *Provider) watchBusyCreate(vmID string) {
 				logger.Infof(ctx, "in-flight create %s resolved as %s; CreatePod recreates", vmID, outcome)
 				return
 			}
-			// a failing verb must not strand a clone that did commit.
+			// A failing verb must not strand a clone that did commit.
 			if fresh, settled := p.classifySettledCreate(ctx, vmID); settled {
 				if fresh != nil {
 					logger.Infof(ctx, "in-flight create %s (%s) committed; indexing for adoption", vmID, fresh.Name)

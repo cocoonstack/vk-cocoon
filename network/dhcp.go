@@ -100,7 +100,7 @@ func (p *LeaseParser) parse() ([]Lease, error) {
 	}
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
-		// skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
+		// Skip rows with an unparseable expiry: cocoon-net may flush a lease mid-write.
 		expiresAt, err := time.Parse(time.RFC3339, r.Expiry)
 		if err != nil {
 			continue

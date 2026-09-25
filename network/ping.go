@@ -93,7 +93,7 @@ func (p *ICMPPinger) Ping(ctx context.Context, ip string) error {
 		if !ok || echo.ID != p.id {
 			continue
 		}
-		// also match on peer address to avoid cross-socket reply stealing.
+		// Also match on peer address to avoid cross-socket reply stealing.
 		if peerAddr, ok := peer.(*net.IPAddr); ok && !peerAddr.IP.Equal(addr.IP) {
 			continue
 		}

@@ -69,12 +69,12 @@ func (p *Provider) publishReadyLifecycle(ctx context.Context, pod *corev1.Pod, s
 func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, state meta.LifecycleState, message string) (meta.LifecycleStatus, bool) {
 	logger := log.WithFunc("Provider.applyLifecycleLocked")
 	key := meta.PodKey(pod.Namespace, pod.Name)
-	// async paths capture an old pod pointer; tracked pod's gen is always fresher.
+	// Async paths capture an old pod pointer; tracked pod's gen is always fresher.
 	gen := meta.ReadCocoonSetGeneration(pod)
 	tracked := p.pods[key]
 	status := meta.LifecycleStatus{State: state, ObservedGeneration: gen, Message: message}
 	if tracked != nil {
-		// a delete-then-recreate reuses the key; drop a write from the old incarnation.
+		// A delete-then-recreate reuses the key; drop a write from the old incarnation.
 		if tracked.UID != pod.UID {
 			return status, false
 		}
@@ -95,7 +95,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 			cur.status.State, cur.status.ObservedGeneration)
 		return status, false
 	}
-	// same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
+	// Same-gen Failed is sticky (closes the lifecycleAlreadyFailed TOCTOU); only Creating/Hibernating start a new attempt and may clear it.
 	if sameIncarnation &&
 		cur.status.State == meta.LifecycleStateFailed &&
 		state != meta.LifecycleStateFailed &&
@@ -109,7 +109,7 @@ func (p *Provider) applyLifecycleLocked(ctx context.Context, pod *corev1.Pod, st
 	p.lifecycleIntent[key] = lifecycleEntry{uid: pod.UID, status: status}
 	status.Apply(pod)
 	if tracked != nil && tracked != pod {
-		// keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
+		// Keep tracked pod in sync so GetPod's DeepCopy reflects the new state.
 		status.Apply(tracked)
 	}
 	return status, true
@@ -122,7 +122,7 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, u
 	snap := status.Snapshot()
 	var lastErr error
 	for attempt := range lifecyclePatchAttempts {
-		// skip if intent advanced, another incarnation staged one, or the pod was forgotten — a newer flush owns the write.
+		// Skip if intent advanced, another incarnation staged one, or the pod was forgotten — a newer flush owns the write.
 		p.mu.RLock()
 		_, owned := p.lifecycleOwnedLocked(key, uid, snap)
 		p.mu.RUnlock()
@@ -206,7 +206,7 @@ func (p *Provider) republishLifecycleOnGenerationBump(ctx context.Context, pod *
 		p.mu.Unlock()
 		return
 	}
-	// read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
+	// Read and apply under one lock: a replay of a stale capture could resurrect a state a concurrent write just superseded.
 	status, applied := p.applyLifecycleLocked(ctx, pod, cur.status.State, cur.status.Message)
 	p.mu.Unlock()
 	if applied {
