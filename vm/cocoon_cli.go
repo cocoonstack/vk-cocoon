@@ -235,6 +235,14 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 	return parseSnapshotJSON(out)
 }
 
+func (c *CocoonCLI) SnapshotList(ctx context.Context) ([]Snapshot, error) {
+	out, err := c.runJSON(ctx, "snapshot", "list", "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("cocoon snapshot list: %w", err)
+	}
+	return decodeListJSON[Snapshot](out, "No snapshots found.", "snapshot list")
+}
+
 // SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe, removing a stale same-name snapshot up front for idempotency.
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	if err := c.SnapshotRemoveIfExists(ctx, name); err != nil {

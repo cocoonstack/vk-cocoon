@@ -58,6 +58,40 @@ func TestRemoveMapsNotFound(t *testing.T) {
 	}
 }
 
+func TestSnapshotListReadsAListAndAnEmptyStore(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		out  string
+		want []string
+	}{
+		{"a list", `[{"id":"SNAP-1","name":"vk-ns-a-0-000000"},{"id":"SNAP-2","name":"fork-vk-ns-a-0-000000"}]`, []string{"vk-ns-a-0-000000", "fork-vk-ns-a-0-000000"}},
+		{"an empty JSON list", "[]", nil},
+		{"the empty-store banner of an older cocoon", "No snapshots found.", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bin := filepath.Join(t.TempDir(), "cocoon")
+			script := "#!/bin/sh\n[ \"$*\" = \"snapshot list -o json\" ] || exit 2\necho '" + tt.out + "'\n"
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatalf("write fake cocoon: %v", err)
+			}
+			snapshots, err := NewCocoonCLI(bin).SnapshotList(t.Context())
+			if err != nil {
+				t.Fatalf("SnapshotList: %v", err)
+			}
+			var got []string
+			for _, s := range snapshots {
+				got = append(got, s.Name)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("names = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotNameTakenPhrases(t *testing.T) {
 	t.Parallel()
 

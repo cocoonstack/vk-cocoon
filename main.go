@@ -177,6 +177,7 @@ func main() {
 
 	p.StartVMWatcher(signalCtx)
 	p.StartLifecycleReconciler()
+	p.StartSnapshotReclaimer()
 
 	newProvider := func(cfg nodeutil.ProviderConfig) (nodeutil.Provider, node.NodeProvider, error) {
 		p.Pods = cfg.Pods
