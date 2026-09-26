@@ -32,7 +32,7 @@ func (p *Provider) dispatchOwedWork() {
 	work := make([]owed, 0, len(p.pods))
 	for key, pod := range p.pods {
 		if op := owedOpFor(pod, p.vmsByPod[key]); op != "" {
-			work = append(work, owed{key: key, pod: pod.DeepCopy(), v: p.vmsByPod[key], op: op})
+			work = append(work, owed{key: key, pod: pod, v: p.vmsByPod[key], op: op})
 		}
 	}
 	p.mu.RUnlock()
