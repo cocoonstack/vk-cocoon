@@ -79,12 +79,12 @@ func (p *Provider) retryOp(ctx context.Context, key string) {
 	defer l.Unlock()
 	p.mu.RLock()
 	r, owed := p.opRetries[key]
-	tracked := p.pods[key]
+	tracked := p.pods[key].DeepCopy()
 	p.mu.RUnlock()
 	if !owed || time.Now().Before(r.due) || tracked == nil {
 		return
 	}
-	if err := p.updatePod(ctx, tracked.DeepCopy()); err != nil {
+	if err := p.updatePod(ctx, tracked); err != nil {
 		log.WithFunc("Provider.retryOp").Warnf(ctx, "retry update of %s: %v", key, err)
 	}
 }

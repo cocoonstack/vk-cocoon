@@ -3,6 +3,7 @@ package cocoon
 import (
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -162,6 +163,27 @@ func TestAFailureAfterThePodIsForgottenOwesNoRetry(t *testing.T) {
 	if _, owed := owedRetry(p, meta.PodKey("ns", "demo-0")); owed {
 		t.Fatal("a pod no longer tracked owes a retry")
 	}
+}
+
+func TestARetryCopiesThePodUnderTheLock(t *testing.T) {
+	rt := &fakeRuntime{}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	key := meta.PodKey("ns", "demo-0")
+	keep := pod.DeepCopy()
+	meta.MarkKeepSnapshotOnDelete(keep)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 200 {
+			p.RefreshKeepSnapshotOnDelete(keep)
+		}
+	})
+	for range 200 {
+		p.retryOpLater(t.Context(), pod, 0, errors.New("push refused"))
+		forceRetryDue(t, p, key)
+		p.retryOp(t.Context(), key)
+	}
+	wg.Wait()
 }
 
 func forceRetryDue(t *testing.T, p *Provider, key string) {
