@@ -82,7 +82,7 @@ or clones from. Any other `vk-` snapshot is removed with its fork snapshot once
 the registry's `:hibernate` tag is gone or names another snapshot. A copy the
 tag still names stays as the warm-wake cache, and a registry error keeps the
 copy until the next pass. A leftover `-hibernate-import` snapshot no pod on
-this node wakes from is removed. Registry-less deployments skip the pass.
+this node wakes from is removed.
 
 ## VM event watcher
 

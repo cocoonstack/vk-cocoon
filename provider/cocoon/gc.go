@@ -23,9 +23,6 @@ func (p *Provider) StartSnapshotReclaimer() {
 }
 
 func (p *Provider) reclaimLocalSnapshots(ctx context.Context) {
-	if p.Registry == nil {
-		return
-	}
 	logger := log.WithFunc("Provider.reclaimLocalSnapshots")
 	snapshots, err := p.Runtime.SnapshotList(ctx)
 	if err != nil {
