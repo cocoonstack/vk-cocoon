@@ -99,6 +99,10 @@ arrives:
 | state = stopped/error | `cocoon vm start` (in-place restart, preserves disk/network); on failure removes the VM and evicts the pod (phase=`Failed`, reason=`RestartFailed`) |
 | state = running | False alarm — ignore |
 
+While a hibernate of the pod runs, a gone event is not acted on: the
+hibernate's own remove emits one. Once that hibernate ends, the VM is
+inspected again and handled by the table above.
+
 Every stream connect opens with an `ADDED` event per VM, so a VM that stopped
 while vk-cocoon was down is restarted or evicted the same way. When the pod
 delete of an eviction fails, the deferred recheck keeps retrying it under its

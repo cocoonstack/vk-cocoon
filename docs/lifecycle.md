@@ -152,7 +152,8 @@ cannot wedge node registration. Rejected create/update calls count on
    skip the snapshot logic below. A macOS pod whose create failed but left
    a VM record never reaches DeletePod, because virtual-kubelet removes a
    pod that never ran straight from the API; vk-cocoon runs the same
-   teardown for it when the pod's delete event arrives.
+   teardown for it once when the pod's delete event arrives, and a failed
+   `vm rm` there is logged, since no pod is left to retry it for.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via
@@ -207,7 +208,7 @@ after a restart, writes a lifecycle message that starts with
 `hibernate: `. Once hibernate is cleared, an update, a restart of
 vk-cocoon, or a restart of the VM after it stopped lifts only that
 failure: the lifecycle returns to `creating`, then Ready, a macOS guest
-once its probe passes. A cloud-hypervisor VM must answer a live inspect
+once its probe passes. Any VM but a macOS one must answer a live inspect
 as running first; a lift whose inspect fails is retried. Any other
 failure stays.
 
