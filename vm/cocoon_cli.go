@@ -7,7 +7,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -309,8 +310,8 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 				continue
 			}
 			var raw struct {
-				Event string          `json:"event"`
-				VM    json.RawMessage `json:"vm"`
+				Event string         `json:"event"`
+				VM    jsontext.Value `json:"vm"`
 			}
 			if err := json.Unmarshal(line, &raw); err != nil {
 				logger.Warnf(ctx, "skip undecodable event line: %v", err)
