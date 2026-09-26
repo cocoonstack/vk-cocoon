@@ -7,7 +7,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -235,6 +236,14 @@ func (c *CocoonCLI) Snapshot(ctx context.Context, name string) (*Snapshot, error
 	return parseSnapshotJSON(out)
 }
 
+func (c *CocoonCLI) SnapshotList(ctx context.Context) ([]Snapshot, error) {
+	out, err := c.runJSON(ctx, "snapshot", "list", "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("cocoon snapshot list: %w", err)
+	}
+	return decodeListJSON[Snapshot](out, "No snapshots found.", "snapshot list")
+}
+
 // SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe, removing a stale same-name snapshot up front for idempotency.
 func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
 	if err := c.SnapshotRemoveIfExists(ctx, name); err != nil {
@@ -301,8 +310,8 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 				continue
 			}
 			var raw struct {
-				Event string          `json:"event"`
-				VM    json.RawMessage `json:"vm"`
+				Event string         `json:"event"`
+				VM    jsontext.Value `json:"vm"`
 			}
 			if err := json.Unmarshal(line, &raw); err != nil {
 				logger.Warnf(ctx, "skip undecodable event line: %v", err)

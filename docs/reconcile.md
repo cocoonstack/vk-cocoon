@@ -79,6 +79,14 @@ lease and repairs drifted pod status. The same pass idempotently reconciles the
 published IP and macOS VNC-port annotations, removing an endpoint when the
 runtime no longer serves it; failed patches are retried on the next pass.
 
+At startup and every 10 minutes, the snapshot reclaimer walks the local
+snapshot store. It skips a `vk-` snapshot that a pod on this node runs, wakes
+or clones from. Any other `vk-` snapshot is removed with its fork snapshot once
+the registry's `:hibernate` tag is gone or names another snapshot. A copy the
+tag still names stays as the warm-wake cache, and a registry error keeps the
+copy until the next pass. A leftover `-hibernate-import` snapshot no pod on
+this node wakes from is removed.
+
 ## VM event watcher
 
 In addition to the periodic probe, vk-cocoon subscribes to cocoon's

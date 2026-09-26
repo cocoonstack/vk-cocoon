@@ -2,7 +2,7 @@ package vm
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 )
 
@@ -26,18 +26,11 @@ func parseInspectJSON(raw []byte) (*VM, error) {
 	return inspectJSONToVM(d), nil
 }
 
-// parseVMListJSON handles cocoon printing "No VMs found." instead of JSON for an empty list.
 func parseVMListJSON(raw []byte) ([]VM, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("No VMs found.")) {
-		return nil, nil
+	docs, err := decodeListJSON[inspectJSON](raw, "No VMs found.", "vm list")
+	if err != nil {
+		return nil, err
 	}
-
-	var docs []inspectJSON
-	if err := json.Unmarshal(trimmed, &docs); err != nil {
-		return nil, fmt.Errorf("decode vm list: %w", err)
-	}
-
 	out := make([]VM, 0, len(docs))
 	for _, doc := range docs {
 		if doc.ID == "" {
@@ -72,4 +65,17 @@ func inspectJSONToVM(d inspectJSON) *VM {
 		}
 	}
 	return v
+}
+
+// decodeListJSON handles cocoon printing the empty banner instead of JSON for an empty list.
+func decodeListJSON[T any](raw []byte, emptyBanner, what string) ([]T, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte(emptyBanner)) {
+		return nil, nil
+	}
+	var docs []T
+	if err := json.Unmarshal(trimmed, &docs); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", what, err)
+	}
+	return docs, nil
 }

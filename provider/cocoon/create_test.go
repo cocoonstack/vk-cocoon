@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -2732,6 +2733,16 @@ func (f *fakeRuntime) Snapshot(_ context.Context, name string) (*vm.Snapshot, er
 		}
 	}
 	return nil, fmt.Errorf("snapshot %s: %w", name, vm.ErrSnapshotNotFound)
+}
+
+func (f *fakeRuntime) SnapshotList(_ context.Context) ([]vm.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []vm.Snapshot
+	for _, name := range slices.Sorted(maps.Keys(f.snapshots)) {
+		out = append(out, *f.snapshots[name])
+	}
+	return out, nil
 }
 
 func (f *fakeRuntime) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
