@@ -302,8 +302,8 @@ func TestDeletePodDoesNotReleaseLeaseWhenVMRemovalFails(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
 	p.trackPod(pod, &vm.VM{ID: "vmid-del", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:ff"})
 
-	if err := p.DeletePod(t.Context(), pod); err == nil {
-		t.Fatal("expected VM removal error")
+	if err := p.DeletePod(t.Context(), pod); !errors.Is(err, ErrDeleteKeptVM) {
+		t.Fatalf("DeletePod = %v, want the removal failure marked for the delete retry", err)
 	}
 	if got := releaser.released(); len(got) != 0 {
 		t.Errorf("released MACs = %v before VM removal succeeded", releaser.macs)
@@ -345,8 +345,8 @@ func TestDeletePodKeepsTheVMWhenTheSnapshotFails(t *testing.T) {
 			p, pod := newSnapshotDeleteFixture(t, rt, running)
 
 			err := p.DeletePod(t.Context(), pod)
-			if err == nil || !strings.Contains(err.Error(), "before delete") {
-				t.Fatalf("DeletePod = %v, want the snapshot failure", err)
+			if !errors.Is(err, ErrDeleteKeptVM) || !strings.Contains(err.Error(), "before delete") {
+				t.Fatalf("DeletePod = %v, want the snapshot failure marked for the delete retry", err)
 			}
 			if rt.removedID != "" {
 				t.Fatalf("removed VM %q after a failed %s", rt.removedID, stage)

@@ -1,7 +1,5 @@
 package cocoon
 
-// os=macos pods dispatch to the cocoon-macos binary; a replay adopts or starts the existing record, never runs a second QEMU on the disk.
-
 import (
 	"bytes"
 	"cmp"
@@ -53,6 +51,22 @@ const (
 	// macosInspectRetryEvery rate-limits the probe's record backfill to one subprocess per interval, not one per tick.
 	macosInspectRetryEvery = 10 * time.Second
 )
+
+func (p *Provider) DeleteFailedMacosCreate(pod *corev1.Pod) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	_, tracked := p.pods[key]
+	uid, left := p.macosLeftover[key]
+	p.mu.RUnlock()
+	if tracked || !left || uid != pod.UID {
+		return
+	}
+	p.goBackground(func() {
+		if err := p.DeletePod(p.lifecycleCtx, pod.DeepCopy()); err != nil {
+			log.WithFunc("Provider.DeleteFailedMacosCreate").Errorf(p.lifecycleCtx, err, "remove the VM of the failed macOS create of %s", key)
+		}
+	})
+}
 
 // claimMacosVNCPort reserves a node-unique VNC port for key, preferring a previously published one; 0 means exhausted.
 func (p *Provider) claimMacosVNCPort(key string, preferred int) int {
@@ -171,6 +185,14 @@ func (p *Provider) createMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil
+}
+
+func (p *Provider) macosVMAbsent(ctx context.Context, spec meta.VMSpec) bool {
+	if !isMacosSpec(spec) {
+		return false
+	}
+	out, err := p.macosExec(ctx, "vm", "inspect", spec.VMName)
+	return err != nil && macosVMMissing(out)
 }
 
 func (p *Provider) macosAlreadyTracked(key, vmName string) bool {
@@ -337,7 +359,7 @@ func (p *Provider) deleteMacosPod(ctx context.Context, pod *corev1.Pod, spec met
 	logger.Infof(ctx, "%s/%s: removing macOS VM %s", pod.Namespace, pod.Name, vmName)
 	if out, err := p.macosExec(ctx, "vm", "rm", vmName); err != nil && !macosVMMissing(out) {
 		metrics.PodLifecycleTotal.WithLabelValues("delete", "failed", "").Inc()
-		return fmt.Errorf("cocoon-macos vm rm %s: %w: %s", vmName, err, strings.TrimSpace(out))
+		return fmt.Errorf("%w: cocoon-macos vm rm %s: %w: %s", ErrDeleteKeptVM, vmName, err, strings.TrimSpace(out))
 	}
 	p.releaseDHCPLeases(ctx, v)
 	p.forgetPod(pod.Namespace, pod.Name)
@@ -357,6 +379,11 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	if rec == nil || !p.macosProcessAlive(rec.PID) {
 		logger.Infof(ctx, "pod %s/%s: no live macOS VM %s; CreatePod will restart it",
 			pod.Namespace, pod.Name, spec.VMName)
+		if rec != nil {
+			p.mu.Lock()
+			p.macosLeftover[meta.PodKey(pod.Namespace, pod.Name)] = pod.UID
+			p.mu.Unlock()
+		}
 		return
 	}
 	logger.Infof(ctx, "adopting live macOS VM %s (pid %d) for pod %s/%s",
@@ -366,6 +393,9 @@ func (p *Provider) reconcileMacosPod(ctx context.Context, pod *corev1.Pod, spec 
 	if !p.registerMacosVM(ctx, pod, spec, rec, p.adoptMacosVNCPort(meta.PodKey(pod.Namespace, pod.Name), rec)) {
 		p.skipSuperseded(ctx, pod, "create")
 		return
+	}
+	if !meta.ReadHibernateState(pod) {
+		_, _ = p.liftHibernateFailure(ctx, pod)
 	}
 	p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
 }
@@ -508,6 +538,10 @@ func macosVMID(vmName string) string { return macosVMIDPrefix + vmName }
 
 func isMacosVM(v *vm.VM) bool { return v != nil && v.Hypervisor == macosHypervisor }
 
+func errMacosHibernateUnsupported(vmName string) error {
+	return fmt.Errorf("macOS guest %s does not support hibernate", vmName)
+}
+
 func macosCPUs(pod *corev1.Pod) int {
 	cpus := macosDefaultCPUs
 	if o, _ := vmResourceOverrides(pod); o > 0 {
@@ -544,7 +578,7 @@ func configureMacosLifecycleCommand(cmd *exec.Cmd) {
 
 func formatMacosArgsForLog(args []string) string {
 	redacted := slices.Clone(args)
-	for i := 0; i+1 < len(redacted); i++ {
+	for i := range len(redacted) - 1 {
 		if redacted[i] == "--vnc-password" {
 			redacted[i+1] = "<redacted>"
 		}

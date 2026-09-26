@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/virtual-kubelet/virtual-kubelet/errdefs"
@@ -816,6 +817,142 @@ func TestHibernateStopsTheReadinessProbe(t *testing.T) {
 	}
 	if got := p.Probes.Get(key); !got.LastSeen.IsZero() {
 		t.Fatalf("probe after hibernate = %#v, want forgotten", got)
+	}
+}
+
+func TestHandleVMGoneActsOnTheVMAFailedHibernateLeftBehind(t *testing.T) {
+	stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+	rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: stopped}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	meta.HibernateState(true).Apply(pod)
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod after a failed save: %v", err)
+	}
+	if got := rt.started(); len(got) != 0 {
+		t.Fatalf("restarted %v while the hibernate ran", got)
+	}
+	p.handleVMGone(t.Context(), stopped)
+	if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+		t.Fatalf("restarts = %v, want the VM a failed hibernate left behind restarted", got)
+	}
+}
+
+func TestAVMThatDiesDuringAFailedHibernateIsRestartedOnceItEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+		rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: stopped}
+		p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+		p.deferredRecheckInitialDelay = time.Millisecond
+		meta.HibernateState(true).Apply(pod)
+		p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+		rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
+
+		if err := p.UpdatePod(t.Context(), pod); err != nil {
+			t.Fatalf("UpdatePod after a failed save: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+			t.Fatalf("restarts = %v, want the VM that died during the hibernate restarted once it ended", got)
+		}
+	})
+}
+
+func TestUpdatePodLiftsOnlyAFailedHibernateOnceHibernateClears(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		live  string
+		later error
+		want  meta.LifecycleState
+	}{
+		{name: "failed hibernate", live: vm.StateRunning, want: meta.LifecycleStateReady},
+		{name: "failed hibernate whose VM died", live: "stopped", want: meta.LifecycleStateFailed},
+		{name: "another failure", live: vm.StateRunning, later: errors.New("post-clone exec exhausted"), want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &fakeRuntime{snapshotSaveErr: errors.New("save boom"), inspectVM: &vm.VM{ID: "vmid-live", State: tc.live}}
+			p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+
+			suspended := pod.DeepCopy()
+			meta.HibernateState(true).Apply(suspended)
+			if err := p.UpdatePod(t.Context(), suspended); err != nil {
+				t.Fatalf("UpdatePod after a failed save: %v", err)
+			}
+			if tc.later != nil {
+				p.failOp(t.Context(), suspended, "PostCloneExecExhausted", "create", tc.later)
+			}
+			unsuspended := suspended.DeepCopy()
+			meta.HibernateState(false).Apply(unsuspended)
+			if err := p.UpdatePod(t.Context(), unsuspended); err != nil {
+				t.Fatalf("UpdatePod after hibernate cleared: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after hibernate cleared = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+			if _, owed := owedRetry(p, meta.PodKey("ns", "demo-0")); owed {
+				t.Fatal("clearing hibernate left the failed hibernate's retry owed")
+			}
+		})
+	}
+}
+
+func TestHandleVMGoneLiftsAFailedHibernateOnceItRestartsTheVM(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hibernate bool
+		want      meta.LifecycleState
+	}{
+		{name: "hibernate cleared", want: meta.LifecycleStateReady},
+		{name: "hibernate still requested", hibernate: true, want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stopped := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: "stopped"}
+			running := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+			rt := &fakeRuntime{inspectSeq: []fakeInspectStep{{vm: stopped}, {vm: running}}, inspectVM: running}
+			p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+			meta.HibernateState(tc.hibernate).Apply(pod)
+			meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: hibernateFailurePrefix + "push hibernation snapshot vk-ns-demo-0-505043: read-only"}.Apply(pod)
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: "stopped"})
+			p.seedLifecycleIntentFromPod(pod)
+
+			p.handleVMGone(t.Context(), stopped)
+
+			if got := rt.started(); !slices.Equal(got, []string{"vmid-live"}) {
+				t.Fatalf("restarts = %v, want the stopped VM restarted", got)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after the restart = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdatePodRetriesALiftWhoseInspectFails(t *testing.T) {
+	running := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+	rt := &fakeRuntime{inspectSeq: []fakeInspectStep{{err: errors.New("cocoon: inspect busy")}}, inspectVM: running}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: hibernateFailurePrefix + "save snapshot vk-ns-demo-0-505043: save boom"}.Apply(pod)
+	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	p.seedLifecycleIntentFromPod(pod)
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod after a failed inspect: %v", err)
+	}
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
+		t.Fatalf("lifecycle after the failed inspect = %q, want failed", meta.ReadLifecycleState(got))
+	}
+	key := meta.PodKey("ns", "demo-0")
+	forceRetryDue(t, p, key)
+	p.retryOp(t.Context(), key)
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle after the retry = %q, want ready", meta.ReadLifecycleState(got))
 	}
 }
 

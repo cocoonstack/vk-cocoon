@@ -23,6 +23,9 @@ func TestReserveQuantity(t *testing.T) {
 		{name: "100% gives zero", q: resource.MustParse("8Gi"), pct: 100, want: 0},
 		{name: "20% of 128Gi", q: resource.MustParse("128Gi"), pct: 20, want: 128 * 1024 * 1024 * 1024 * 80 / 100},
 		{name: "20% of 32 CPU", q: resource.MustParse("32"), pct: 20, want: 25},
+		{name: "20% of 3100m CPU floors the exact 2.48", q: resource.MustParse("3100m"), pct: 20, want: 2},
+		{name: "0% of 3100m CPU never rounds up", q: resource.MustParse("3100m"), pct: 0, want: 3},
+		{name: "20% of 1.5Pi keeps the whole bytes", q: resource.MustParse("1.5Pi"), pct: 20, want: (3 << 49) * 80 / 100},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

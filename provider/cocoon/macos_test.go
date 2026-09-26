@@ -713,6 +713,119 @@ func TestCreateMacosPodFailsWhenAutoPullFails(t *testing.T) {
 	}
 }
 
+func TestCreateMacosPodFailureReleasesTheVNCPortOnlyWithoutAVM(t *testing.T) {
+	const missing = "Error: read vm record: open /var/lib/cocoon-macos/vms/macos-demo/vm.json: no such file or directory"
+	for _, tc := range []struct {
+		name     string
+		out      string
+		err      error
+		wantPort int
+	}{
+		{name: "no vm record", out: missing, err: errors.New("exit status 1")},
+		{name: "inspect failed", err: errors.New("signal: killed"), wantPort: macosVNCPortBase},
+		{name: "record left behind", out: macosInspectJSON, wantPort: macosVNCPortBase},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod)
+			ran := false
+			stubMacosExec(p, func(args []string) (string, error) {
+				switch {
+				case macosCallIs(args, "vm", "inspect") && ran:
+					return tc.out, tc.err
+				case macosCallIs(args, "vm", "inspect"):
+					return missing, errors.New("exit status 1")
+				case macosCallIs(args, "image", "inspect"):
+					return "{}", nil
+				case macosCallIs(args, "vm", "run"):
+					ran = true
+					return "launch qemu: exit status 1", errors.New("exit status 1")
+				}
+				return "", nil
+			})
+
+			if err := p.CreatePod(t.Context(), pod); err == nil {
+				t.Fatal("CreatePod must fail when vm run fails")
+			}
+			if got := p.macosVNCPortFor(meta.PodKey("ns", "demo-0")); got != tc.wantPort {
+				t.Fatalf("VNC reservation after the failed create = %d, want %d", got, tc.wantPort)
+			}
+		})
+	}
+}
+
+func TestDeletingTheFailedMacosCreatePodRemovesTheRecordItLeft(t *testing.T) {
+	const missing = "Error: read vm record: open /var/lib/cocoon-macos/vms/macos-demo/vm.json: no such file or directory"
+	for _, tc := range []struct {
+		name    string
+		out     string
+		err     error
+		wantRms int
+	}{
+		{name: "record left behind", out: macosInspectJSON, wantRms: 1},
+		{name: "no vm record", out: missing, err: errors.New("exit status 1")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod)
+			ran := false
+			calls := stubMacosExec(p, func(args []string) (string, error) {
+				switch {
+				case macosCallIs(args, "vm", "inspect") && ran:
+					return tc.out, tc.err
+				case macosCallIs(args, "vm", "inspect"):
+					return missing, errors.New("exit status 1")
+				case macosCallIs(args, "image", "inspect"):
+					return "{}", nil
+				case macosCallIs(args, "vm", "run"):
+					ran = true
+					return "launch qemu: exit status 1", errors.New("exit status 1")
+				}
+				return "", nil
+			})
+			if err := p.CreatePod(t.Context(), pod); err == nil {
+				t.Fatal("CreatePod must fail when vm run fails")
+			}
+
+			p.DeleteFailedMacosCreate(pod)
+			p.Close()
+
+			if pod.Status.Phase == corev1.PodSucceeded {
+				t.Fatal("the delete hook wrote into the informer's pod")
+			}
+			if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != tc.wantRms {
+				t.Fatalf("vm rm calls = %v, want %d after the failed pod is deleted", rms, tc.wantRms)
+			}
+			if got := p.macosVNCPortFor(meta.PodKey("ns", "demo-0")); got != 0 {
+				t.Fatalf("VNC reservation after the delete = %d, want released", got)
+			}
+		})
+	}
+}
+
+func TestDeletingAPodWhoseDeadMacosRecordSurvivedARestartRemovesIt(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.Clientset = fake.NewSimpleClientset(pod)
+	p.macosProcessAliveFn = func(int) bool { return false }
+	calls := stubMacosExec(p, func(args []string) (string, error) {
+		if macosCallIs(args, "vm", "inspect") {
+			return macosInspectJSON, nil
+		}
+		return "", nil
+	})
+
+	p.reconcileMacosPod(t.Context(), pod, meta.ParseVMSpec(pod))
+	p.DeleteFailedMacosCreate(pod)
+	p.Close()
+
+	if rms := macosCallsWithPrefix(calls(), "vm", "rm"); len(rms) != 1 || rms[0][2] != "macos-demo" {
+		t.Fatalf("calls %v, want one `vm rm macos-demo` for the pod deleted after the restart", calls())
+	}
+}
+
 func TestDeleteMacosPodRemovesVM(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
@@ -754,6 +867,22 @@ func TestDeleteMacosPodToleratesMissingVM(t *testing.T) {
 	}
 }
 
+func TestDeleteMacosPodKeepsTheVMWhenRemoveFails(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+	stubMacosExec(p, func([]string) (string, error) {
+		return "qemu still holds the disk lock", errors.New("exit status 1")
+	})
+
+	if err := p.DeletePod(t.Context(), pod); !errors.Is(err, ErrDeleteKeptVM) {
+		t.Fatalf("DeletePod = %v, want the failed vm rm marked for the delete retry", err)
+	}
+	if p.vmForPod("ns", "demo-0") == nil {
+		t.Fatal("a failed vm rm dropped the tracked VM")
+	}
+}
+
 func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	p := newTestProvider(t)
 	pod := newPodWithSpec(macosSpec())
@@ -762,9 +891,11 @@ func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	stubMacosExec(p, func(args []string) (string, error) { return "", nil })
 	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
 
-	err := p.UpdatePod(t.Context(), pod)
-	if err == nil || !strings.Contains(err.Error(), "does not support hibernate") {
-		t.Fatalf("expected hibernate rejection, got %v", err)
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod of a macOS pod asked to hibernate: %v", err)
+	}
+	if _, owed := owedRetry(p, meta.PodKey("ns", "demo-0")); owed {
+		t.Fatal("a refused macOS hibernate owes a retry")
 	}
 	got, getErr := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
 	if getErr != nil {
@@ -772,6 +903,46 @@ func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	}
 	if state := meta.ReadLifecycleState(got); state != meta.LifecycleStateFailed {
 		t.Errorf("lifecycle state = %q, want failed", state)
+	}
+}
+
+func TestUpdateMacosPodLiftsOnlyTheHibernateRefusalOnceHibernateClears(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		later error
+		want  meta.LifecycleState
+	}{
+		{name: "hibernate refusal", want: meta.LifecycleStateReady},
+		{name: "another failure", later: errors.New("cocoon-macos vm start macos-demo: exit status 1"), want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			pod := newPodWithSpec(macosSpec())
+			p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+			stubMacosExec(p, func([]string) (string, error) { return "", nil })
+			p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+			p.Probes.Set(meta.PodKey("ns", "demo-0"), probes.Result{Ready: true})
+
+			suspended := pod.DeepCopy()
+			meta.HibernateState(true).Apply(suspended)
+			if err := p.UpdatePod(t.Context(), suspended); err != nil {
+				t.Fatalf("UpdatePod of a macOS pod asked to hibernate: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
+				t.Fatalf("lifecycle after the refusal = %q, want failed", meta.ReadLifecycleState(got))
+			}
+			if tc.later != nil {
+				p.failOp(t.Context(), suspended, "CreateBringUpFailed", "create", tc.later)
+			}
+			unsuspended := suspended.DeepCopy()
+			meta.HibernateState(false).Apply(unsuspended)
+			if err := p.UpdatePod(t.Context(), unsuspended); err != nil {
+				t.Fatalf("UpdatePod after hibernate cleared: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after hibernate cleared = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
 	}
 }
 

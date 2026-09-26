@@ -152,9 +152,18 @@ func (p *Provider) failCreate(ctx context.Context, pod *corev1.Pod, restoring bo
 	}
 	p.failOp(ctx, pod, reason, "create", err)
 	key := meta.PodKey(pod.Namespace, pod.Name)
+	spec := meta.ParseVMSpec(pod)
+	absent := p.macosVMAbsent(ctx, spec)
 	p.mu.Lock()
 	if !p.supersededLocked(key, pod.UID) {
 		delete(p.pods, key)
+		switch {
+		case absent:
+			delete(p.macosVNC, key)
+			delete(p.macosLeftover, key)
+		case isMacosSpec(spec):
+			p.macosLeftover[key] = pod.UID
+		}
 	}
 	p.mu.Unlock()
 	return err

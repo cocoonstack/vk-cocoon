@@ -113,6 +113,7 @@ type Provider struct {
 	pendingRecheck map[string]struct{}  // key=vmID, dedup for deferred recheck goroutines
 	resumedOps     map[string]struct{}  // key=pod, full ops resumed by dispatchOwedWork; UpdatePod backs off
 	busyCreates    map[string]chan struct{}
+	macosLeftover  map[string]types.UID
 	recheckWG      sync.WaitGroup
 	bgWG           sync.WaitGroup
 	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
@@ -127,6 +128,9 @@ type Provider struct {
 	// Source of truth for lifecycle annotations (decoupled from p.pods).
 	lifecycleIntent map[string]lifecycleEntry
 	deleting        map[string]struct{}
+	hibernating     map[string]bool
+	opRetries       map[string]opRetry
+	podLocks        map[string]*sync.Mutex
 
 	// Shared scrape sample; see CollectVMStats.
 	statsMu sync.Mutex
@@ -162,8 +166,12 @@ func NewProvider(ctx context.Context) *Provider {
 		pendingRecheck:  map[string]struct{}{},
 		resumedOps:      map[string]struct{}{},
 		busyCreates:     map[string]chan struct{}{},
+		macosLeftover:   map[string]types.UID{},
 		lifecycleIntent: map[string]lifecycleEntry{},
 		deleting:        map[string]struct{}{},
+		hibernating:     map[string]bool{},
+		opRetries:       map[string]opRetry{},
+		podLocks:        map[string]*sync.Mutex{},
 	}
 }
 
@@ -422,7 +430,10 @@ func (p *Provider) untrackLocked(key string) {
 	p.dropVMLocked(key)
 	delete(p.pods, key)
 	delete(p.macosVNC, key)
+	delete(p.macosLeftover, key)
 	delete(p.lifecycleIntent, key)
+	delete(p.opRetries, key)
+	delete(p.podLocks, key)
 }
 
 func (p *Provider) vmForPod(namespace, name string) *vm.VM {
@@ -639,16 +650,19 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) bool {
 		return false
 	}
 
+	p.mu.Lock()
+	_, midHibernate := p.hibernating[affectedKey]
+	if midHibernate {
+		p.hibernating[affectedKey] = true
+	}
+	midDelete := p.deletingLocked(affectedKey)
+	p.mu.Unlock()
 	// Hibernate's own Runtime.Remove triggers this event; restarting would race the cleanup.
-	if meta.ReadHibernateState(affectedPod) {
-		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, skipping VM-gone handler",
+	if midHibernate {
+		logger.Infof(ctx, "vm %s pod %s/%s is hibernating, rechecking once the hibernate ends",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
 		return false
 	}
-
-	p.mu.RLock()
-	midDelete := p.deletingLocked(affectedKey)
-	p.mu.RUnlock()
 	if midDelete {
 		logger.Infof(ctx, "vm %s pod %s/%s is being deleted, skipping VM-gone handler",
 			trackedID, affectedPod.Namespace, affectedPod.Name)
@@ -699,6 +713,7 @@ func (p *Provider) handleVMGone(ctx context.Context, eventVM *vm.VM) bool {
 				v.PID, v.NetworkConfigs = fresh.PID, fresh.NetworkConfigs
 			})
 		}
+		p.liftClearedHibernateFailure(ctx, affectedPod)
 	}
 	return false
 }

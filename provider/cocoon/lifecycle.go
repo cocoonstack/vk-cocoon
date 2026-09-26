@@ -151,7 +151,10 @@ func (p *Provider) flushLifecycle(ctx context.Context, namespace, name string, u
 }
 
 func (p *Provider) runLifecycleReconciler(ctx context.Context) {
-	commonk8s.RunTicker(ctx, lifecycleReconcileInterval, p.reconcileAllLifecycle)
+	commonk8s.RunTicker(ctx, lifecycleReconcileInterval, func(ctx context.Context) {
+		p.reconcileAllLifecycle(ctx)
+		p.retryDueOps(ctx)
+	})
 }
 
 func (p *Provider) reconcileAllLifecycle(ctx context.Context) {

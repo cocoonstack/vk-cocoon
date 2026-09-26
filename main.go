@@ -217,7 +217,7 @@ func main() {
 		nodeutil.AttachProviderRoutes(kubeletMux),
 		withHandler(kubeletMux),
 		withPodQueueLimits(kubeCfg.QPS, kubeCfg.Burst),
-		withKeepSnapshotRefresh(p),
+		withPodEventHooks(p),
 		nodeutil.WithTLSConfig(func(tc *tls.Config) error {
 			tc.Certificates = []tls.Certificate{tlsCert}
 			tc.ClientAuth = tls.NoClientCert
@@ -376,16 +376,32 @@ func withPodQueueLimits(qps float32, burst int) nodeutil.NodeOpt {
 			)
 		}
 		c.SyncPodsFromKubernetesRateLimiter = limiter()
+		c.SyncPodsFromKubernetesShouldRetryFunc = retryPodSync
 		c.DeletePodsFromKubernetesRateLimiter = limiter()
 		c.SyncPodStatusFromProviderRateLimiter = limiter()
 		return nil
 	})
 }
 
-func withKeepSnapshotRefresh(p *cocoon.Provider) nodeutil.NodeOpt {
+func retryPodSync(ctx context.Context, key string, timesTried int, originallyAdded time.Time, err error) (*time.Duration, error) {
+	if errors.Is(err, cocoon.ErrDeleteKeptVM) {
+		return nil, nil
+	}
+	return node.DefaultRetryFunc(ctx, key, timesTried, originallyAdded, err)
+}
+
+func withPodEventHooks(p *cocoon.Provider) nodeutil.NodeOpt {
 	return nodeutil.WithPodControllerConfigOverrides(func(c *node.PodControllerConfig) error {
 		_, err := c.PodInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, obj any) { p.RefreshKeepSnapshotOnDelete(obj.(*corev1.Pod)) },
+			DeleteFunc: func(obj any) {
+				if tomb, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					obj = tomb.Obj
+				}
+				if pod, ok := obj.(*corev1.Pod); ok {
+					p.DeleteFailedMacosCreate(pod)
+				}
+			},
 		})
 		return err
 	})

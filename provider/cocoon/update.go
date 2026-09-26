@@ -13,6 +13,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -35,13 +36,21 @@ const (
 	// guestIpconfigTimeout bounds the vsock exec so a sick guest cannot stall hibernate or wake.
 	guestIpconfigTimeout     = 20 * time.Second
 	hibernateRollbackTimeout = 30 * time.Second
+
+	hibernateFailurePrefix = "hibernate: "
 )
 
 var errStaleLocalSnapshot = errors.New("local snapshot does not match registry tag")
 
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("Provider.UpdatePod")
-	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
+	l := p.podLock(meta.PodKey(pod.Namespace, pod.Name))
+	l.Lock()
+	defer l.Unlock()
+	return p.updatePod(ctx, pod)
+}
+
+func (p *Provider) updatePod(ctx context.Context, pod *corev1.Pod) error {
+	log.WithFunc("Provider.updatePod").Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
 	if err := p.assertPodSnapshotCompatibility(pod); err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("update", "failed", "snapshot_cpu_class_mismatch").Inc()
@@ -77,13 +86,28 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	if !p.trackPodUnlessDeleting(pod, nil) {
 		return errDeleteInFlight(pod)
 	}
+	prev := p.takeOpRetry(key)
+	if err := p.applyUpdate(ctx, pod, spec, v, wantHibernate); err != nil {
+		p.retryOpLater(ctx, pod, prev, err)
+	}
+	return nil
+}
 
-	// os=macos: hibernate cannot apply (offline disk snapshots); every other update is an annotation echo.
+func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wantHibernate bool) error {
+	// os=macos cannot hibernate (offline disk snapshots); clearing the request lifts only that refusal.
 	if isMacosSpec(spec) {
 		if wantHibernate {
-			err := fmt.Errorf("macOS guest %s does not support hibernate", spec.VMName)
-			p.failOp(ctx, pod, "HibernateUnsupported", "update", err)
+			_ = p.failHibernate(ctx, pod, "HibernateUnsupported", errMacosHibernateUnsupported(spec.VMName))
+			return nil
+		}
+		lifted, err := p.liftHibernateFailure(ctx, pod)
+		if err != nil {
 			return err
+		}
+		if lifted {
+			p.publishMacosReadiness(ctx, pod.Namespace, pod.Name)
+			metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
+			return nil
 		}
 		return p.noopUpdate(ctx, pod)
 	}
@@ -109,7 +133,19 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
 	default:
-		return p.noopUpdate(ctx, pod)
+		if wantHibernate {
+			return p.noopUpdate(ctx, pod)
+		}
+		lifted, err := p.liftHibernateFailure(ctx, pod)
+		if err != nil {
+			return err
+		}
+		if !lifted {
+			return p.noopUpdate(ctx, pod)
+		}
+		p.markReadyPublished(ctx, pod)
+		metrics.PodLifecycleTotal.WithLabelValues("update", "ok", "").Inc()
+		return nil
 	}
 	p.refreshAndNotify(ctx, pod)
 	return nil
@@ -125,12 +161,18 @@ func (p *Provider) noopUpdate(ctx context.Context, pod *corev1.Pod) error {
 // hibernate runs Save -> Push -> Remove; CH+Windows drops the NIC first to dodge a Windows PnP MAC-swap.
 func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM) error {
 	logger := log.WithFunc("Provider.hibernate")
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.startHibernate(key)
+	defer func() {
+		if p.finishHibernate(key) {
+			p.scheduleDeferredRecheck(v.ID)
+		}
+	}()
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernating, "")
 	dropNIC := shouldDropNICBeforeHibernate(spec)
 	if dropNIC {
 		if err := p.dropNICForHibernate(ctx, pod, v); err != nil {
-			p.failOp(ctx, pod, "HibernateNetResizeFailed", "update", err)
-			return err
+			return p.failHibernate(ctx, pod, "HibernateNetResizeFailed", err)
 		}
 	}
 	saveStart := time.Now()
@@ -138,9 +180,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
 		metrics.HibernateTotal.WithLabelValues(pod.Namespace, "snapshot", "failed").Inc()
 		p.rollbackHibernate(ctx, pod, v, dropNIC)
-		err = fmt.Errorf("save snapshot %s: %w", v.Name, err)
-		p.failOp(ctx, pod, "HibernateSnapshotFailed", "update", err)
-		return err
+		return p.failHibernate(ctx, pod, "HibernateSnapshotFailed", fmt.Errorf("save snapshot %s: %w", v.Name, err))
 	}
 	metrics.SnapshotSaveDuration.WithLabelValues(pod.Namespace).Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
@@ -152,9 +192,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 			metrics.HibernateTotal.WithLabelValues(pod.Namespace, "push", "failed").Inc()
 			p.rollbackHibernate(ctx, pod, v, dropNIC)
-			err = fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err)
-			p.failOp(ctx, pod, "HibernatePushFailed", "update", err)
-			return err
+			return p.failHibernate(ctx, pod, "HibernatePushFailed", fmt.Errorf("push hibernation snapshot %s: %w", v.Name, err))
 		}
 		metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 		metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
@@ -173,9 +211,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			}
 		}
 		p.rollbackHibernate(ctx, pod, v, dropNIC)
-		err = fmt.Errorf("remove vm %s: %w", v.ID, err)
-		p.failOp(ctx, pod, "HibernateRemoveFailed", "update", err)
-		return err
+		return p.failHibernate(ctx, pod, "HibernateRemoveFailed", fmt.Errorf("remove vm %s: %w", v.ID, err))
 	}
 	metrics.HibernateTotal.WithLabelValues(pod.Namespace, "remove", "ok").Inc()
 	if !preCleared {
@@ -186,7 +222,7 @@ func (p *Provider) hibernate(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 	}
 	p.forgetVMOnly(pod.Namespace, pod.Name)
 	if p.Probes != nil {
-		p.Probes.Forget(meta.PodKey(pod.Namespace, pod.Name))
+		p.Probes.Forget(key)
 	}
 	p.markLifecycleState(ctx, pod, meta.LifecycleStateHibernated, "")
 	if p.Pusher != nil {
@@ -236,6 +272,66 @@ func (p *Provider) rollbackHibernate(ctx context.Context, pod *corev1.Pod, v *vm
 			logger.Warnf(ctx, "dhcp renew after hibernate rollback %s: %v", v.Name, err)
 		}
 	}
+}
+
+func (p *Provider) failHibernate(ctx context.Context, pod *corev1.Pod, reason string, err error) error {
+	err = fmt.Errorf("%s%w", hibernateFailurePrefix, err)
+	p.failOp(ctx, pod, reason, "update", err)
+	return err
+}
+
+func (p *Provider) liftHibernateFailure(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	key := meta.PodKey(pod.Namespace, pod.Name)
+	p.mu.RLock()
+	v := p.hibernateFailedVMLocked(key, pod.UID)
+	p.mu.RUnlock()
+	if v == nil {
+		return false, nil
+	}
+	if !isMacosVM(v) {
+		live, err := p.Runtime.Inspect(ctx, v.ID)
+		switch {
+		case errors.Is(err, vm.ErrVMNotFound):
+			return false, nil
+		case err != nil:
+			return false, fmt.Errorf("inspect vm %s before lifting its hibernate failure: %w", v.ID, err)
+		case live.State != vm.StateRunning:
+			return false, nil
+		}
+	}
+	p.mu.Lock()
+	if p.hibernateFailedVMLocked(key, pod.UID) == nil {
+		p.mu.Unlock()
+		return false, nil
+	}
+	status, applied := p.applyLifecycleLocked(ctx, pod, meta.LifecycleStateCreating, "")
+	p.mu.Unlock()
+	if applied {
+		p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
+	}
+	return true, nil
+}
+
+func (p *Provider) liftClearedHibernateFailure(ctx context.Context, pod *corev1.Pod) {
+	if meta.ReadHibernateState(pod) {
+		return
+	}
+	lifted, err := p.liftHibernateFailure(ctx, pod)
+	if err != nil {
+		p.retryOpLater(ctx, pod, 0, err)
+		return
+	}
+	if lifted {
+		p.markReadyPublished(ctx, pod)
+	}
+}
+
+func (p *Provider) hibernateFailedVMLocked(key string, uid types.UID) *vm.VM {
+	cur, ok := p.lifecycleIntent[key]
+	if !ok || cur.uid != uid || cur.status.State != meta.LifecycleStateFailed || !strings.HasPrefix(cur.status.Message, hibernateFailurePrefix) {
+		return nil
+	}
+	return p.vmsByPod[key]
 }
 
 // wake restores the VM from the hibernation snapshot; ok=false means a newer incarnation owns the pod key.
@@ -454,6 +550,20 @@ func (p *Provider) forgetVMOnly(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.dropVMLocked(meta.PodKey(namespace, name))
+}
+
+func (p *Provider) startHibernate(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.hibernating[key] = false
+}
+
+func (p *Provider) finishHibernate(key string) (vmGone bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	vmGone = p.hibernating[key]
+	delete(p.hibernating, key)
+	return vmGone
 }
 
 func (p *Provider) hasWakeSource(ctx context.Context, spec meta.VMSpec) (bool, error) {

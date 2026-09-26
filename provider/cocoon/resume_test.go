@@ -261,6 +261,37 @@ func TestStartupResumeHibernateStartsVMWhoseRecordStillReadsRunning(t *testing.T
 	}
 }
 
+func TestStartupResumeHibernateStartFailureIsLiftedOnceHibernateClears(t *testing.T) {
+	const (
+		vmName = "vk-ns-demo-0-505043"
+		vmID   = "resume-vmid"
+	)
+	pod := newPodWithSpec(meta.VMSpec{VMName: vmName, Mode: "clone", Backend: string(cocoonv1.BackendCloudHypervisor)})
+	pod.Spec.NodeName = "cocoon-pool"
+	meta.VMRuntime{VMID: vmID, IP: "10.0.0.9"}.Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+	live := &vm.VM{ID: vmID, Name: vmName, State: vm.StateRunning, IP: "10.0.0.9"}
+	rt := &fakeRuntime{listVMs: []vm.VM{*live}, inspectVM: live, startErr: errors.New("start boom")}
+	p := newTestProvider(t)
+	p.NodeName = "cocoon-pool"
+	p.Runtime = rt
+	p.Clientset = fake.NewSimpleClientset(pod)
+
+	if err := p.StartupReconcile(t.Context()); err != nil {
+		t.Fatalf("StartupReconcile: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateFailed)
+	p.Close()
+	cleared := pod.DeepCopy()
+	meta.HibernateState(false).Apply(cleared)
+	if err := p.UpdatePod(t.Context(), cleared); err != nil {
+		t.Fatalf("UpdatePod after hibernate cleared: %v", err)
+	}
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle after hibernate cleared = %q, want ready", meta.ReadLifecycleState(got))
+	}
+}
+
 func TestStartupDispatchResumesSACWhenDoneMarkerPredatesIt(t *testing.T) {
 	const vmName = "vk-ns-demo-0-505043"
 	staticVM := vm.VM{

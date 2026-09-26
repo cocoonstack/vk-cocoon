@@ -4,8 +4,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -83,6 +86,9 @@ func TestStartupReconcileSkeletonBusyLeftAlone(t *testing.T) {
 }
 
 func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	pod.Spec.NodeName = "cocoon-pool"
+
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "inflight-vmid", Name: "vk-ns-demo-0-505043", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
@@ -96,7 +102,7 @@ func TestStartupReconcileBusyCreateIndexedAfterCommit(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset()
+	p.Clientset = fake.NewSimpleClientset(pod)
 	p.deferredRecheckInitialDelay = time.Millisecond
 	p.deferredRecheckMaxDelay = 2 * time.Millisecond
 
@@ -188,6 +194,43 @@ func TestWatchBusyCreateReclaimsAfterOwnerDies(t *testing.T) {
 	}
 }
 
+func TestWatchBusyCreateAppliesTheOrphanPolicyWhenNoPodWantsTheCommit(t *testing.T) {
+	terminating := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	terminating.Spec.NodeName = "cocoon-pool"
+	terminating.DeletionTimestamp = &metav1.Time{Time: time.Unix(1, 0)}
+	for _, tc := range []struct {
+		name string
+		pods []runtime.Object
+	}{
+		{name: "pod deleted"},
+		{name: "pod terminating", pods: []runtime.Object{terminating}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				rt := &fakeRuntime{
+					staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"inflight-vmid": vm.StaleCreateBusy},
+					inspectVM:           &vm.VM{ID: "inflight-vmid", Name: "vk-ns-demo-0-505043", State: vm.StateRunning, IP: "10.0.0.7"},
+				}
+				p := newTestProvider(t)
+				p.NodeName = "cocoon-pool"
+				p.Runtime = rt
+				p.Clientset = fake.NewSimpleClientset(tc.pods...)
+				p.OrphanPolicy = provider.OrphanDestroy
+
+				p.watchBusyCreate("inflight-vmid", "vk-ns-demo-0-505043")
+				p.awaitBusyCreate(t.Context(), "vk-ns-demo-0-505043")
+
+				if rt.removedID != "inflight-vmid" {
+					t.Errorf("removed %q, want the commit no pod wants destroyed under OrphanDestroy", rt.removedID)
+				}
+				if got := p.vmByName("vk-ns-demo-0-505043"); got != nil {
+					t.Errorf("commit no pod wants must not be indexed for adoption, got %#v", got)
+				}
+			})
+		})
+	}
+}
+
 func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
 	pod.Spec.NodeName = "cocoon-pool"
@@ -212,6 +255,9 @@ func TestStartupReconcileSkeletonNotCreatingReinspectsAndAdopts(t *testing.T) {
 }
 
 func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	pod.Spec.NodeName = "cocoon-pool"
+
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0-505043", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
@@ -224,7 +270,7 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset()
+	p.Clientset = fake.NewSimpleClientset(pod)
 	p.deferredRecheckInitialDelay = time.Millisecond
 	p.deferredRecheckMaxDelay = 2 * time.Millisecond
 
@@ -245,6 +291,9 @@ func TestStartupReconcileNotCreatingCreatedKeepsWatching(t *testing.T) {
 }
 
 func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	pod.Spec.NodeName = "cocoon-pool"
+
 	rt := &fakeRuntime{
 		listVMs:             []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0-505043", State: vm.StateCreating}},
 		staleCreateOutcomes: map[string]vm.StaleCreateOutcome{"won-vmid": vm.StaleCreateNotCreating},
@@ -254,7 +303,7 @@ func TestStartupReconcileNotCreatingInspectErrorKeepsWatching(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset()
+	p.Clientset = fake.NewSimpleClientset(pod)
 	p.deferredRecheckInitialDelay = time.Millisecond
 	p.deferredRecheckMaxDelay = 2 * time.Millisecond
 
@@ -324,6 +373,9 @@ func TestStartupReconcileVerbErrorWatchesWithoutAdopting(t *testing.T) {
 }
 
 func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	pod.Spec.NodeName = "cocoon-pool"
+
 	rt := &fakeRuntime{
 		listVMs:        []vm.VM{{ID: "won-vmid", Name: "vk-ns-demo-0-505043", State: vm.StateCreating}},
 		staleCreateErr: errors.New("cli hiccup"),
@@ -332,7 +384,7 @@ func TestStartupReconcileVerbErrorCommittedRecordIndexed(t *testing.T) {
 	p := newTestProvider(t)
 	p.NodeName = "cocoon-pool"
 	p.Runtime = rt
-	p.Clientset = fake.NewSimpleClientset()
+	p.Clientset = fake.NewSimpleClientset(pod)
 	p.deferredRecheckInitialDelay = time.Millisecond
 	p.deferredRecheckMaxDelay = 2 * time.Millisecond
 
@@ -373,5 +425,35 @@ func TestStartupReconcileSkeletonWithVMIDAnnotationNotAdopted(t *testing.T) {
 	}
 	if got := p.vmByName("vk-ns-demo-0-505043"); got != nil {
 		t.Errorf("skeleton must not be indexed by name, got %#v", got)
+	}
+}
+
+func TestStartupReconcileLiftsAFailedHibernateClearedWhileDown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    meta.LifecycleState
+	}{
+		{name: "failed hibernate", message: "hibernate: save snapshot vk-ns-demo-0-505043: save boom", want: meta.LifecycleStateReady},
+		{name: "another failure", message: "post-clone exec exhausted", want: meta.LifecycleStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+			pod.Spec.NodeName = "cocoon-pool"
+			meta.VMRuntime{VMID: "live-vmid", IP: "10.0.0.42"}.Apply(pod)
+			meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: tc.message}.Apply(pod)
+			p := newTestProvider(t)
+			p.NodeName = "cocoon-pool"
+			live := &vm.VM{ID: "live-vmid", Name: "vk-ns-demo-0-505043", IP: "10.0.0.42", State: vm.StateRunning}
+			p.Runtime = &fakeRuntime{listVMs: []vm.VM{*live}, inspectVM: live}
+			p.Clientset = fake.NewSimpleClientset(pod)
+
+			if err := p.StartupReconcile(t.Context()); err != nil {
+				t.Fatalf("StartupReconcile: %v", err)
+			}
+			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
+				t.Fatalf("lifecycle after the restart = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+		})
 	}
 }

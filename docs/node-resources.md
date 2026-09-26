@@ -13,7 +13,10 @@ with values the scheduler can trust.
   no `Hugepagesize`).
 - **Allocatable** = Capacity minus a reserve fraction (default 20%,
   override via `VK_RESERVE_PERCENT`), applied to every resource except
-  `pods`, which is passed through unreduced. The reserve is accounting only;
+  `pods`, which is passed through unreduced. The result is computed from
+  the exact capacity and rounded down to a whole unit: whole cores for CPU
+  (32 cores allocate 25, a `3100m` override allocates 2) and whole bytes
+  otherwise. The reserve is accounting only;
   pair it with cocoon's `cgroup_cpus` fence to make it physical — the
   fence keeps VM threads (vCPU, virtio, io_uring workers) off the
   reserved cores, which then serve vk-cocoon's own probe loops,

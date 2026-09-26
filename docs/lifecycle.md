@@ -149,7 +149,11 @@ cannot wedge node registration. Rejected create/update calls count on
 1. Decode `meta.VMSpec`. Unmanaged pods are only forgotten; their VMs
    remain under the external owner's control. Managed `os=macos` pods
    tear down via `cocoon-macos vm rm`, release their DHCP leases, and
-   skip the snapshot logic below.
+   skip the snapshot logic below. A macOS pod whose create failed but left
+   a VM record never reaches DeletePod, because virtual-kubelet removes a
+   pod that never ran straight from the API; vk-cocoon runs the same
+   teardown for it once when the pod's delete event arrives, and a failed
+   `vm rm` there is logged, since no pod is left to retry it for.
 2. `meta.ShouldSnapshotVM(spec, meta.RoleForPod(pod, spec.VMName))` — the
    shared cocoon-common decoder — decides whether to snapshot before
    destroy. The role comes from the pod's CocoonSet owner (via
@@ -163,11 +167,16 @@ cannot wedge node registration. Rejected create/update calls count on
 
    Only a running VM is snapshotted; when its save or push fails, DeletePod
    returns the error and keeps the VM, so the pod stays Terminating while
-   virtual-kubelet retries the delete. It makes 20 attempts over about 55 minutes
-   on the default backoff; after that the delete runs again only when
-   vk-cocoon restarts or the pod object changes.
+   the delete is retried. A delete that keeps its VM is exempt from
+   virtual-kubelet's 20-attempt limit: it retries on the pod queue's backoff,
+   at most 1000 s apart, until it completes, and a force-deleted pod is
+   retried the same way from vk-cocoon's tracked copy. A vk-cocoon restart
+   before that leaves a force-deleted pod's VM to `VK_ORPHAN_POLICY` (see
+   [startup reconcile](reconcile.md)), which under `destroy` removes it
+   without the snapshot.
 3. `Runtime.Remove(vmID)` destroys the VM; an already absent VM also
-   completes this step. Then release each DHCP-backed NIC lease through
+   completes this step, and a failed remove (or macOS `vm rm`) keeps the VM
+   for the same retry. Then release each DHCP-backed NIC lease through
    cocoon-net's local control socket. Lease cleanup is best-effort after
    destruction; the normal lease expiry remains
    the fallback if cocoon-net is temporarily unavailable.
@@ -191,7 +200,17 @@ The only update vk-cocoon honors is a `HibernateState` transition.
 Anything else is a no-op (the operator deletes and recreates the pod for
 genuine spec changes). Unmanaged pods ignore hibernate regardless of OS.
 Managed `os=macos` pods reject hibernate because cocoon-macos snapshots
-are offline disk snapshots with no live save/restore.
+are offline disk snapshots with no live save/restore. The rejection marks
+the lifecycle `failed` (`HibernateUnsupported`). Every failed hibernate
+attempt, that refusal, a cloud-hypervisor NIC drop, save, push or remove
+that failed and left the VM in place, or the start of a hibernate resumed
+after a restart, writes a lifecycle message that starts with
+`hibernate: `. Once hibernate is cleared, an update, a restart of
+vk-cocoon, or a restart of the VM after it stopped lifts only that
+failure: the lifecycle returns to `creating`, then Ready, a macOS guest
+once its probe passes. Any VM but a macOS one must answer a live inspect
+as running first; a lift whose inspect fails is retried. Any other
+failure stays.
 
 | Transition | Behavior |
 |---|---|
@@ -203,6 +222,19 @@ inspects its current MAC and network configuration, and republishes VMID/IP.
 DHCP addresses are cleared until the replacement NIC's lease resolves;
 static NICs retain the fresh inspected address. Rollback has a bounded
 lifetime independent of the failed request's cancellation.
+
+vk-cocoon, not virtual-kubelet, retries a failed hibernate, a failed wake
+and a lift whose inspect failed. UpdatePod reports success for them:
+virtual-kubelet answers an error by writing the pod back as it was when
+the sync started, lifecycle annotations included, and re-runs the sync on
+the next informer event without backoff. The lifecycle reconciler re-runs
+the update on the tracked pod 15 s after the failure, doubling up to
+5 min, until it succeeds, an update no longer asks for it, or the pod is
+gone. A hibernate resumed after a restart that fails is retried the
+same way; a refused macOS hibernate is not retried. The retry holds the
+pod's lock, which UpdatePod and DeletePod also take, so it never overlaps
+them. CreatePod still returns its error, so virtual-kubelet retries a
+failed create.
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.

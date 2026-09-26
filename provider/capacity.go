@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"math/big"
 	"os"
 	"runtime"
 	"strconv"
@@ -137,9 +138,8 @@ func ReadKeyedProcFile(path string, names ...string) (map[string]int64, error) {
 }
 
 func reserveQuantity(q resource.Quantity, pct int) resource.Quantity {
-	v := q.Value()
-	alloc := v * int64(100-pct) / 100
-	return *resource.NewQuantity(alloc, q.Format)
+	alloc := new(big.Int).Mul(big.NewInt(q.MilliValue()), big.NewInt(int64(100-pct)))
+	return *resource.NewQuantity(alloc.Quo(alloc, big.NewInt(100*1000)).Int64(), q.Format)
 }
 
 func detectOrOverride(envKey string, detect func() (resource.Quantity, error)) (resource.Quantity, error) {
