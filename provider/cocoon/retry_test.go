@@ -7,6 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -115,6 +117,27 @@ func TestAFailedResumedHibernateOwesARetry(t *testing.T) {
 			t.Fatal("a resumed hibernate whose start failed owes no retry")
 		}
 	})
+}
+
+func TestALiftOutsideAnUpdateWhoseInspectFailsOwesARetry(t *testing.T) {
+	running := &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+	rt := &fakeRuntime{inspectSeq: []fakeInspectStep{{err: errors.New("cocoon: inspect busy")}}, inspectVM: running}
+	p, pod := newHibernateFixture(t, rt, "vmid-live", "10.0.0.7")
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, Message: hibernateFailurePrefix + "save snapshot vk-ns-demo-0-505043: save boom"}.Apply(pod)
+	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
+	p.seedLifecycleIntentFromPod(pod)
+
+	p.liftClearedHibernateFailure(t.Context(), pod)
+	key := meta.PodKey("ns", "demo-0")
+	if _, ok := owedRetry(p, key); !ok {
+		t.Fatal("a lift whose inspect failed outside an update owes no retry")
+	}
+	forceRetryDue(t, p, key)
+	p.retryOp(t.Context(), key)
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateReady {
+		t.Fatalf("lifecycle after the retry = %q, want ready", meta.ReadLifecycleState(got))
+	}
 }
 
 func TestForgettingAPodDropsItsRetry(t *testing.T) {

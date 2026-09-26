@@ -318,7 +318,7 @@ func (p *Provider) liftClearedHibernateFailure(ctx context.Context, pod *corev1.
 	}
 	lifted, err := p.liftHibernateFailure(ctx, pod)
 	if err != nil {
-		log.WithFunc("Provider.liftClearedHibernateFailure").Warnf(ctx, "pod %s/%s keeps its hibernate failure: %v", pod.Namespace, pod.Name, err)
+		p.retryOpLater(ctx, pod, 0, err)
 		return
 	}
 	if lifted {
