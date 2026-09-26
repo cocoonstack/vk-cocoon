@@ -129,6 +129,8 @@ type Provider struct {
 	lifecycleIntent map[string]lifecycleEntry
 	deleting        map[string]struct{}
 	hibernating     map[string]bool
+	opRetries       map[string]opRetry
+	podLocks        map[string]*sync.Mutex
 
 	// Shared scrape sample; see CollectVMStats.
 	statsMu sync.Mutex
@@ -168,6 +170,8 @@ func NewProvider(ctx context.Context) *Provider {
 		lifecycleIntent: map[string]lifecycleEntry{},
 		deleting:        map[string]struct{}{},
 		hibernating:     map[string]bool{},
+		opRetries:       map[string]opRetry{},
+		podLocks:        map[string]*sync.Mutex{},
 	}
 }
 
@@ -428,6 +432,8 @@ func (p *Provider) untrackLocked(key string) {
 	delete(p.macosVNC, key)
 	delete(p.macosLeftover, key)
 	delete(p.lifecycleIntent, key)
+	delete(p.opRetries, key)
+	delete(p.podLocks, key)
 }
 
 func (p *Provider) vmForPod(namespace, name string) *vm.VM {

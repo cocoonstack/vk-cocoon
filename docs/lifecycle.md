@@ -208,7 +208,7 @@ after a restart, writes a lifecycle message that starts with
 vk-cocoon, or a restart of the VM after it stopped lifts only that
 failure: the lifecycle returns to `creating`, then Ready, a macOS guest
 once its probe passes. A cloud-hypervisor VM must answer a live inspect
-as running first; an update whose inspect fails is retried. Any other
+as running first; a lift whose inspect fails is retried. Any other
 failure stays.
 
 | Transition | Behavior |
@@ -221,6 +221,19 @@ inspects its current MAC and network configuration, and republishes VMID/IP.
 DHCP addresses are cleared until the replacement NIC's lease resolves;
 static NICs retain the fresh inspected address. Rollback has a bounded
 lifetime independent of the failed request's cancellation.
+
+vk-cocoon, not virtual-kubelet, retries a failed hibernate, a failed wake
+and a lift whose inspect failed. UpdatePod reports success for them:
+virtual-kubelet answers an error by writing the pod back as it was when
+the sync started, lifecycle annotations included, and re-runs the sync on
+the next informer event without backoff. The lifecycle reconciler re-runs
+the update on the tracked pod 15 s after the failure, doubling up to
+5 min, until it succeeds, an update no longer asks for it, or the pod is
+gone. A hibernate resumed after a restart that fails is retried the
+same way; a refused macOS hibernate is not retried. The retry holds the
+pod's lock, which UpdatePod and DeletePod also take, so it never overlaps
+them. CreatePod still returns its error, so virtual-kubelet retries a
+failed create.
 
 The operator's `CocoonHibernation` reconciler tracks the transition by
 polling the registry for the `hibernate` manifest.

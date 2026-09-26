@@ -43,8 +43,14 @@ const (
 var errStaleLocalSnapshot = errors.New("local snapshot does not match registry tag")
 
 func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("Provider.UpdatePod")
-	logger.Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
+	l := p.podLock(meta.PodKey(pod.Namespace, pod.Name))
+	l.Lock()
+	defer l.Unlock()
+	return p.updatePod(ctx, pod)
+}
+
+func (p *Provider) updatePod(ctx context.Context, pod *corev1.Pod) error {
+	log.WithFunc("Provider.updatePod").Infof(ctx, "update pod %s/%s", pod.Namespace, pod.Name)
 
 	if err := p.assertPodSnapshotCompatibility(pod); err != nil {
 		metrics.PodLifecycleTotal.WithLabelValues("update", "failed", "snapshot_cpu_class_mismatch").Inc()
@@ -80,11 +86,19 @@ func (p *Provider) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	if !p.trackPodUnlessDeleting(pod, nil) {
 		return errDeleteInFlight(pod)
 	}
+	prev := p.takeOpRetry(key)
+	if err := p.applyUpdate(ctx, pod, spec, v, wantHibernate); err != nil {
+		p.retryOpLater(ctx, pod, prev, err)
+	}
+	return nil
+}
 
+func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wantHibernate bool) error {
 	// os=macos cannot hibernate (offline disk snapshots); clearing the request lifts only that refusal.
 	if isMacosSpec(spec) {
 		if wantHibernate {
-			return p.failHibernate(ctx, pod, "HibernateUnsupported", errMacosHibernateUnsupported(spec.VMName))
+			_ = p.failHibernate(ctx, pod, "HibernateUnsupported", errMacosHibernateUnsupported(spec.VMName))
+			return nil
 		}
 		lifted, err := p.liftHibernateFailure(ctx, pod)
 		if err != nil {

@@ -828,8 +828,8 @@ func TestHandleVMGoneActsOnTheVMAFailedHibernateLeftBehind(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
 	rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
 
-	if err := p.UpdatePod(t.Context(), pod); err == nil {
-		t.Fatal("UpdatePod must fail when SnapshotSave fails")
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod after a failed save: %v", err)
 	}
 	if got := rt.started(); len(got) != 0 {
 		t.Fatalf("restarted %v while the hibernate ran", got)
@@ -850,8 +850,8 @@ func TestAVMThatDiesDuringAFailedHibernateIsRestartedOnceItEnds(t *testing.T) {
 		p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
 		rt.snapshotSaveHook = func() { p.handleVMGone(t.Context(), stopped) }
 
-		if err := p.UpdatePod(t.Context(), pod); err == nil {
-			t.Fatal("UpdatePod must fail when SnapshotSave fails")
+		if err := p.UpdatePod(t.Context(), pod); err != nil {
+			t.Fatalf("UpdatePod after a failed save: %v", err)
 		}
 		time.Sleep(time.Millisecond)
 		synctest.Wait()
@@ -880,8 +880,8 @@ func TestUpdatePodLiftsOnlyAFailedHibernateOnceHibernateClears(t *testing.T) {
 
 			suspended := pod.DeepCopy()
 			meta.HibernateState(true).Apply(suspended)
-			if err := p.UpdatePod(t.Context(), suspended); err == nil {
-				t.Fatal("UpdatePod must fail when SnapshotSave fails")
+			if err := p.UpdatePod(t.Context(), suspended); err != nil {
+				t.Fatalf("UpdatePod after a failed save: %v", err)
 			}
 			if tc.later != nil {
 				p.failOp(t.Context(), suspended, "PostCloneExecExhausted", "create", tc.later)
@@ -893,6 +893,9 @@ func TestUpdatePodLiftsOnlyAFailedHibernateOnceHibernateClears(t *testing.T) {
 			}
 			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != tc.want {
 				t.Fatalf("lifecycle after hibernate cleared = %q, want %q", meta.ReadLifecycleState(got), tc.want)
+			}
+			if _, owed := owedRetry(p, meta.PodKey("ns", "demo-0")); owed {
+				t.Fatal("clearing hibernate left the failed hibernate's retry owed")
 			}
 		})
 	}
@@ -939,15 +942,15 @@ func TestUpdatePodRetriesALiftWhoseInspectFails(t *testing.T) {
 	p.trackPod(pod, &vm.VM{ID: "vmid-live", Name: "vk-ns-demo-0-505043", IP: "10.0.0.7", State: vm.StateRunning})
 	p.seedLifecycleIntentFromPod(pod)
 
-	if err := p.UpdatePod(t.Context(), pod); err == nil {
-		t.Fatal("UpdatePod must return the failed inspect so the framework retries the lift")
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod after a failed inspect: %v", err)
 	}
 	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
 		t.Fatalf("lifecycle after the failed inspect = %q, want failed", meta.ReadLifecycleState(got))
 	}
-	if err := p.UpdatePod(t.Context(), pod); err != nil {
-		t.Fatalf("retried UpdatePod: %v", err)
-	}
+	key := meta.PodKey("ns", "demo-0")
+	forceRetryDue(t, p, key)
+	p.retryOp(t.Context(), key)
 	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateReady {
 		t.Fatalf("lifecycle after the retry = %q, want ready", meta.ReadLifecycleState(got))
 	}

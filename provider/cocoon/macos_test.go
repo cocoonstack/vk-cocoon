@@ -891,9 +891,11 @@ func TestUpdateMacosPodRejectsHibernate(t *testing.T) {
 	stubMacosExec(p, func(args []string) (string, error) { return "", nil })
 	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
 
-	err := p.UpdatePod(t.Context(), pod)
-	if err == nil || !strings.Contains(err.Error(), "does not support hibernate") {
-		t.Fatalf("expected hibernate rejection, got %v", err)
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod of a macOS pod asked to hibernate: %v", err)
+	}
+	if _, owed := owedRetry(p, meta.PodKey("ns", "demo-0")); owed {
+		t.Fatal("a refused macOS hibernate owes a retry")
 	}
 	got, getErr := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
 	if getErr != nil {
@@ -923,8 +925,8 @@ func TestUpdateMacosPodLiftsOnlyTheHibernateRefusalOnceHibernateClears(t *testin
 
 			suspended := pod.DeepCopy()
 			meta.HibernateState(true).Apply(suspended)
-			if err := p.UpdatePod(t.Context(), suspended); err == nil {
-				t.Fatal("UpdatePod must refuse to hibernate a macOS guest")
+			if err := p.UpdatePod(t.Context(), suspended); err != nil {
+				t.Fatalf("UpdatePod of a macOS pod asked to hibernate: %v", err)
 			}
 			if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateFailed {
 				t.Fatalf("lifecycle after the refusal = %q, want failed", meta.ReadLifecycleState(got))

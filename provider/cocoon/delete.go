@@ -18,7 +18,14 @@ import (
 var ErrDeleteKeptVM = errors.New("vm kept for the delete retry")
 
 func (p *Provider) DeletePod(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.WithFunc("Provider.DeletePod")
+	l := p.podLock(meta.PodKey(pod.Namespace, pod.Name))
+	l.Lock()
+	defer l.Unlock()
+	return p.deletePod(ctx, pod)
+}
+
+func (p *Provider) deletePod(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.WithFunc("Provider.deletePod")
 	logger.Infof(ctx, "delete pod %s/%s", pod.Namespace, pod.Name)
 
 	key := meta.PodKey(pod.Namespace, pod.Name)
