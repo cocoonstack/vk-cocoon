@@ -250,6 +250,12 @@ func (p *Provider) reassertLifecycleLocked(key string, pod *corev1.Pod) {
 	cur.status.Apply(pod)
 }
 
+func (p *Provider) stampLifecycleIntentLocked(pod *corev1.Pod) {
+	if cur, ok := p.lifecycleIntent[meta.PodKey(pod.Namespace, pod.Name)]; ok && cur.uid == pod.UID {
+		cur.status.Apply(pod)
+	}
+}
+
 func (p *Provider) lifecycleOwnedLocked(key string, uid types.UID, snap string) (lifecycleEntry, bool) {
 	cur, ok := p.lifecycleIntent[key]
 	return cur, ok && cur.uid == uid && cur.status.Snapshot() == snap

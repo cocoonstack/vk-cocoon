@@ -310,6 +310,7 @@ func (p *Provider) notify(pod *corev1.Pod) {
 	p.mu.RLock()
 	hook := p.notifyHook
 	handoff := pod.DeepCopy()
+	p.stampLifecycleIntentLocked(handoff)
 	p.mu.RUnlock()
 	if hook != nil {
 		hook(handoff)

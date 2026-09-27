@@ -239,6 +239,49 @@ func TestReconcilePodStatusesDropsNotifyWhenTrackingFlipsDuringPatch(t *testing.
 	}
 }
 
+func TestReconcilePodStatusesHandsFrameworkCurrentLifecycleOverStaleLister(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone"})
+	pod.UID = "a"
+	pod.Annotations[meta.AnnotationIP] = "192.0.2.10"
+	meta.StampCocoonSetGeneration(pod, 15)
+	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 15}.Apply(pod)
+	pod.Status = runningPodStatus(corev1.ConditionFalse)
+	stale := pod.DeepCopy()
+
+	p := newTestProvider(t)
+	client := fake.NewSimpleClientset(pod)
+	p.Clientset = client
+	p.Pods = stalePodLister(t, stale)
+	p.Probes.Set(meta.PodKey(pod.Namespace, pod.Name), probes.Result{Ready: true})
+	p.trackPod(pod, &vm.VM{ID: "vmid", Name: "vk-ns-demo-0-505043", IP: "192.0.2.10"})
+	p.markLifecycleState(t.Context(), pod, meta.LifecycleStateReady, "")
+
+	notified := make(chan *corev1.Pod, 1)
+	p.notifyHook = func(updated *corev1.Pod) {
+		notified <- updated
+	}
+	p.reconcilePodStatuses(t.Context())
+
+	var handed *corev1.Pod
+	select {
+	case handed = <-notified:
+	default:
+		t.Fatal("readiness drift was not republished")
+	}
+	// virtual-kubelet UpdateStatus-es the whole handed object, and pods/status accepts annotation changes.
+	handed.ResourceVersion = ""
+	if _, err := client.CoreV1().Pods(pod.Namespace).UpdateStatus(t.Context(), handed, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("framework status push: %v", err)
+	}
+	live, err := client.CoreV1().Pods(pod.Namespace).Get(t.Context(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if state := meta.ReadLifecycleState(live); state != meta.LifecycleStateReady {
+		t.Errorf("lifecycle-state = %q after the framework status push, want %q", state, meta.LifecycleStateReady)
+	}
+}
+
 func TestGetPodStatusGatesProbeReadyUntilLifecycleReady(t *testing.T) {
 	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "clone", OS: "windows"})
 	meta.LifecycleStatus{State: meta.LifecycleStateCreating, ObservedGeneration: 1}.Apply(pod)
