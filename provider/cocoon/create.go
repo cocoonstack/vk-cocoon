@@ -312,9 +312,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return v, "", nil
 
 	default: // clone is the default
-		repo, tag := ociutil.ParseRef(spec.Image)
-		local := localSnapshotName(repo, tag)
-		snapshot, err := p.ensureSnapshot(ctx, repo, tag, local)
+		repo, ref, local := snapshotSource(spec.Image)
+		snapshot, err := p.ensureSnapshot(ctx, repo, ref, local)
 		if err != nil {
 			metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
 			return nil, "", fmt.Errorf("ensure snapshot %s: %w", local, err)
@@ -699,6 +698,15 @@ func assertSnapshotBackend(snapshot *vm.Snapshot, targetBackend string) error {
 
 func isHTTPURL(ref string) bool {
 	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
+}
+
+// snapshotSource splits a clone ref into registry repo, tag or digest, and local snapshot name; a digest ref names its local copy after the content.
+func snapshotSource(image string) (repo, ref, local string) {
+	if name, digest, ok := strings.Cut(image, "@"); ok {
+		return name, digest, localSnapshotName(name, strings.ReplaceAll(digest, ":", "-"))
+	}
+	repo, ref = ociutil.ParseRef(image)
+	return repo, ref, localSnapshotName(repo, ref)
 }
 
 // localSnapshotName omits the default tag for backward compatibility.

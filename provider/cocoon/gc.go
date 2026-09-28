@@ -10,7 +10,6 @@ import (
 
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/cocoon-common/ociutil"
 )
 
 const snapshotReclaimInterval = 10 * time.Minute
@@ -54,7 +53,8 @@ func (p *Provider) snapshotNamesInUse() map[string]bool {
 	for _, pod := range p.pods {
 		spec := meta.ParseVMSpec(pod)
 		names[spec.VMName] = true
-		names[localSnapshotName(ociutil.ParseRef(spec.Image))] = true
+		_, _, local := snapshotSource(spec.Image)
+		names[local] = true
 	}
 	return names
 }
