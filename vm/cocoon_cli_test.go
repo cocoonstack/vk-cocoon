@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -41,18 +42,14 @@ func TestRemoveMapsNotFound(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "cocoon")
 	script := "#!/bin/sh\necho \"Error: rm: vm not found\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake cocoon: %v", err)
-	}
+	writeFakeCocoon(t, bin, script)
 	err := NewCocoonCLI(bin).Remove(t.Context(), "GONE")
 	if !errors.Is(err, ErrVMNotFound) {
 		t.Fatalf("Remove of a missing VM = %v, want ErrVMNotFound", err)
 	}
 
 	script = "#!/bin/sh\necho \"Error: rm: disk detach failed\" >&2\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("rewrite fake cocoon: %v", err)
-	}
+	writeFakeCocoon(t, bin, script)
 	if err := NewCocoonCLI(bin).Remove(t.Context(), "LIVE"); err == nil || errors.Is(err, ErrVMNotFound) {
 		t.Fatalf("a real rm failure must stay untyped, got %v", err)
 	}
@@ -74,9 +71,7 @@ func TestSnapshotListReadsAListAndAnEmptyStore(t *testing.T) {
 			t.Parallel()
 			bin := filepath.Join(t.TempDir(), "cocoon")
 			script := "#!/bin/sh\n[ \"$*\" = \"snapshot list -o json\" ] || exit 2\necho '" + tt.out + "'\n"
-			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-				t.Fatalf("write fake cocoon: %v", err)
-			}
+			writeFakeCocoon(t, bin, script)
 			snapshots, err := NewCocoonCLI(bin).SnapshotList(t.Context())
 			if err != nil {
 				t.Fatalf("SnapshotList: %v", err)
@@ -450,9 +445,7 @@ touch ` + dir + `/done
 echo 'Error: rm: snapshot XY7T3JIQHJ25KUVDJCJK5V3OSL is in use by an active clone/restore/export'
 exit 1
 `
-	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
-		t.Fatalf("write fake cocoon: %v", err)
-	}
+	writeFakeCocoon(t, script, payload)
 	if err := NewCocoonCLI(script).removeStaleSnapshot(t.Context(), "XY7T3JIQHJ25KUVDJCJK5V3OSL"); err != nil {
 		t.Fatalf("removeStaleSnapshot: %v", err)
 	}
@@ -467,9 +460,7 @@ touch ` + dir + `/called
 echo 'Error: rm: remove data dir: input/output error'
 exit 1
 `
-	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
-		t.Fatalf("write fake cocoon: %v", err)
-	}
+	writeFakeCocoon(t, script, payload)
 	err := NewCocoonCLI(script).removeStaleSnapshot(t.Context(), "XY7T3JIQHJ25KUVDJCJK5V3OSL")
 	if err == nil {
 		t.Fatal("a non-lease rm failure must be reported, not retried")
@@ -486,9 +477,7 @@ echo '{"event":"ADDED","vm":{"id":"vm-1","config":{"name":"a"}}}'
 echo 'not-json {{{'
 echo '{"event":"DELETED","vm":{"id":"vm-2","config":{"name":"b"}}}'
 `
-	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
-		t.Fatalf("write fake cocoon: %v", err)
-	}
+	writeFakeCocoon(t, script, payload)
 	events, err := NewCocoonCLI(script).WatchEvents(t.Context())
 	if err != nil {
 		t.Fatalf("WatchEvents: %v", err)
@@ -499,5 +488,14 @@ echo '{"event":"DELETED","vm":{"id":"vm-2","config":{"name":"b"}}}'
 	}
 	if len(got) != 2 || got[0].VM.ID != "vm-1" || got[1].VM.ID != "vm-2" {
 		t.Fatalf("events = %+v, want vm-1 then vm-2 with the torn line skipped", got)
+	}
+}
+
+func writeFakeCocoon(t *testing.T, path, script string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake cocoon: %v", err)
 	}
 }
