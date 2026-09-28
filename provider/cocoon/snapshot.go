@@ -9,6 +9,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -46,11 +47,20 @@ func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 
 	pushStart := time.Now()
-	if err := p.Pusher.PushSnapshot(ctx, v.Name, "", tag, image); err != nil {
+	if err := p.Pusher.PushSnapshot(ctx, v.Name, "", tag, image, snapshotAnnotations(ctx, pod)); err != nil {
 		metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
 		return fmt.Errorf("push snapshot %s: %w", v.Name, err)
 	}
 	metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 	metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()
 	return nil
+}
+
+// snapshotAnnotations returns the pod's caller annotations for a push; a malformed value pushes without them.
+func snapshotAnnotations(ctx context.Context, pod *corev1.Pod) map[string]string {
+	annotations, err := meta.ReadSnapshotAnnotations(pod)
+	if err != nil {
+		log.WithFunc("cocoon.snapshotAnnotations").Warnf(ctx, "push snapshot for %s/%s without caller annotations: %v", pod.Namespace, pod.Name, err)
+	}
+	return annotations
 }
