@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 
 	"golang.org/x/sync/semaphore"
 
@@ -27,8 +28,8 @@ type Pusher struct {
 	NodeName string
 }
 
-// PushSnapshot uploads a snapshot to the registry at the given repo/tag.
-func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string) error {
+// PushSnapshot uploads a snapshot to the registry at the given repo/tag with the caller's annotations.
+func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string, annotations map[string]string) error {
 	repo = cmp.Or(repo, vmName)
 	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
 
@@ -42,15 +43,16 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 		Cocoon:   runnerAdapter{Runtime: p.Runtime},
 	}
 
-	var annotations map[string]string
+	stamped := make(map[string]string, len(annotations)+1)
+	maps.Copy(stamped, annotations)
 	if p.NodeName != "" {
-		annotations = map[string]string{AnnotationFromNode: p.NodeName}
+		stamped[AnnotationFromNode] = p.NodeName
 	}
 	if err := pusher.Push(ctx, snapshot.PushOptions{
 		Name:            repo,
 		Tag:             tag,
 		BaseImage:       baseImage,
-		Annotations:     annotations,
+		Annotations:     stamped,
 		ZstdLevel:       p.Transfer.ZstdLevel,
 		ChunkSizeMiB:    p.Transfer.ChunkSizeMiB,
 		Concurrency:     p.Transfer.Concurrency,
