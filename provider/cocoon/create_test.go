@@ -867,27 +867,14 @@ func TestLocalSnapshotNameBoundsLongRegistryRefs(t *testing.T) {
 	}
 }
 
-func TestSnapshotSource(t *testing.T) {
-	digest := "sha256:" + strings.Repeat("ab", 32)
-	tests := []struct {
-		image, repo, ref, local string
-	}{
-		{"myvm", "myvm", "latest", "myvm"},
-		{"org/repo:v2", "org/repo", "v2", "org/repo:v2"},
-		{"org/repo@" + digest, "org/repo", digest, localSnapshotName("org/repo", "sha256-"+strings.Repeat("ab", 32))},
-	}
-	for _, tt := range tests {
-		repo, ref, local := snapshotSource(tt.image)
-		if repo != tt.repo || ref != tt.ref || local != tt.local {
-			t.Errorf("snapshotSource(%q) = (%q, %q, %q), want (%q, %q, %q)", tt.image, repo, ref, local, tt.repo, tt.ref, tt.local)
-		}
-	}
-}
-
-func TestSnapshotSourceDigestNamesAreValidAndContentBound(t *testing.T) {
+func TestLocalSnapshotNameForDigestRefs(t *testing.T) {
 	valid := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
-	_, _, a := snapshotSource("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0a", 32))
-	_, _, b := snapshotSource("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0b", 32))
+	repoA, refA := ociutil.ParseRef("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0a", 32))
+	repoB, refB := ociutil.ParseRef("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0b", 32))
+	if repoA != "simular/ubuntu2404-base-snapshot" || refA != "sha256:"+strings.Repeat("0a", 32) {
+		t.Fatalf("ParseRef split the digest ref into (%q, %q)", repoA, refA)
+	}
+	a, b := localSnapshotName(repoA, refA), localSnapshotName(repoB, refB)
 	if !valid.MatchString(a) || !valid.MatchString(b) {
 		t.Fatalf("digest-derived names %q, %q are not valid cocoon snapshot names", a, b)
 	}
