@@ -40,9 +40,18 @@ func (p *Provider) reclaimLocalSnapshots(ctx context.Context) {
 			p.removeSnapshotDetached(ctx, s.Name)
 			continue
 		}
-		if _, _, verifyErr := p.verifyLocalSnapshot(ctx, vmName, &s); errors.Is(verifyErr, errStaleLocalSnapshot) {
+		if strings.Contains(vmName, ":") {
+			logger.Infof(ctx, "reclaim local snapshot %s: no pod on this node clones from it", s.Name)
+			p.removeSnapshotDetached(ctx, s.Name)
+			continue
+		}
+		_, _, verifyErr := p.verifyLocalSnapshot(ctx, vmName, &s)
+		switch {
+		case errors.Is(verifyErr, errStaleLocalSnapshot):
 			logger.Infof(ctx, "reclaim local snapshot %s: %v", s.Name, verifyErr)
 			p.removeLocalSnapshots(ctx, vmName)
+		case verifyErr != nil:
+			logger.Warnf(ctx, "keep local snapshot %s: verify against the registry: %v", s.Name, verifyErr)
 		}
 	}
 }
