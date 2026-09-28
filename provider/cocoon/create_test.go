@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -863,6 +864,25 @@ func TestLocalSnapshotNameBoundsLongRegistryRefs(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "simular/ubuntu2404-base-snapshot:") {
 		t.Fatalf("local snapshot name lost its recognizable prefix: %q", got)
+	}
+}
+
+func TestLocalSnapshotNameForDigestRefs(t *testing.T) {
+	valid := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
+	repoA, refA := ociutil.ParseRef("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0a", 32))
+	repoB, refB := ociutil.ParseRef("simular/ubuntu2404-base-snapshot@sha256:" + strings.Repeat("0b", 32))
+	if repoA != "simular/ubuntu2404-base-snapshot" || refA != "sha256:"+strings.Repeat("0a", 32) {
+		t.Fatalf("ParseRef split the digest ref into (%q, %q)", repoA, refA)
+	}
+	a, b := localSnapshotName(repoA, refA), localSnapshotName(repoB, refB)
+	if !valid.MatchString(a) || !valid.MatchString(b) {
+		t.Fatalf("digest-derived names %q, %q are not valid cocoon snapshot names", a, b)
+	}
+	if a == b {
+		t.Fatalf("two digests produced the same local name %q", a)
+	}
+	if !strings.HasPrefix(a, "simular/ubuntu2404-base-snapshot:") {
+		t.Fatalf("digest-derived name lost its recognizable prefix: %q", a)
 	}
 }
 
