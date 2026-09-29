@@ -11,10 +11,9 @@ A successful probe is necessary but not sufficient for `Ready=True`: vk's
 in-memory lifecycle intent must also be `ready`. This keeps a reachable VM Not
 Ready while clone setup runs, after lifecycle failure, or during hibernation.
 The current status is published before the `lifecycle-state=ready` annotation.
-This ordering does not guarantee `Ready=True` in that status: plain `mode: run`
-can publish ready intent before the first successful probe or resolved IP
-([#97](https://github.com/cocoonstack/vk-cocoon/issues/97)). PodReady remains
-probe-gated.
+This ordering does not guarantee `Ready=True` in that status: ready intent
+waits for a resolvable IP on every managed path, not for a successful probe.
+PodReady remains probe-gated.
 
 ## The probe loop
 

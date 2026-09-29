@@ -26,9 +26,11 @@ import (
 )
 
 const (
-	// defaultWakeFreshIPBudget bounds waitForFreshIP; the budget is generous.
+	// defaultWakeFreshIPBudget bounds the clone and wake lease wait.
 	defaultWakeFreshIPBudget   = 45 * time.Second
 	defaultWakeFreshIPInterval = 200 * time.Millisecond
+	// defaultBootIPBudget covers a fresh image boot, Windows first boot included, which is far slower than a memory restore.
+	defaultBootIPBudget = 10 * time.Minute
 
 	// defaultWakeRenewNudgeDelay leaves natural DHCP the first 30s before the one-shot renew nudge.
 	defaultWakeRenewNudgeDelay = 30 * time.Second
@@ -390,7 +392,7 @@ func (p *Provider) cloneFromHibernate(ctx context.Context, spec meta.VMSpec, src
 func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, op string) {
 	if shouldDropNICBeforeHibernate(spec) {
 		p.goBackground(func() {
-			p.markReadyAfterIP(p.lifecycleCtx, pod, spec, v, true)
+			p.markReadyAfterIP(p.lifecycleCtx, pod, spec, v, ipWaitWake)
 		})
 		return
 	}
@@ -416,13 +418,13 @@ func (p *Provider) setLifecycleStateForWake(ctx context.Context, pod *corev1.Pod
 	return status, applied
 }
 
-// waitForFreshIP polls for the clone's DHCP lease; UFFD contention under concurrent resumes can delay it many seconds.
-func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, vmID string) bool {
-	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+// waitForFreshIP polls for the VM's DHCP lease; UFFD contention under concurrent resumes can delay it many seconds.
+func (p *Provider) waitForFreshIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, vmID string, kind ipWait) bool {
 	interval := cmp.Or(p.wakeFreshIPInterval, defaultWakeFreshIPInterval)
-	deadline := time.Now().Add(budget)
+	deadline := time.Now().Add(p.ipWaitBudget(kind))
 	renewAt := time.Now().Add(cmp.Or(p.wakeRenewNudgeDelay, defaultWakeRenewNudgeDelay))
-	nudged := spec.OS != string(cocoonv1.OSWindows)
+	// The nudge repairs APIPA after a NAK, which only a restored guest can have seen.
+	nudged := kind == ipWaitBoot || spec.OS != string(cocoonv1.OSWindows)
 	for {
 		v := p.vmForPod(pod.Namespace, pod.Name)
 		// A same-name recreate swaps the tracked VM; never touch the successor.

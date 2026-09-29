@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -448,6 +449,35 @@ func TestResumeReadyWaitPublishesReadyForAnUnmanagedPod(t *testing.T) {
 
 	p.dispatchResume(meta.PodKey("ns", "cs-db"), pod, v, resumeOpReadyWait)
 	awaitLifecycle(t, p, "ns", "cs-db", meta.LifecycleStateReady)
+}
+
+func TestResumeReadyWaitGivesAFreshBootTheBootBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newTestProvider(t)
+		p.Runtime = &fakeRuntime{}
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Mode: "run"})
+		pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+		pod.Annotations[annotationPostCloneState] = postCloneStateDone
+		v := &vm.VM{ID: "vmid-run", Name: "vk-ns-demo-0-505043", State: vm.StateRunning}
+		p.trackPod(pod, v)
+
+		p.dispatchResume(meta.PodKey("ns", "demo-0"), pod, v, resumeOpReadyWait)
+		time.Sleep(defaultWakeFreshIPBudget + time.Minute)
+		synctest.Wait()
+		if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateCreating {
+			t.Fatalf("lifecycle past the clone budget = %q, want creating until the boot budget runs out", meta.ReadLifecycleState(got))
+		}
+		time.Sleep(defaultBootIPBudget)
+		synctest.Wait()
+
+		got, err := p.GetPod(t.Context(), "ns", "demo-0")
+		if err != nil {
+			t.Fatalf("GetPod: %v", err)
+		}
+		if status := meta.ReadLifecycleStatus(got); status.State != meta.LifecycleStateFailed || !strings.HasPrefix(status.Message, "boot ") {
+			t.Errorf("lifecycle = %q %q, want failed on the boot budget", status.State, status.Message)
+		}
+	})
 }
 
 func awaitLifecycle(t *testing.T, p *Provider, namespace, name string, want meta.LifecycleState) {

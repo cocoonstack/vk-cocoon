@@ -304,7 +304,7 @@ func TestFinalizeDropNICWakeMarksReadyWhenIPArrives(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 		close(done)
 	}()
 
@@ -346,7 +346,7 @@ func TestFinalizeDropNICWakePublishesIPBeforeReady(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 		close(done)
 	}()
 	time.AfterFunc(10*time.Millisecond, func() {
@@ -377,7 +377,7 @@ func TestFinalizeDropNICWakePublishesIPBeforeReady(t *testing.T) {
 func TestFinalizeDropNICWakeMarksFailedOnTimeout(t *testing.T) {
 	p, pod, v := newDropNICWakeFixture(t, 20*time.Millisecond, 1*time.Millisecond)
 
-	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 
 	if got := meta.ReadLifecycleState(pod); got != meta.LifecycleStateFailed {
 		t.Fatalf("lifecycle = %q, want %q", got, meta.LifecycleStateFailed)
@@ -389,7 +389,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenVMForgotten(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 		close(done)
 	}()
 
@@ -412,7 +412,7 @@ func TestFinalizeDropNICWakeSkipsLifecycleWhenHibernateRequested(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+		p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 		close(done)
 	}()
 
@@ -624,7 +624,7 @@ func TestWaitForFreshIPBailsWhenVMSwapped(t *testing.T) {
 	rt := p.Runtime.(*fakeRuntime)
 	p.trackPod(pod, &vm.VM{ID: "vmid-successor", Name: "vk-ns-demo-0-505043", IP: "10.0.0.9"})
 
-	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
+	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake", ipWaitWake) {
 		t.Fatal("waiter armed for a replaced VM must fail, not adopt the successor")
 	}
 	if len(rt.execCalls) != 0 {
@@ -637,12 +637,26 @@ func TestWaitForFreshIPRenewNudgeWhenLeaseMissing(t *testing.T) {
 	rt := p.Runtime.(*fakeRuntime)
 	p.wakeRenewNudgeDelay = 30 * time.Millisecond
 
-	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
+	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake", ipWaitWake) {
 		t.Fatal("no IP should time out")
 	}
 	got := execArgvs(rt)
 	if len(got) != 1 || got[0] != "cmd /c ipconfig /renew" {
 		t.Errorf("exec calls = %v, want exactly one renew nudge", got)
+	}
+}
+
+func TestWaitForFreshIPNeverNudgesABoot(t *testing.T) {
+	p, pod, _ := newDropNICWakeFixture(t, 200*time.Millisecond, 10*time.Millisecond)
+	rt := p.Runtime.(*fakeRuntime)
+	p.wakeRenewNudgeDelay = time.Nanosecond
+	p.bootIPBudget = 100 * time.Millisecond
+
+	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake", ipWaitBoot) {
+		t.Fatal("no IP should time out")
+	}
+	if len(rt.execCalls) != 0 {
+		t.Errorf("a fresh boot never saw a NAK; renew must not fire, got %v", execArgvs(rt))
 	}
 }
 
@@ -652,7 +666,7 @@ func TestWaitForFreshIPNoRenewWhenIPPresent(t *testing.T) {
 	p.wakeRenewNudgeDelay = time.Nanosecond
 	v.IP = "10.0.0.9"
 
-	if !p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
+	if !p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake", ipWaitWake) {
 		t.Fatal("IP present should return true")
 	}
 	if len(rt.execCalls) != 0 {
@@ -675,7 +689,7 @@ func TestWaitForFreshIPNoRenewForLinux(t *testing.T) {
 	})
 	p.trackPod(pod, &vm.VM{ID: "vmid-1", Name: "vk-ns-demo-0-505043"})
 
-	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-1") {
+	if p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-1", ipWaitWake) {
 		t.Fatal("no IP should time out")
 	}
 	if len(rt.execCalls) != 0 {
@@ -693,7 +707,7 @@ func TestWaitForFreshIPLeaseLandingDuringNudgeWins(t *testing.T) {
 		p.setVMIP("ns", "demo-0", "vmid-wake", "10.0.0.9")
 	}
 
-	if !p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake") {
+	if !p.waitForFreshIP(t.Context(), pod, meta.ParseVMSpec(pod), "vmid-wake", ipWaitWake) {
 		t.Fatal("lease landed during the nudge exec; verdict must be success")
 	}
 }

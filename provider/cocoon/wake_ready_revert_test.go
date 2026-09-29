@@ -20,7 +20,7 @@ func TestWakeReadyAnnotationSurvivesFrameworkStatusPush(t *testing.T) {
 		drained = handed.DeepCopy()
 	}
 
-	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 
 	if drained == nil {
 		t.Fatal("notify was never called; the framework push is not being modeled")
@@ -56,6 +56,6 @@ func TestWakeNotifyDoesNotShareMutablePod(t *testing.T) {
 		})
 	}
 
-	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, true)
+	p.markReadyAfterIP(t.Context(), pod, meta.ParseVMSpec(pod), v, ipWaitWake)
 	wg.Wait()
 }

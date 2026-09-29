@@ -56,7 +56,7 @@ also serves `/debug/pprof/` and `/debug/pprof/profile`:
 | `cocoon_vk_lease_release_total{result}` | Counter | cocoon-net DHCP lease releases after VM destruction (`result=ok\|failed`) |
 | `cocoon_vk_hibernate_total{namespace,phase,result}` | Counter | Hibernate stage outcomes (`phase=dhcp_release\|netresize\|snapshot\|push\|remove`; `dhcp_release` is the guest-side `ipconfig /release` on the CH+Windows drop-NIC path — the host-side cocoon-net lease release is counted by `cocoon_vk_lease_release_total`) |
 | `cocoon_vk_wake_total{result}` | Counter | Wake operation outcomes |
-| `cocoon_vk_wake_ip_wait_total{namespace,result}` | Counter | Post-clone and wake DHCP-lease-wait outcomes — both the CH+Windows dropNIC wake and every clone's post-clone IP wait (`result=ok\|timeout`) |
+| `cocoon_vk_wake_ip_wait_total{namespace,result}` | Counter | Post-clone, wake and run-mode boot DHCP-lease-wait outcomes — the CH+Windows dropNIC wake, every clone's post-clone IP wait and every `mode: run` boot (`result=ok\|timeout`) |
 | `cocoon_vk_wake_renew_nudge_total{result}` | Counter | `ipconfig /renew` nudges sent to Windows guests still lease-less mid lease-wait (`result=ok\|failed`; failed means the exec didn't confirm — the in-guest renew may still have taken effect, the lease re-check decides) |
 | `cocoon_vk_postclone_total{kind,result}` | Counter | Post-clone fixup outcomes (`kind=linux_static\|linux_fc\|windows\|sac`) |
 | `cocoon_vk_postclone_retry_attempts{result}` | Histogram | Attempts consumed before post-clone exec succeeded or failed (`result=ok\|failed`) |
@@ -102,7 +102,7 @@ error return.
   `HibernateSnapshotFailed`, `HibernatePushFailed`,
   `HibernateRemoveFailed`, `WakePullFailed`, `WakeCloneFailed`,
   `WakeIPWaitTimeout`, `WindowsStaticIPFailed`,
-  `PostCloneIPWaitTimeout`,
+  `PostCloneIPWaitTimeout`, `BootIPWaitTimeout`,
   `PostCloneExecAttemptFailed`, `PostCloneExecExhausted`,
   `PostCloneSACDialFailed`, `PostCloneSACEnumFailed`,
   `PostCloneSACSetFailed`, `PostCloneSACVerifyFailed`,

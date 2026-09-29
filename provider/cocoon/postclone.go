@@ -27,6 +27,10 @@ import (
 )
 
 const (
+	ipWaitClone ipWait = iota
+	ipWaitWake
+	ipWaitBoot
+
 	annotationPostCloneHint   = "vm.cocoonstack.io/post-clone-hint"
 	annotationPostCloneState  = "vm.cocoonstack.io/post-clone-state"
 	annotationPostCloneErrors = "vm.cocoonstack.io/post-clone-errors"
@@ -47,11 +51,17 @@ const (
 	sacRetryInterval = 2 * time.Second
 )
 
+type ipWait int
+
 // runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state; exhaustion leaves a manual hint.
 func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wake bool) {
+	wait := ipWaitClone
+	if wake {
+		wait = ipWaitWake
+	}
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
-		p.markReadyAfterIP(ctx, pod, spec, v, wake)
+		p.markReadyAfterIP(ctx, pod, spec, v, wait)
 		return
 	}
 	logger := log.WithFunc("Provider.runPostCloneSetup")
@@ -81,13 +91,13 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
 				if spec.OS == string(cocoonv1.OSWindows) {
-					if _, ok := p.runWindowsSAC(ctx, pod, v, op); !ok {
+					if !p.runWindowsSAC(ctx, pod, v, op) {
 						return
 					}
 				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
-					p.markReadyAfterIP(ctx, pod, spec, v, wake)
+					p.markReadyAfterIP(ctx, pod, spec, v, wait)
 				}
 				return
 			}
@@ -122,9 +132,21 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	logger.Errorf(ctx, joinedErr, "%s/%s post-clone exhausted", pod.Namespace, pod.Name)
 }
 
-// markReadyAfterIP defers ready until the clone's DHCP lease lands, because ready promises vm-service a resolvable IP.
-func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wake bool) {
-	gotIP := p.waitForFreshIP(ctx, pod, spec, v.ID)
+// runReadyWait runs the SAC pass when owed (the done marker precedes SAC), then holds Ready until the lease lands.
+func (p *Provider) runReadyWait(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, kind ipWait, op string) {
+	if p.willRunSAC(spec, v) {
+		if !p.runWindowsSAC(ctx, pod, v, op) {
+			return
+		}
+	}
+	if !p.lifecycleAlreadyFailed(pod) {
+		p.markReadyAfterIP(ctx, pod, spec, v, kind)
+	}
+}
+
+// markReadyAfterIP defers ready until the VM's DHCP lease lands, because ready promises vm-service a resolvable IP.
+func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, kind ipWait) {
+	gotIP := p.waitForFreshIP(ctx, pod, spec, v.ID, kind)
 	if ctx.Err() != nil {
 		return
 	}
@@ -132,18 +154,20 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 		if status, applied := p.setLifecycleStateForWake(ctx, pod, v.ID, meta.LifecycleStateReady, ""); applied {
 			p.publishReadyLifecycle(ctx, pod, status)
 			metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "ok").Inc()
-			if wake {
+			if kind == ipWaitWake {
 				metrics.WakeTotal.WithLabelValues("ok").Inc()
 			}
 		}
 		return
 	}
-	kind, event := "clone", "PostCloneIPWaitTimeout"
-	if wake {
-		kind, event = "wake", "WakeIPWaitTimeout"
+	path, event := "clone", "PostCloneIPWaitTimeout"
+	switch kind {
+	case ipWaitWake:
+		path, event = "wake", "WakeIPWaitTimeout"
+	case ipWaitBoot:
+		path, event = "boot", "BootIPWaitTimeout"
 	}
-	budget := cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
-	err := fmt.Errorf("%s %s: dhcp lease not observed within %s", kind, v.Name, budget)
+	err := fmt.Errorf("%s %s: dhcp lease not observed within %s", path, v.Name, p.ipWaitBudget(kind))
 	msg := err.Error()
 	status, applied := p.setLifecycleStateForWake(ctx, pod, v.ID,
 		meta.LifecycleStateFailed, truncate(msg, lifecycleMessageMaxBytes))
@@ -152,15 +176,22 @@ func (p *Provider) markReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec m
 	}
 	p.flushLifecycle(ctx, pod.Namespace, pod.Name, pod.UID, status)
 	metrics.WakeIPWaitTotal.WithLabelValues(pod.Namespace, "timeout").Inc()
-	if wake {
+	if kind == ipWaitWake {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 	}
 	p.emitWarningf(pod, event, "%s", truncate(msg, eventMessageMaxBytes))
 	log.WithFunc("Provider.markReadyAfterIP").Errorf(ctx, err, "%s/%s ip wait timeout", pod.Namespace, pod.Name)
 }
 
-// runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; ok=false means the pod was marked Failed.
-func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM, op string) (bool, bool) {
+func (p *Provider) ipWaitBudget(kind ipWait) time.Duration {
+	if kind == ipWaitBoot {
+		return cmp.Or(p.bootIPBudget, defaultBootIPBudget)
+	}
+	return cmp.Or(p.wakeFreshIPBudget, defaultWakeFreshIPBudget)
+}
+
+// runWindowsSAC applies the static-IP SAC pass, owning its metrics and failure marking; false means the pod was marked Failed.
+func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM, op string) bool {
 	ran, err := p.applyWindowsStaticIP(ctx, pod, v)
 	if err != nil {
 		metrics.PostCloneTotal.WithLabelValues("sac", "failed").Inc()
@@ -169,12 +200,12 @@ func (p *Provider) runWindowsSAC(ctx context.Context, pod *corev1.Pod, v *vm.VM,
 		p.emitWarningf(pod, "WindowsStaticIPFailed", "%s", truncate(op+": "+errMsg, eventMessageMaxBytes))
 		p.markLifecycleState(ctx, pod, meta.LifecycleStateFailed, truncate(errMsg, lifecycleMessageMaxBytes))
 		log.WithFunc("Provider.runWindowsSAC").Errorf(ctx, err, "%s/%s windows static IP", pod.Namespace, pod.Name)
-		return false, false
+		return false
 	}
 	if ran {
 		metrics.PostCloneTotal.WithLabelValues("sac", "ok").Inc()
 	}
-	return ran, true
+	return true
 }
 
 func (p *Provider) markPostCloneState(ctx context.Context, pod *corev1.Pod, state string) {
@@ -234,7 +265,7 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 	}
 }
 
-// willRunSAC adds the OS gate to the shared guard so CreatePod can defer Ready.
+// willRunSAC adds the OS gate to the shared static-IP guard.
 func (p *Provider) willRunSAC(spec meta.VMSpec, v *vm.VM) bool {
 	return spec.OS == string(cocoonv1.OSWindows) && p.sacStaticIPNeeded(v)
 }
