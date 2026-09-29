@@ -23,13 +23,9 @@ const (
 
 // NodeResources probes the host and returns Capacity (full host) and Allocatable (capacity minus the reserved fraction).
 func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
-	reservePct := defaultReservePercent
-	if v := os.Getenv("VK_RESERVE_PERCENT"); v != "" {
-		n, parseErr := strconv.Atoi(v)
-		if parseErr != nil || n < 0 || n > 100 {
-			return nil, nil, fmt.Errorf("parse VK_RESERVE_PERCENT=%q: must be 0-100", v)
-		}
-		reservePct = n
+	reservePct, err := reservePercent()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	cpu, err := detectOrOverride("VK_NODE_CPU", detectCPU)
@@ -75,6 +71,23 @@ func NodeResources() (capacity, allocatable corev1.ResourceList, err error) {
 	// Storage allocatable is based on fs-available (excludes base images and other existing data), not fs-total.
 	allocatable[corev1.ResourceEphemeralStorage] = reserveQuantity(storageAvail, reservePct)
 	return capacity, allocatable, nil
+}
+
+// StorageAllocatable returns ephemeral-storage allocatable as live fs-available plus held, the bytes running VMs already occupy; ok=false when VK_NODE_STORAGE pins it.
+func StorageAllocatable(held int64) (allocatable resource.Quantity, ok bool, err error) {
+	if os.Getenv("VK_NODE_STORAGE") != "" {
+		return resource.Quantity{}, false, nil
+	}
+	reservePct, err := reservePercent()
+	if err != nil {
+		return resource.Quantity{}, false, err
+	}
+	_, avail, err := detectStorageOrOverride()
+	if err != nil {
+		return resource.Quantity{}, false, err
+	}
+	avail.Add(*resource.NewQuantity(held, resource.BinarySI))
+	return reserveQuantity(avail, reservePct), true, nil
 }
 
 // CocoonRootDir returns the cocoon data directory, defaulting to /var/lib/cocoon.
@@ -197,6 +210,18 @@ func hugepagesResourceName(pageSizeKB int64) corev1.ResourceName {
 		return corev1.ResourceHugePagesPrefix + "2Mi"
 	}
 	return corev1.ResourceName(corev1.ResourceHugePagesPrefix + resource.NewQuantity(pageSizeKB*1024, resource.BinarySI).String())
+}
+
+func reservePercent() (int, error) {
+	v := os.Getenv("VK_RESERVE_PERCENT")
+	if v == "" {
+		return defaultReservePercent, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 100 {
+		return 0, fmt.Errorf("parse VK_RESERVE_PERCENT=%q: must be 0-100", v)
+	}
+	return n, nil
 }
 
 // detectStorageOrOverride returns filesystem total and available bytes; VK_NODE_STORAGE overrides both to the same value.

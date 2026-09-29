@@ -206,6 +206,18 @@ func (p *Provider) snapshotTrackedVMs() ([]vmSnapshot, map[string]int) {
 	return out, trackedVMsByNamespace
 }
 
+// vmDiskHeld sums the allocated overlay bytes of the tracked cocoon VMs; macOS guests keep their disks outside cocoon's root.
+func (p *Provider) vmDiskHeld() int64 {
+	snaps, _ := p.snapshotTrackedVMs()
+	var held int64
+	for _, s := range snaps {
+		if s.Hypervisor != macosHypervisor {
+			held += vm.COWSize(provider.CocoonRootDir(), s.Hypervisor, s.ID)
+		}
+	}
+	return held
+}
+
 func buildNetworkStats(s provider.VMStats) *statsv1alpha1.NetworkStats {
 	if s.NetRxBytes == 0 && s.NetTxBytes == 0 {
 		return nil

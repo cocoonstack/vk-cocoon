@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"os"
+	"syscall"
 )
 
 const (
@@ -18,9 +19,15 @@ func COWSize(rootDir, hypervisor, vmID string) int64 {
 		names = names[1:]
 	}
 	for _, name := range names {
-		if fi, err := os.Stat(runPath(rootDir, dir, vmID, name)); err == nil {
-			return fi.Size()
+		fi, err := os.Stat(runPath(rootDir, dir, vmID, name))
+		if err != nil {
+			continue
 		}
+		// st_blocks counts 512-byte units whatever the fs block size; a sparse raw overlay's apparent size is the whole disk.
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			return st.Blocks * 512
+		}
+		return fi.Size()
 	}
 	return 0
 }
