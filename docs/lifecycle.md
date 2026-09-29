@@ -125,15 +125,22 @@ cannot wedge node registration. Rejected create/update calls count on
    stays unset on this path — cloud-hypervisor has no VNC server; only the
    macOS path publishes one, and an unmanaged pod's own `vnc-port`
    annotation is left untouched.
-6. For clone/fork/wake paths that need guest-side network setup (see
-   [Post-clone hints](post-clone.md)), dispatch the fixup in the background
-   after the annotations are written. vk-cocoon runs it itself over
-   `cocoon vm exec`, retrying every 3 s within a 180 s budget, then waits
-   for an IP before publishing ready intent; PodReady also requires a
-   successful probe. Only when that budget is exhausted does it write the
-   commands as a base64-encoded annotation
-   (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`, and
-   mark lifecycle Failed. Manual guest repair alone does not clear that
+6. `lifecycle-state=ready` means the VM has a resolvable IP on every
+   managed path (run, clone, fork, wake): each publishes ready intent only
+   after its DHCP lease wait, which allows 10 min for a `mode: run` boot
+   from an image and 45 s for a clone or wake, and marks lifecycle Failed
+   when the budget runs out. An unmanaged pod is ready at once on its
+   pre-assigned IP. A `mode: run` boot owes no fixup, so it records
+   `post-clone-state=done` before the wait and a restarted vk-cocoon
+   resumes only the wait. For clone/fork/wake paths that need guest-side
+   network setup (see [Post-clone hints](post-clone.md)), dispatch the
+   fixup in the background after the annotations are written. vk-cocoon
+   runs it itself over `cocoon vm exec`, retrying every 3 s within a 180 s
+   budget, then waits for an IP before publishing ready intent; PodReady
+   also requires a successful probe. Only when that budget is exhausted
+   does it write the commands as a base64-encoded annotation
+   (`vm.cocoonstack.io/post-clone-hint`), emit `PostCloneExecExhausted`,
+   and mark lifecycle Failed. Manual guest repair alone does not clear that
    state; see [recovery](post-clone.md#recovery-after-exhaustion).
 7. Launch a per-pod probe agent (see [Readiness probing](probes.md)). The
    agent's first probe runs synchronously so the initial `notify` push

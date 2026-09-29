@@ -115,18 +115,8 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	// Capture isClonedBoot before goroutines mutate pod.Annotations.
 	cloned := isClonedBoot(pod, spec)
-	willRunSAC := p.willRunSAC(spec, v)
 	if restoring {
 		p.dispatchHibernateRestore(pod, spec, v, "create")
-	}
-	if spec.OS == string(cocoonv1.OSWindows) && !restoring && !cloned {
-		p.goBackground(func() {
-			ran, ok := p.runWindowsSAC(p.lifecycleCtx, pod, v, "create")
-			// Non-clone Ready was deferred to here so watchers don't see a transient Ready.
-			if ok && ran && !p.lifecycleAlreadyFailed(pod) {
-				p.markReadyPublished(p.lifecycleCtx, pod)
-			}
-		})
 	}
 	if cloned && !restoring {
 		p.goBackground(func() {
@@ -137,11 +127,19 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	p.startProbeIfEnabled(pod)
 
 	p.markPodRunning(pod)
-	// Ready is deferred to the path that finishes the boot: post-clone setup, the Windows static-IP pass or the hibernate restore.
-	if !cloned && !willRunSAC && !restoring && !p.lifecycleAlreadyFailed(pod) {
+	// An unmanaged pod's IP is pre-assigned, so only it is ready at once.
+	if !spec.Managed && !restoring && !p.lifecycleAlreadyFailed(pod) {
 		p.markReadyPublished(ctx, pod)
 	} else {
 		p.refreshAndNotify(ctx, pod)
+	}
+	if spec.Managed && !cloned && !restoring {
+		// A fresh boot owes no post-clone fixup, so a restarted vk resumes only the ready wait.
+		p.setPodAnnotation(ctx, pod, annotationPostCloneState, postCloneStateDone)
+		// Dispatched after the status push above, which would otherwise overwrite the Ready of an instant lease.
+		p.goBackground(func() {
+			p.runReadyWait(p.lifecycleCtx, pod, spec, v, ipWaitBoot, "create")
+		})
 	}
 	metrics.PodLifecycleTotal.WithLabelValues("create", "ok", "").Inc()
 	return nil

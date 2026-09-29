@@ -83,8 +83,12 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			run(func() { p.markReadyPublished(p.lifecycleCtx, pod) })
 			return
 		}
+		kind := ipWaitClone
+		if !isClonedBoot(pod, spec) {
+			kind = ipWaitBoot
+		}
 		// Ambiguous create-tail vs wake-finalize: resumed outcomes skip the wake accounting rather than guess.
-		run(func() { p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, false) })
+		run(func() { p.runReadyWait(p.lifecycleCtx, pod, spec, v, kind, "reconcile") })
 	case resumeOpClassifyNIC:
 		run(func() {
 			// evidence ⟺ restore: CreatePod's fresh-boot guard and conflict gates already ran before this VM could exist (v != nil here).
@@ -92,7 +96,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			switch {
 			case !ok:
 			case evidence:
-				p.resumeReadyAfterIP(p.lifecycleCtx, pod, spec, v, true)
+				p.runReadyWait(p.lifecycleCtx, pod, spec, v, ipWaitWake, "reconcile")
 			default:
 				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false)
 			}
@@ -119,16 +123,6 @@ func (p *Provider) classifyNICRecovery(pod *corev1.Pod, vmName string) (evidence
 		}
 		return false, false
 	}
-}
-
-// resumeReadyAfterIP re-runs the SAC pass when owed (done is written before SAC runs), then holds Ready until the lease lands.
-func (p *Provider) resumeReadyAfterIP(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wake bool) {
-	if p.willRunSAC(spec, v) {
-		if _, ok := p.runWindowsSAC(ctx, pod, v, "reconcile"); !ok {
-			return
-		}
-	}
-	p.markReadyAfterIP(ctx, pod, spec, v, wake)
 }
 
 func (p *Provider) claimResume(key string) bool {

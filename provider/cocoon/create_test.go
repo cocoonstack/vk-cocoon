@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/record"
 	utilexec "k8s.io/client-go/util/exec"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -266,7 +267,7 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	podA.UID = "a"
 
 	rt := &fakeRuntime{
-		runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0-505043"},
+		runVM: &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0-505043", IP: "10.0.0.11"},
 		runHook: func() {
 			p.markLifecycleState(t.Context(), podA, meta.LifecycleStateFailed, "stale predecessor")
 		},
@@ -276,6 +277,7 @@ func TestCreatePodClaimsIncarnationBeforeBringUp(t *testing.T) {
 	if err := p.CreatePod(t.Context(), podB); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
 	p.mu.RLock()
 	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
 	p.mu.RUnlock()
@@ -447,10 +449,11 @@ func TestCreatePodBringUpFailureAllowsRetry(t *testing.T) {
 	}
 
 	rt.runErr = nil
-	rt.runVM = &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0-505043"}
+	rt.runVM = &vm.VM{ID: "vmid-main", Name: "vk-ns-demo-0-505043", IP: "10.0.0.11"}
 	if err := p.CreatePod(t.Context(), pod); err != nil {
 		t.Fatalf("retry create: %v", err)
 	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
 	p.mu.RLock()
 	got := p.lifecycleIntent[meta.PodKey("ns", "demo-0")]
 	p.mu.RUnlock()
@@ -710,9 +713,114 @@ func TestCreatePodRunMode(t *testing.T) {
 	if rt.ran.Memory != "4Gi" {
 		t.Fatalf("Run Memory = %q, want 4Gi (vm layer owns the byte conversion)", rt.ran.Memory)
 	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	p.Close()
 	if len(pod.Status.ContainerStatuses) != 1 || !pod.Status.ContainerStatuses[0].Ready {
 		t.Fatalf("pod status was not refreshed to Ready: %#v", pod.Status.ContainerStatuses)
 	}
+}
+
+func TestCreatePodRunModeHoldsReadyUntilTheLeaseResolves(t *testing.T) {
+	leases := filepath.Join(t.TempDir(), "leases.json")
+	if err := os.WriteFile(leases, []byte("[]"), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{runVM: &vm.VM{ID: "vmid-run", Name: "vk-ns-demo-0-505043", MAC: "aa:bb:cc:dd:ee:ff"}}
+	p.LeaseParser = network.NewLeaseParser(leases)
+	p.wakeFreshIPInterval = time.Millisecond
+
+	pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Image: "ubuntu-22.04", Mode: "run"})
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateCreating {
+		t.Fatalf("lifecycle before the lease = %q, want creating: ready promises a resolvable IP", meta.ReadLifecycleState(got))
+	}
+	entry := `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"172.20.0.88","expiry":"2099-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(leases, []byte(entry), 0o644); err != nil {
+		t.Fatalf("write leases: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	if v := p.vmForPod("ns", "demo-0"); v == nil || v.IP != "172.20.0.88" {
+		t.Errorf("tracked VM at ready = %#v, want the leased IP 172.20.0.88", v)
+	}
+}
+
+func TestCreatePodRunModeMarksPostCloneDoneSoARestartResumesTheReadyWait(t *testing.T) {
+	pod := newPodWithSpec(meta.VMSpec{
+		VMName:  "vk-ns-demo-0-505043",
+		Image:   "ubuntu-22.04",
+		Mode:    "run",
+		OS:      string(cocoonv1.OSWindows),
+		Backend: string(cocoonv1.BackendCloudHypervisor),
+	})
+	p := newTestProvider(t)
+	p.Runtime = &fakeRuntime{}
+	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+
+	if err := p.CreatePod(t.Context(), pod); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	awaitLifecycle(t, p, "ns", "demo-0", meta.LifecycleStateReady)
+	p.Close()
+
+	persisted, err := p.Clientset.CoreV1().Pods("ns").Get(t.Context(), "demo-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if got := persisted.Annotations[annotationPostCloneState]; got != postCloneStateDone {
+		t.Fatalf("persisted post-clone-state = %q, want %q", got, postCloneStateDone)
+	}
+	restarted := persisted.DeepCopy()
+	restarted.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+	v := p.vmForPod("ns", "demo-0")
+	if op := owedOpFor(restarted, v); op != resumeOpReadyWait {
+		t.Errorf("owedOpFor = %q for a fresh boot left in creating, want %q", op, resumeOpReadyWait)
+	}
+	delete(restarted.Annotations, annotationPostCloneState)
+	if op := owedOpFor(restarted, v); op != resumeOpClassifyNIC {
+		t.Errorf("owedOpFor without the marker = %q, want %q", op, resumeOpClassifyNIC)
+	}
+}
+
+func TestCreatePodRunModeFailsOnTheBootBudgetWithoutALease(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		recorder := record.NewFakeRecorder(8)
+		p := newTestProvider(t)
+		p.Runtime = &fakeRuntime{runVM: &vm.VM{ID: "vmid-run", Name: "vk-ns-demo-0-505043"}}
+		p.Recorder = recorder
+
+		pod := newPodWithSpec(meta.VMSpec{VMName: "vk-ns-demo-0-505043", Image: "ubuntu-22.04", Mode: "run"})
+		if err := p.CreatePod(t.Context(), pod); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		time.Sleep(defaultWakeFreshIPBudget + time.Minute)
+		synctest.Wait()
+		if got, _ := p.GetPod(t.Context(), "ns", "demo-0"); meta.ReadLifecycleState(got) != meta.LifecycleStateCreating {
+			t.Fatalf("lifecycle past the clone budget = %q, want creating until the boot budget runs out", meta.ReadLifecycleState(got))
+		}
+		time.Sleep(defaultBootIPBudget)
+		synctest.Wait()
+
+		got, err := p.GetPod(t.Context(), "ns", "demo-0")
+		if err != nil {
+			t.Fatalf("GetPod: %v", err)
+		}
+		status := meta.ReadLifecycleStatus(got)
+		wantMsg := "boot vk-ns-demo-0-505043: dhcp lease not observed within 10m0s"
+		if status.State != meta.LifecycleStateFailed || status.Message != wantMsg {
+			t.Errorf("lifecycle = %q %q, want %q %q", status.State, status.Message, meta.LifecycleStateFailed, wantMsg)
+		}
+		select {
+		case ev := <-recorder.Events:
+			if want := "Warning BootIPWaitTimeout " + wantMsg; ev != want {
+				t.Errorf("event = %q, want %q", ev, want)
+			}
+		default:
+			t.Error("no BootIPWaitTimeout event was emitted")
+		}
+	})
 }
 
 func TestCreatePodRunModeBurstableCPUPolicy(t *testing.T) {

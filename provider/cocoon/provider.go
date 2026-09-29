@@ -142,10 +142,11 @@ type Provider struct {
 	deferredRecheckMaxDelay     time.Duration
 	deferredRecheckBudget       time.Duration
 
-	// dropNIC wake tunables; defaults live in update.go.
+	// Lease-wait tunables; defaults live in update.go.
 	wakeFreshIPBudget   time.Duration
 	wakeFreshIPInterval time.Duration
 	wakeRenewNudgeDelay time.Duration
+	bootIPBudget        time.Duration
 }
 
 // NewProvider constructs a Provider with empty tables; background work stops when ctx is canceled or Close is called.
