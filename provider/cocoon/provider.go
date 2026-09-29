@@ -851,7 +851,7 @@ func (p *Provider) podForVMMatch(id, name string) (string, *corev1.Pod, *vm.VM) 
 			continue
 		}
 		pod := p.pods[key]
-		if pod != nil && (tracked.ID == id || (name != "" && tracked.Name != "" && tracked.Name == name)) {
+		if pod != nil && (tracked.ID == id || (name != "" && tracked.Name == name)) {
 			return key, pod.DeepCopy(), tracked
 		}
 	}
