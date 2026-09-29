@@ -54,11 +54,7 @@ const (
 type ipWait int
 
 // runPostCloneSetup runs the cocoon-agent fixup and records post-clone-state; exhaustion leaves a manual hint.
-func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wake bool) {
-	wait := ipWaitClone
-	if wake {
-		wait = ipWaitWake
-	}
+func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, sourceImage, op string, wait ipWait) {
 	plan, ok := planPostClone(spec, v, sourceImage)
 	if !ok {
 		p.markReadyAfterIP(ctx, pod, spec, v, wait)
@@ -90,10 +86,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 				logger.Infof(ctx, "post-clone setup succeeded for %s/%s vm=%s attempts=%d attempt_dur=%s total_dur=%s",
 					pod.Namespace, pod.Name, v.ID, attempt, time.Since(attemptStart).Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
 				p.markPostCloneState(ctx, pod, postCloneStateDone)
-				if spec.OS == string(cocoonv1.OSWindows) {
-					if !p.runWindowsSAC(ctx, pod, v, op) {
-						return
-					}
+				if spec.OS == string(cocoonv1.OSWindows) && !p.runWindowsSAC(ctx, pod, v, op) {
+					return
 				}
 				if !p.lifecycleAlreadyFailed(pod) {
 					p.emitNormalf(pod, "PostCloneSucceeded", "kind=%s attempts=%d", kind, attempt)
@@ -121,7 +115,7 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 	}
 	metrics.PostCloneTotal.WithLabelValues(kind, "failed").Inc()
 	metrics.PostCloneRetryAttempts.WithLabelValues("failed").Observe(float64(len(attemptErrs)))
-	if wake {
+	if wait == ipWaitWake {
 		metrics.WakeTotal.WithLabelValues("failed").Inc()
 	}
 	p.markPostCloneState(ctx, pod, postCloneStateFailed)
@@ -134,10 +128,8 @@ func (p *Provider) runPostCloneSetup(ctx context.Context, pod *corev1.Pod, spec 
 
 // runReadyWait runs the SAC pass when owed (the done marker precedes SAC), then holds Ready until the lease lands.
 func (p *Provider) runReadyWait(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, kind ipWait, op string) {
-	if p.willRunSAC(spec, v) {
-		if !p.runWindowsSAC(ctx, pod, v, op) {
-			return
-		}
+	if spec.OS == string(cocoonv1.OSWindows) && !p.runWindowsSAC(ctx, pod, v, op) {
+		return
 	}
 	if !p.lifecycleAlreadyFailed(pod) {
 		p.markReadyAfterIP(ctx, pod, spec, v, kind)
@@ -263,11 +255,6 @@ func (p *Provider) setPodAnnotation(ctx context.Context, pod *corev1.Pod, key, v
 		log.WithFunc("Provider.setPodAnnotation").Errorf(ctx, err,
 			"patch annotation %s for %s/%s", key, pod.Namespace, pod.Name)
 	}
-}
-
-// willRunSAC adds the OS gate to the shared static-IP guard.
-func (p *Provider) willRunSAC(spec meta.VMSpec, v *vm.VM) bool {
-	return spec.OS == string(cocoonv1.OSWindows) && p.sacStaticIPNeeded(v)
 }
 
 func (p *Provider) sacStaticIPNeeded(v *vm.VM) bool {

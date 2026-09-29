@@ -77,7 +77,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			p.refreshAndNotify(p.lifecycleCtx, pod)
 		})
 	case resumeOpPostClone:
-		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false) })
+		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", ipWaitClone) })
 	case resumeOpReadyWait:
 		if !spec.Managed {
 			run(func() { p.markReadyPublished(p.lifecycleCtx, pod) })
@@ -98,7 +98,7 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 			case evidence:
 				p.runReadyWait(p.lifecycleCtx, pod, spec, v, ipWaitWake, "reconcile")
 			default:
-				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", false)
+				p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", ipWaitClone)
 			}
 		})
 	}

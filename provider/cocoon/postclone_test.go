@@ -265,7 +265,7 @@ func TestRunPostCloneSetupSuccess(t *testing.T) {
 	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff", Network: &vm.NetworkInfo{IP: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1"}}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create", false)
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create", ipWaitClone)
 
 	if len(rt.execCalls) != 1 {
 		t.Fatalf("expected 1 Exec call, got %d", len(rt.execCalls))
@@ -288,7 +288,7 @@ func TestRunPostCloneSetupCancelSkipsFailedStateAndHint(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create", false)
+	p.runPostCloneSetup(ctx, pod, meta.VMSpec{Backend: "cloud-hypervisor", VMName: "vm"}, v, "", "create", ipWaitClone)
 
 	if pod.Annotations[annotationPostCloneState] == postCloneStateFailed {
 		t.Errorf("cancellation must not write state=failed, got %q", pod.Annotations[annotationPostCloneState])
@@ -340,7 +340,7 @@ func TestRunPostCloneSetupNoOpSkipsState(t *testing.T) {
 	pod := &corev1.Pod{Name: "demo-0", Namespace: "ns"}
 	v := &vm.VM{ID: "vmid", NetworkConfigs: []*vm.NetworkConfig{{MAC: "aa:bb:cc:dd:ee:ff"}}}
 
-	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create", false)
+	p.runPostCloneSetup(t.Context(), pod, meta.VMSpec{Backend: "cloud-hypervisor"}, v, "", "create", ipWaitClone)
 
 	if len(rt.execCalls) != 0 {
 		t.Errorf("CH+OCI+DHCP no-op path should not call Exec, got %d calls", len(rt.execCalls))

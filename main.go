@@ -249,7 +249,6 @@ func main() {
 		}
 	}()
 
-	// NaiveNodeProvider doesn't propagate DaemonEndpoints; patch directly.
 	go patchNodeLabelsAndEndpoint(signalCtx, clientset, nodeName, nodePool, snapshotCompatibilityClass)
 
 	logger.Infof(signalCtx, "vk-cocoon metrics listening on %s, peer snapshots on %s", metricsAddr, peerAddr)
