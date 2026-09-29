@@ -71,6 +71,7 @@ type Snapshot struct {
 	Image       string `json:"image"`
 	ImageDigest string `json:"image_digest"` // resolved image digest (e.g. "sha256:abc...")
 	Hypervisor  string `json:"hypervisor"`
+	Description string `json:"description"`
 }
 
 // RestoreMode maps to `cocoon vm clone --restore-mode`; RestoreMmap needs a CH build with mmap restore support.
@@ -138,7 +139,7 @@ type Runtime interface {
 	SnapshotRemoveIfExists(ctx context.Context, name string) error
 	Snapshot(ctx context.Context, name string) (*Snapshot, error)
 	SnapshotList(ctx context.Context) ([]Snapshot, error)
-	SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error)
+	SnapshotImport(ctx context.Context, name, description string) (io.WriteCloser, func() error, error)
 	SnapshotExport(ctx context.Context, vmName string) (io.ReadCloser, func() error, error)
 	EnsureImage(ctx context.Context, image string, force bool) error
 	// Image probes local presence via `cocoon image inspect`; absence is ErrImageNotFound.

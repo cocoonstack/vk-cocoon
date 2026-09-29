@@ -63,6 +63,39 @@ func TestTheReclaimerDropsOnlyWhatNoPodOnTheNodeCanWakeFrom(t *testing.T) {
 	}
 }
 
+func TestTheReclaimerDropsMarkedCloneSourcesUnderAnyName(t *testing.T) {
+	const pulled = "simular/osworld-ref:ref12"
+	cloner := meta.VMSpec{VMName: "vk-ns-clone-0-9a1f3c", Image: pulled}
+	tests := []struct {
+		name  string
+		local vm.Snapshot
+		pod   meta.VMSpec
+		want  []string
+	}{
+		{"a marked copy no pod clones from", vm.Snapshot{Name: pulled, Description: cloneSourceDescription}, meta.VMSpec{}, []string{pulled}},
+		{"a marked copy a pod clones from", vm.Snapshot{Name: pulled, Description: cloneSourceDescription}, cloner, nil},
+		{"an unmarked local snapshot under the same name", vm.Snapshot{Name: pulled}, meta.VMSpec{}, nil},
+		{"an unmarked default-tag local snapshot", vm.Snapshot{Name: "simular/golden"}, meta.VMSpec{}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &fakeRuntime{snapshots: map[string]*vm.Snapshot{tt.local.Name: &tt.local}}
+			p := newTestProvider(t)
+			p.Runtime = rt
+			p.Registry = registryDown(t)
+			if tt.pod.VMName != "" {
+				p.trackPod(newPodWithSpec(tt.pod), nil)
+			}
+
+			p.reclaimLocalSnapshots(t.Context())
+
+			if got := slices.Sorted(slices.Values(rt.snapshotRemoveCalls)); !slices.Equal(got, tt.want) {
+				t.Errorf("removed %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func tagGone(t *testing.T) oci.Registry {
 	r := newWakeVerifyRegistry(t, "SNAP-1")
 	r.tagExists = false

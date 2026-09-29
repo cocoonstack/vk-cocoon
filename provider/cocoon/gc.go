@@ -32,7 +32,8 @@ func (p *Provider) reclaimLocalSnapshots(ctx context.Context) {
 	inUse := p.snapshotNamesInUse()
 	for _, s := range snapshots {
 		vmName, isImport := strings.CutSuffix(s.Name, meta.HibernateImportSuffix)
-		if !strings.HasPrefix(vmName, "vk-") || inUse[vmName] {
+		pulledCloneSource := s.Description == cloneSourceDescription
+		if inUse[vmName] || !pulledCloneSource && !strings.HasPrefix(vmName, "vk-") {
 			continue
 		}
 		if isImport {
@@ -40,7 +41,7 @@ func (p *Provider) reclaimLocalSnapshots(ctx context.Context) {
 			p.removeSnapshotDetached(ctx, s.Name)
 			continue
 		}
-		if strings.Contains(vmName, ":") {
+		if pulledCloneSource || strings.Contains(vmName, ":") {
 			logger.Infof(ctx, "reclaim local snapshot %s: no pod on this node clones from it", s.Name)
 			p.removeSnapshotDetached(ctx, s.Name)
 			continue

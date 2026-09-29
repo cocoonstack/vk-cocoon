@@ -27,6 +27,8 @@ import (
 const (
 	// importDetachTimeout bounds a shared import flight, which outlives every caller that joins it.
 	importDetachTimeout = 30 * time.Minute
+	// cloneSourceDescription marks a local snapshot vk-cocoon pulled as a clone source; the reclaimer removes only marked ones outside the vk- names.
+	cloneSourceDescription = "vk-cocoon clone source"
 
 	// cpuPeriodUs is passed with the quota so the math cannot drift from cocoon's default cpu.max period.
 	cpuPeriodUs = 100000
@@ -433,7 +435,7 @@ func (p *Provider) ensureSnapshot(ctx context.Context, repo, tag, local string) 
 			return snapshot, nil
 		}
 		pullStart := time.Now()
-		if pullErr := p.Puller.PullSnapshot(shared, repo, tag, local); pullErr != nil {
+		if pullErr := p.Puller.PullSnapshot(shared, repo, tag, local, cloneSourceDescription); pullErr != nil {
 			return nil, pullErr
 		}
 		metrics.SnapshotPullDuration.Observe(time.Since(pullStart).Seconds())
