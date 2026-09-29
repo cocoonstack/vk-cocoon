@@ -268,7 +268,6 @@ func TestReconcilePodStatusesHandsFrameworkCurrentLifecycleOverStaleLister(t *te
 	default:
 		t.Fatal("readiness drift was not republished")
 	}
-	// virtual-kubelet UpdateStatus-es the whole handed object, and pods/status accepts annotation changes.
 	handed.ResourceVersion = ""
 	if _, err := client.CoreV1().Pods(pod.Namespace).UpdateStatus(t.Context(), handed, metav1.UpdateOptions{}); err != nil {
 		t.Fatalf("framework status push: %v", err)
