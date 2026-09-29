@@ -120,7 +120,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	if cloned && !restoring {
 		p.goBackground(func() {
-			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create", false)
+			p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, sourceImage, "create", ipWaitClone)
 		})
 	}
 	// First probe is synchronous so refreshStatus below sees its result.

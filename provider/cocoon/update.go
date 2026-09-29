@@ -397,7 +397,7 @@ func (p *Provider) dispatchHibernateRestore(pod *corev1.Pod, spec meta.VMSpec, v
 		return
 	}
 	p.goBackground(func() {
-		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", op, true)
+		p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", op, ipWaitWake)
 	})
 }
 
