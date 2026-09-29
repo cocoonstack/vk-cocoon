@@ -60,6 +60,27 @@ func TestDetectHugepagesOverrideFollowsTheHostPageSize(t *testing.T) {
 	}
 }
 
+func TestStorageAllocatableAddsHeldBytesAndHonorsThePin(t *testing.T) {
+	t.Setenv("COCOON_ROOT_DIR", t.TempDir())
+	t.Setenv("VK_RESERVE_PERCENT", "0")
+	base, ok, err := StorageAllocatable(0)
+	if err != nil || !ok {
+		t.Fatalf("StorageAllocatable(0) = %v, %v, %v", base, ok, err)
+	}
+	withHeld, _, err := StorageAllocatable(1 << 30)
+	if err != nil {
+		t.Fatalf("StorageAllocatable(1Gi): %v", err)
+	}
+	withHeld.Sub(base)
+	if delta := withHeld.Value(); delta < 1<<30-64<<20 || delta > 1<<30+64<<20 {
+		t.Errorf("held 1 GiB moved allocatable by %d bytes", delta)
+	}
+	t.Setenv("VK_NODE_STORAGE", "100Gi")
+	if _, ok, err := StorageAllocatable(1 << 30); ok || err != nil {
+		t.Errorf("pinned storage: ok=%v err=%v, want not ok and no error", ok, err)
+	}
+}
+
 func TestNodeResourcesDefaults(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("requires /proc")

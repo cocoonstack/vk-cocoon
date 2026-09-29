@@ -21,13 +21,19 @@ with values the scheduler can trust.
   fence keeps VM threads (vCPU, virtio, io_uring workers) off the
   reserved cores, which then serve vk-cocoon's own probe loops,
   clone/wake execution, and snapshot transfers.
-- **Storage allocatable** uses `statfs` available bytes (`Bavail`)
-  instead of total — base images, existing COW overlays, and snapshots
-  are naturally excluded from the budget. `VK_NODE_STORAGE` overrides
-  total and available alike, so the reserve fraction is all that
-  separates them.
-- Values are read **once at startup** and do not update while vk-cocoon
-  is running; a restart refreshes them (idempotent).
+- **Storage allocatable** is `statfs` available bytes (`Bavail`) plus
+  the bytes the tracked VMs' COW overlays already occupy (allocated
+  blocks, not apparent size), minus the reserve. The scheduler subtracts
+  every pod's ephemeral-storage request from allocatable, so adding the
+  overlays back keeps a running VM from being counted twice, once in the
+  lower `Bavail` and once in its request; base images, snapshots and
+  anything else on the filesystem stay excluded. vk-cocoon recomputes it
+  every minute and pushes the node status when it changes, so pulls,
+  snapshot caches and VM churn reach the scheduler within a minute.
+  `VK_NODE_STORAGE` overrides total and available alike and pins the
+  value; the reserve fraction is then all that separates them.
+- CPU, memory, hugepages and the pod count are read **once at startup**;
+  a restart refreshes them (idempotent).
 - Individual resources can be force-overridden via `VK_NODE_CPU`,
   `VK_NODE_MEM`, `VK_NODE_STORAGE`, `VK_NODE_HUGEPAGES`, `VK_NODE_PODS`
   (see [Configuration](configuration.md)).
