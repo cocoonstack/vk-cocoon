@@ -91,7 +91,7 @@ var (
 		"Number of wake operations by result.", []string{labelResult})
 
 	WakeIPWaitTotal = counterVec("wake_ip_wait_total",
-		"Outcomes of the post-clone and wake DHCP lease wait.", []string{labelNamespace, labelResult})
+		"Outcomes of the post-clone, wake and run-mode boot DHCP lease wait.", []string{labelNamespace, labelResult})
 
 	WakeRenewNudgeTotal = counterVec("wake_renew_nudge_total",
 		"ipconfig /renew nudges sent to Windows guests still lease-less mid lease-wait.", []string{labelResult})

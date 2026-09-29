@@ -116,10 +116,10 @@ type Provider struct {
 	macosLeftover  map[string]types.UID
 	recheckWG      sync.WaitGroup
 	bgWG           sync.WaitGroup
-	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation (self-synchronized)
-	snapshotPullSF singleflight.Group // dedups concurrent registry pulls of one local snapshot name (self-synchronized)
-	runImageSF     singleflight.Group // dedups concurrent base-image materialization of one ref (self-synchronized)
-	macosImageSF   singleflight.Group // dedups concurrent cocoon-macos image pulls of one ref (self-synchronized)
+	forkSnapshotSF singleflight.Group // dedups concurrent fork-base snapshot creation
+	snapshotPullSF singleflight.Group // dedups concurrent registry pulls of one local snapshot name
+	runImageSF     singleflight.Group // dedups concurrent base-image materialization of one ref
+	macosImageSF   singleflight.Group // dedups concurrent cocoon-macos image pulls of one ref
 	notifyHook     podNotifier
 
 	// macOS test seams; production leaves them nil (real exec / real signal-0 probe).

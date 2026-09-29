@@ -33,7 +33,6 @@ var cgroupParent = sync.OnceValue(func() string {
 	return commonk8s.EnvOrDefault("COCOON_CGROUP_PARENT", vm.DefaultCgroupParent)
 })
 
-// vmSnapshot is a minimal copy of VM state taken under lock so /proc reads happen outside the critical section.
 type vmSnapshot struct {
 	ID         string
 	PID        int
@@ -265,7 +264,6 @@ func readNodeMemoryWorkingSet() int64 {
 	return (fields["MemTotal"] - fields["MemAvailable"]) * 1024
 }
 
-// cpuMemStats packs raw CPU seconds and working-set bytes into the kubelet stats types, clamping memory to non-negative.
 func cpuMemStats(cpuSeconds float64, memBytes int64) (*statsv1alpha1.CPUStats, *statsv1alpha1.MemoryStats) {
 	cpuNano := uint64(cpuSeconds * 1e9)
 	mem := uint64(max(memBytes, 0))
