@@ -233,8 +233,6 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 		return &vm.VM{ID: runtime.VMID, Name: spec.VMName, IP: runtime.IP, State: vm.StateRunning}, "", nil
 	}
 
-	backend := spec.Backend
-	noDirectIO := spec.NoDirectIO
 	mode := strings.ToLower(spec.Mode)
 	policy := podCPUPolicy(pod)
 	fromDir, err := parseCloneFromDirAnnotation(pod)
@@ -305,8 +303,8 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			Network:    spec.Network,
 			Storage:    spec.Storage,
 			OS:         spec.OS,
-			Backend:    backend,
-			NoDirectIO: noDirectIO,
+			Backend:    spec.Backend,
+			NoDirectIO: spec.NoDirectIO,
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("run vm %s: %w", spec.VMName, err)
@@ -322,12 +320,12 @@ func (p *Provider) bringUpVM(ctx context.Context, pod *corev1.Pod, spec meta.VMS
 			return nil, "", fmt.Errorf("ensure snapshot %s: %w", local, err)
 		}
 		metrics.SnapshotPullTotal.WithLabelValues("ok").Inc()
-		if backendErr := assertSnapshotBackend(snapshot, backend); backendErr != nil {
+		if backendErr := assertSnapshotBackend(snapshot, spec.Backend); backendErr != nil {
 			return nil, "", fmt.Errorf("clone vm %s from %s: %w", spec.VMName, local, backendErr)
 		}
 
 		var srcImage string
-		if snapshot != nil && snapshot.Image != "" {
+		if snapshot != nil {
 			srcImage = snapshot.Image
 		}
 		if baseErr := p.ensureSnapshotBaseImage(ctx, snapshot); baseErr != nil {

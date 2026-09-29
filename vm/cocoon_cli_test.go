@@ -275,7 +275,7 @@ func TestBuildCloneArgs(t *testing.T) {
 		},
 		{
 			name: "cpu policy knobs",
-			opts: CloneOptions{From: "snap-a", To: "vm-p", CPUPolicy: CPUPolicy{CPUWeight: 20, CPUQuotaUs: 200000, CPUPeriodUs: 100000}},
+			opts: CloneOptions{From: "snap-a", To: "vm-p", CPUWeight: 20, CPUQuotaUs: 200000, CPUPeriodUs: 100000},
 			want: []string{"vm", "clone", "--output", "json", "--name", "vm-p", "--cpu-weight", "20", "--cpu-quota-us", "200000", "--cpu-period-us", "100000", "snap-a"},
 		},
 	}
@@ -373,7 +373,7 @@ func TestBuildRunArgs(t *testing.T) {
 		},
 		{
 			name: "cpu policy knobs",
-			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-h", CPU: 2, CPUPolicy: CPUPolicy{CPUWeight: 79, CPUQuotaUs: 150000}},
+			opts: RunOptions{Image: "ghcr.io/x/y:1", Name: "vm-h", CPU: 2, CPUWeight: 79, CPUQuotaUs: 150000},
 			want: []string{"vm", "run", "--output", "json", "--name", "vm-h", "--cpu", "2", "--cpu-weight", "79", "--cpu-quota-us", "150000", "ghcr.io/x/y:1"},
 		},
 	}

@@ -119,8 +119,8 @@ type RunOptions struct {
 
 // VMEvent is a single event from the cocoon event stream.
 type VMEvent struct {
-	Event string `json:"event"`
-	VM    VM     `json:"vm"`
+	Event string
+	VM    VM
 }
 
 // Runtime is the interface vk-cocoon uses to drive cocoon.

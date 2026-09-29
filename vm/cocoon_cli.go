@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -314,15 +313,14 @@ func (c *CocoonCLI) WatchEvents(ctx context.Context) (<-chan VMEvent, error) {
 				continue
 			}
 			var raw struct {
-				Event string         `json:"event"`
-				VM    jsontext.Value `json:"vm"`
+				Event string      `json:"event"`
+				VM    inspectJSON `json:"vm"`
 			}
 			if err := json.Unmarshal(line, &raw); err != nil {
 				logger.Warnf(ctx, "skip undecodable event line: %v", err)
 				continue
 			}
-			ev := VMEvent{Event: raw.Event}
-			ev.VM = parseVMFromStatusJSON(raw.VM)
+			ev := VMEvent{Event: raw.Event, VM: *inspectJSONToVM(raw.VM)}
 			if ev.VM.ID == "" && ev.VM.Name == "" {
 				continue
 			}
@@ -465,8 +463,7 @@ func buildRunArgs(opts RunOptions) []string {
 	if opts.NoDirectIO {
 		args = append(args, "--no-direct-io")
 	}
-	args = append(args, opts.Image)
-	return args
+	return append(args, opts.Image)
 }
 
 func appendCPUPolicyArgs(args []string, policy CPUPolicy) []string {
@@ -495,15 +492,6 @@ func buildExecArgs(vmID string, argv []string, env map[string]string, interactiv
 	args = append(args, vmID, "--")
 	args = append(args, argv...)
 	return args
-}
-
-// parseVMFromStatusJSON decodes a vm status event using the inspect wire format; returns a zero VM on decode failure.
-func parseVMFromStatusJSON(data []byte) VM {
-	var d inspectJSON
-	if json.Unmarshal(data, &d) != nil {
-		return VM{}
-	}
-	return *inspectJSONToVM(d)
 }
 
 func cocoonCmdError(op, ref string, err error, output []byte) error {
