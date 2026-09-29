@@ -80,12 +80,18 @@ published IP and macOS VNC-port annotations, removing an endpoint when the
 runtime no longer serves it; failed patches are retried on the next pass.
 
 At startup and every 10 minutes, the snapshot reclaimer walks the local
-snapshot store. It skips a `vk-` snapshot that a pod on this node runs, wakes
-or clones from. Any other `vk-` snapshot is removed with its fork snapshot once
-the registry's `:hibernate` tag is gone or names another snapshot. A copy the
-tag still names stays as the warm-wake cache, and a registry error keeps the
-copy until the next pass. A leftover `-hibernate-import` snapshot no pod on
-this node wakes from is removed.
+snapshot store. It skips any snapshot that a pod on this node runs, wakes or
+clones from. A clone source vk-cocoon pulled from the registry is imported with
+the description `vk-cocoon clone source`; once no pod on this node clones from
+it, it is removed whatever its name, since the registry still holds it. A `vk-`
+copy whose name carries a colon (a non-default tag or a digest, pulled before
+the description was set) is removed the same way. Any other `vk-` snapshot is
+removed with its fork snapshot once the registry's `:hibernate` tag is gone or
+names another snapshot. A copy the tag still names stays as the warm-wake
+cache, and a registry error keeps the copy until the next pass with a warning.
+A leftover `-hibernate-import` snapshot no pod on this node wakes from is
+removed. A snapshot outside the `vk-` names without the description, such as
+one an operator imported by hand, is never touched.
 
 ## VM event watcher
 

@@ -245,11 +245,15 @@ func (c *CocoonCLI) SnapshotList(ctx context.Context) ([]Snapshot, error) {
 }
 
 // SnapshotImport spawns `cocoon snapshot import` and returns its stdin pipe, removing a stale same-name snapshot up front for idempotency.
-func (c *CocoonCLI) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
+func (c *CocoonCLI) SnapshotImport(ctx context.Context, name, description string) (io.WriteCloser, func() error, error) {
 	if err := c.SnapshotRemoveIfExists(ctx, name); err != nil {
 		return nil, nil, err
 	}
-	cmd := c.command(ctx, "snapshot", "import", "--name", name)
+	args := []string{"snapshot", "import", "--name", name}
+	if description != "" {
+		args = append(args, "--description", description)
+	}
+	cmd := c.command(ctx, args...)
 	return startCmdPipe(ctx, cmd, cmd.StdinPipe, "cocoon snapshot import")
 }
 

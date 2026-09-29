@@ -1214,6 +1214,9 @@ func TestEnsureSnapshotColdBurstSingleflight(t *testing.T) {
 	if len(rt.snapshotImports) != 1 {
 		t.Errorf("snapshot imports = %v, want exactly one", rt.snapshotImports)
 	}
+	if !slices.Equal(rt.snapshotImportDescriptions, []string{cloneSourceDescription}) {
+		t.Errorf("import descriptions = %q, want the clone-source mark", rt.snapshotImportDescriptions)
+	}
 	if got := reg.manifests.Load(); got != 1 {
 		t.Errorf("manifest fetches = %d, want 1", got)
 	}
@@ -2619,11 +2622,12 @@ type fakeRuntime struct {
 	startErr   error
 	events     []vm.VMEvent
 
-	mu              sync.Mutex
-	snapshotImports []string
-	imageImports    []string
-	importHook      func()
-	ensureImageHook func()
+	mu                         sync.Mutex
+	snapshotImports            []string
+	snapshotImportDescriptions []string
+	imageImports               []string
+	importHook                 func()
+	ensureImageHook            func()
 
 	onRemove func()
 
@@ -2765,9 +2769,10 @@ func (f *fakeRuntime) SnapshotList(_ context.Context) ([]vm.Snapshot, error) {
 	return out, nil
 }
 
-func (f *fakeRuntime) SnapshotImport(ctx context.Context, name string) (io.WriteCloser, func() error, error) {
+func (f *fakeRuntime) SnapshotImport(ctx context.Context, name, description string) (io.WriteCloser, func() error, error) {
 	f.mu.Lock()
 	f.snapshotImports = append(f.snapshotImports, name)
+	f.snapshotImportDescriptions = append(f.snapshotImportDescriptions, description)
 	hook := f.importHook
 	f.mu.Unlock()
 	if hook != nil {

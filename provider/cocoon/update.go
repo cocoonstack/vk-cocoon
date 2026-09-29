@@ -634,7 +634,7 @@ func (p *Provider) resolveWakeSource(ctx context.Context, namespace, vmName stri
 	}
 	importName := vmName + meta.HibernateImportSuffix
 	pullStart := time.Now()
-	if pullErr := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName); pullErr != nil {
+	if pullErr := p.Puller.PullSnapshot(ctx, vmName, meta.HibernateSnapshotTag, importName, ""); pullErr != nil {
 		metrics.SnapshotPullTotal.WithLabelValues("failed").Inc()
 		return wakeSource{}, fmt.Errorf("pull hibernation snapshot %s: %w", vmName, pullErr)
 	}

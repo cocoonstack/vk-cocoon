@@ -470,6 +470,39 @@ exit 1
 	}
 }
 
+func TestSnapshotImportPassesTheDescriptionOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		description string
+		want        string
+	}{
+		{"", "snapshot import --name snap-a"},
+		{"vk-cocoon clone source", "snapshot import --name snap-a --description vk-cocoon clone source"},
+	} {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "cocoon")
+		argsFile := filepath.Join(dir, "args")
+		writeFakeCocoon(t, bin, "#!/bin/sh\n[ \"$1\" = snapshot ] && [ \"$2\" = rm ] && exit 0\necho \"$*\" > "+argsFile+"\ncat > /dev/null\n")
+		w, wait, err := NewCocoonCLI(bin).SnapshotImport(t.Context(), "snap-a", tt.description)
+		if err != nil {
+			t.Fatalf("SnapshotImport: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("close stdin: %v", err)
+		}
+		if err := wait(); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		got, err := os.ReadFile(argsFile)
+		if err != nil {
+			t.Fatalf("read args: %v", err)
+		}
+		if strings.TrimSpace(string(got)) != tt.want {
+			t.Errorf("description %q: argv %q, want %q", tt.description, strings.TrimSpace(string(got)), tt.want)
+		}
+	}
+}
+
 func TestWatchEventsSkipsUndecodableLine(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "cocoon")
 	payload := `#!/bin/sh

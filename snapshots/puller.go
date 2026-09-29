@@ -29,8 +29,8 @@ type Puller struct {
 	Transfer TransferConfig
 }
 
-// PullSnapshot fetches and imports a snapshot from the registry. localName defaults to name.
-func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) error {
+// PullSnapshot fetches and imports a snapshot from the registry under localName (default name) with description.
+func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName, description string) error {
 	raw, _, err := p.Registry.GetManifest(ctx, name, tag)
 	if err != nil {
 		return fmt.Errorf("get snapshot manifest %s:%s: %w", name, tag, err)
@@ -45,7 +45,7 @@ func (p *Puller) PullSnapshot(ctx context.Context, name, tag, localName string) 
 		defer pullGate.Release(1)
 	}
 
-	importer, wait, err := p.Runtime.SnapshotImport(ctx, localName)
+	importer, wait, err := p.Runtime.SnapshotImport(ctx, localName, description)
 	if err != nil {
 		return fmt.Errorf("open cocoon snapshot import: %w", err)
 	}
