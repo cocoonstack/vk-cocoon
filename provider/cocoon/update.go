@@ -65,6 +65,7 @@ func (p *Provider) updatePod(ctx context.Context, pod *corev1.Pod) error {
 	}
 	spec := meta.ParseVMSpec(pod)
 	wantHibernate := bool(meta.ReadHibernateState(pod))
+	snapshotRef := pendingSnapshotRef(pod)
 	key := meta.PodKey(pod.Namespace, pod.Name)
 	v, trackedUID, tracked := p.trackedIncarnation(key)
 	// An untracked pod with nothing to wake from is a recreate, not a wake
@@ -89,13 +90,13 @@ func (p *Provider) updatePod(ctx context.Context, pod *corev1.Pod) error {
 		return errDeleteInFlight(pod)
 	}
 	prev := p.takeOpRetry(key)
-	if err := p.applyUpdate(ctx, pod, spec, v, wantHibernate); err != nil {
+	if err := p.applyUpdate(ctx, pod, spec, v, wantHibernate, snapshotRef); err != nil {
 		p.retryOpLater(ctx, pod, prev, err)
 	}
 	return nil
 }
 
-func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wantHibernate bool) error {
+func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wantHibernate bool, snapshotRef string) error {
 	// os=macos cannot hibernate (offline disk snapshots); clearing the request lifts only that refusal.
 	if isMacosSpec(spec) {
 		if wantHibernate {
@@ -118,6 +119,11 @@ func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.V
 	}
 
 	haveVM := v != nil
+	if snapshotRef != "" && haveVM && !wantHibernate && p.Pusher != nil {
+		if err := p.snapshot(ctx, pod, spec, v, snapshotRef); err != nil {
+			return err
+		}
+	}
 
 	switch {
 	case wantHibernate && haveVM:
@@ -712,6 +718,14 @@ func lastNonEmptyLine(s string) string {
 		}
 	}
 	return last
+}
+
+func pendingSnapshotRef(pod *corev1.Pod) string {
+	ref := pod.Annotations[meta.AnnotationSnapshotRequest]
+	if status, ok := meta.ReadSnapshotStatus(pod); ok && status.Ref == ref {
+		return ""
+	}
+	return ref
 }
 
 // shouldDropNICBeforeHibernate: Windows PnP rejects MAC swap on the same slot; only CH implements `vm net --nics`.

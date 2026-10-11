@@ -50,6 +50,7 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 	}
 	if err := pusher.Push(ctx, snapshot.PushOptions{
 		Name:            repo,
+		LocalName:       vmName,
 		Tag:             tag,
 		BaseImage:       baseImage,
 		Annotations:     stamped,

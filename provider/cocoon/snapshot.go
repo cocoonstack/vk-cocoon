@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-common/ociutil"
 	"github.com/cocoonstack/vk-cocoon/metrics"
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
@@ -37,19 +38,37 @@ func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *
 		log.WithFunc("Provider.saveAndPushSnapshot").Warnf(ctx, "vm %s is %s, deleting it without a snapshot", v.ID, current.State)
 		return nil
 	}
+	return p.saveAndPush(ctx, pod, v.ID, v.Name, "", tag, image)
+}
 
+func (p *Provider) snapshot(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, ref string) error {
+	localName := "snap-" + v.Name
+	repo, tag := ociutil.ParseRef(ref)
+	status := meta.SnapshotStatus{Ref: ref, State: meta.SnapshotStatePushed}
+	if err := p.saveAndPush(ctx, pod, v.ID, localName, repo, tag, spec.Image); err != nil {
+		p.emitWarningf(pod, "SnapshotFailed", "snapshot to %s: %v", ref, err)
+		status.State, status.Message = meta.SnapshotStateFailed, err.Error()
+	}
+	p.removeSnapshotDetached(ctx, localName)
+	return patchWithRetry(ctx, func() error {
+		return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, status.Annotations())
+	})
+}
+
+func (p *Provider) saveAndPush(ctx context.Context, pod *corev1.Pod, vmID, localName, repo, tag, image string) error {
 	saveStart := time.Now()
-	if err := p.Runtime.SnapshotSave(ctx, v.Name, v.ID); err != nil {
+	// Detached: a save killed between CH's pause and resume leaves the VM paused.
+	if err := p.Runtime.SnapshotSave(context.WithoutCancel(ctx), localName, vmID); err != nil {
 		metrics.SnapshotSaveTotal.WithLabelValues("failed").Inc()
-		return fmt.Errorf("save snapshot %s: %w", v.Name, err)
+		return fmt.Errorf("save snapshot %s: %w", localName, err)
 	}
 	metrics.SnapshotSaveDuration.WithLabelValues(pod.Namespace).Observe(time.Since(saveStart).Seconds())
 	metrics.SnapshotSaveTotal.WithLabelValues("ok").Inc()
 
 	pushStart := time.Now()
-	if err := p.Pusher.PushSnapshot(ctx, v.Name, "", tag, image, snapshotAnnotations(ctx, pod)); err != nil {
+	if err := p.Pusher.PushSnapshot(ctx, localName, repo, tag, image, snapshotAnnotations(ctx, pod)); err != nil {
 		metrics.SnapshotPushTotal.WithLabelValues("failed").Inc()
-		return fmt.Errorf("push snapshot %s: %w", v.Name, err)
+		return fmt.Errorf("push snapshot %s: %w", localName, err)
 	}
 	metrics.SnapshotPushDuration.WithLabelValues(pod.Namespace).Observe(time.Since(pushStart).Seconds())
 	metrics.SnapshotPushTotal.WithLabelValues("ok").Inc()

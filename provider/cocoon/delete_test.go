@@ -400,9 +400,11 @@ type snapshotExportRuntime struct {
 	*fakeRuntime
 	export    []byte
 	exportErr error
+	exported  []string
 }
 
-func (r *snapshotExportRuntime) SnapshotExport(context.Context, string) (io.ReadCloser, func() error, error) {
+func (r *snapshotExportRuntime) SnapshotExport(_ context.Context, name string) (io.ReadCloser, func() error, error) {
+	r.exported = append(r.exported, name)
 	if r.exportErr != nil {
 		return nil, nil, r.exportErr
 	}
