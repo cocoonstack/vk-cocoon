@@ -18,6 +18,7 @@ const (
 	resumeOpPostClone   = "post_clone"
 	resumeOpReadyWait   = "ready_wait"
 	resumeOpClassifyNIC = "classify_drop_nic"
+	resumeOpSnapshot    = "snapshot"
 )
 
 // dispatchOwedWork resumes the step a vk restart interrupted (#54): callbacks are one-shot, so nothing else re-delivers this work.
@@ -75,6 +76,15 @@ func (p *Provider) dispatchResume(key string, pod *corev1.Pod, v *vm.VM, op stri
 				return
 			}
 			p.refreshAndNotify(p.lifecycleCtx, pod)
+		})
+	case resumeOpSnapshot:
+		run(func() {
+			if p.Pusher == nil {
+				return
+			}
+			if err := p.snapshot(p.lifecycleCtx, pod, spec, v, pendingSnapshotRef(pod)); err != nil {
+				p.retryOpLater(p.lifecycleCtx, pod, 0, err)
+			}
 		})
 	case resumeOpPostClone:
 		run(func() { p.runPostCloneSetup(p.lifecycleCtx, pod, spec, v, "", "reconcile", ipWaitClone) })
@@ -161,9 +171,8 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if isMacosVM(v) {
 		return ""
 	}
-	lc := meta.ReadLifecycleState(pod)
 	// An empty lifecycle (lost Creating patch) with a marker still records owed work.
-	resuming := lc == meta.LifecycleStateCreating || lc == ""
+	resuming := lifecycleCreating(pod)
 	spec := meta.ParseVMSpec(pod)
 	if !spec.Managed {
 		if resuming {
@@ -175,6 +184,9 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		return resumeOpHibernate
 	}
 	if !resuming {
+		if pendingSnapshotRef(pod) != "" {
+			return resumeOpSnapshot
+		}
 		return ""
 	}
 	switch pod.Annotations[annotationPostCloneState] {
@@ -194,4 +206,9 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		}
 		return resumeOpReadyWait
 	}
+}
+
+func lifecycleCreating(pod *corev1.Pod) bool {
+	lc := meta.ReadLifecycleState(pod)
+	return lc == meta.LifecycleStateCreating || lc == ""
 }
