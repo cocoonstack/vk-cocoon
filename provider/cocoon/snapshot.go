@@ -17,6 +17,8 @@ import (
 
 const snapshotCleanupTimeout = 10 * time.Second
 
+var errSnapshotBeforeReady = errors.New("snapshot request waits for the vm to be ready")
+
 // removeSnapshotDetached drops a snapshot under a fresh timed context so caller cancel can't abort it, and a slow remove can't starve a follow-up.
 func (p *Provider) removeSnapshotDetached(ctx context.Context, name string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotCleanupTimeout)
@@ -42,17 +44,31 @@ func (p *Provider) saveAndPushSnapshot(ctx context.Context, pod *corev1.Pod, v *
 }
 
 func (p *Provider) snapshot(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, ref string) error {
+	if lifecycleCreating(pod) {
+		return errSnapshotBeforeReady
+	}
 	localName := "snap-" + v.Name
 	repo, tag := ociutil.ParseRef(ref)
-	status := meta.SnapshotStatus{Ref: ref, State: meta.SnapshotStatePushed}
-	if err := p.saveAndPush(ctx, pod, v.ID, localName, repo, tag, spec.Image); err != nil {
-		p.emitWarningf(pod, "SnapshotFailed", "snapshot to %s: %v", ref, err)
-		status.State, status.Message = meta.SnapshotStateFailed, err.Error()
-	}
+	err := p.saveAndPush(ctx, pod, v.ID, localName, repo, tag, spec.Image)
 	p.removeSnapshotDetached(ctx, localName)
-	return patchWithRetry(ctx, func() error {
+	return p.answerSnapshot(ctx, pod, ref, err)
+}
+
+func (p *Provider) answerSnapshot(ctx context.Context, pod *corev1.Pod, ref string, snapErr error) error {
+	status := meta.SnapshotStatus{Ref: ref, State: meta.SnapshotStatePushed}
+	if snapErr != nil {
+		msg := snapErr.Error()
+		p.emitWarningf(pod, "SnapshotFailed", "%s", truncate("snapshot to "+ref+": "+msg, eventMessageMaxBytes))
+		status.State, status.Message = meta.SnapshotStateFailed, truncate(msg, lifecycleMessageMaxBytes)
+		log.WithFunc("Provider.answerSnapshot").Errorf(ctx, snapErr, "snapshot %s/%s to %s", pod.Namespace, pod.Name, ref)
+	}
+	err := patchWithRetry(ctx, func() error {
 		return p.patchIncarnationAnnotations(ctx, pod.Namespace, pod.Name, pod.UID, status.Annotations())
 	})
+	if patchSuperseded(err) {
+		return nil
+	}
+	return err
 }
 
 func (p *Provider) saveAndPush(ctx context.Context, pod *corev1.Pod, vmID, localName, repo, tag, image string) error {

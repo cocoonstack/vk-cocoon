@@ -97,6 +97,11 @@ func (p *Provider) updatePod(ctx context.Context, pod *corev1.Pod) error {
 }
 
 func (p *Provider) applyUpdate(ctx context.Context, pod *corev1.Pod, spec meta.VMSpec, v *vm.VM, wantHibernate bool, snapshotRef string) error {
+	if isMacosSpec(spec) && snapshotRef != "" {
+		if err := p.answerSnapshot(ctx, pod, snapshotRef, fmt.Errorf("macOS guest %s does not support live snapshots", spec.VMName)); err != nil {
+			return err
+		}
+	}
 	// os=macos cannot hibernate (offline disk snapshots); clearing the request lifts only that refusal.
 	if isMacosSpec(spec) {
 		if wantHibernate {
@@ -722,7 +727,7 @@ func lastNonEmptyLine(s string) string {
 
 func pendingSnapshotRef(pod *corev1.Pod) string {
 	ref := pod.Annotations[meta.AnnotationSnapshotRequest]
-	if status, ok := meta.ReadSnapshotStatus(pod); ok && status.Ref == ref {
+	if ref == "" || meta.ReadSnapshotStatus(pod).Ref == ref {
 		return ""
 	}
 	return ref

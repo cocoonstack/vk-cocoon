@@ -5,7 +5,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,24 +16,11 @@ import (
 	"github.com/cocoonstack/vk-cocoon/vm"
 )
 
-type manifestRecordingRegistry struct {
-	fakeRegistry
-	mu   sync.Mutex
-	refs []string
-}
-
-func (r *manifestRecordingRegistry) PutManifest(_ context.Context, name, tag string, _ []byte, _ string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.refs = append(r.refs, name+":"+tag)
-	return nil
-}
-
 func TestSnapshotRequestPushesARunningVMAndAnswers(t *testing.T) {
 	p, pod, rt, reg, v := newSnapshotRequestFixture(t, "user-snapshots/u1/s1:v2")
 
-	if err := p.applyUpdate(t.Context(), pod, meta.ParseVMSpec(pod), v, false, pendingSnapshotRef(pod)); err != nil {
-		t.Fatalf("applyUpdate: %v", err)
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
 	}
 	if rt.snapshotSaveCount != 1 || rt.savedSnapshot.name != "snap-"+v.Name || rt.savedSnapshot.vmID != v.ID {
 		t.Errorf("saves = %d of %q from %q, want one of snap-%s from %s", rt.snapshotSaveCount, rt.savedSnapshot.name, rt.savedSnapshot.vmID, v.Name, v.ID)
@@ -84,10 +70,39 @@ func TestSnapshotRequestSaveFailureAnswersFailed(t *testing.T) {
 	}
 }
 
+func TestSnapshotRequestBeforeReadyIsRetried(t *testing.T) {
+	p, pod, rt, _, _ := newSnapshotRequestFixture(t, "user-snapshots/u1/s1")
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateCreating)
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
+	}
+	if rt.snapshotSaveCount != 0 {
+		t.Errorf("saves = %d, want none before Ready", rt.snapshotSaveCount)
+	}
+	if _, owed := owedRetry(p, meta.PodKey(pod.Namespace, pod.Name)); !owed {
+		t.Error("a request deferred until Ready owes no retry")
+	}
+}
+
+func TestSnapshotRequestOnAMacosPodAnswersFailed(t *testing.T) {
+	p := newTestProvider(t)
+	pod := newPodWithSpec(macosSpec())
+	pod.Annotations[meta.AnnotationSnapshotRequest] = "user-snapshots/u1/s1"
+	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
+	stubMacosExec(p, func([]string) (string, error) { return "", nil })
+	p.trackPod(pod, &vm.VM{ID: macosVMID("macos-demo"), Name: "macos-demo", Hypervisor: macosHypervisor, State: vm.StateRunning})
+
+	if err := p.UpdatePod(t.Context(), pod); err != nil {
+		t.Fatalf("UpdatePod: %v", err)
+	}
+	if got := liveSnapshotStatus(t, p, pod); got.Ref != "user-snapshots/u1/s1" || got.State != meta.SnapshotStateFailed {
+		t.Errorf("status = %+v, want failed for the request", got)
+	}
+}
+
 func TestSnapshotRequestPendingAcrossARestartIsResumed(t *testing.T) {
 	p, pod, _, reg, v := newSnapshotRequestFixture(t, "user-snapshots/u1/s1:v2")
-	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateReady)
-	p.trackPod(pod, v)
 
 	if op := owedOpFor(pod, v); op != resumeOpSnapshot {
 		t.Fatalf("owedOpFor = %q, want %q", op, resumeOpSnapshot)
@@ -114,6 +129,7 @@ func newSnapshotRequestFixture(t *testing.T, ref string) (*Provider, *corev1.Pod
 	pod := newPodWithSpec(meta.VMSpec{VMName: v.Name, Mode: "clone"})
 	pod.UID = "uid-snap"
 	pod.Annotations[meta.AnnotationSnapshotRequest] = ref
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateReady)
 	p.Clientset = fake.NewSimpleClientset(pod.DeepCopy())
 	p.trackPod(pod, v)
 	return p, pod, rt, reg, v
@@ -125,9 +141,19 @@ func liveSnapshotStatus(t *testing.T, p *Provider, pod *corev1.Pod) meta.Snapsho
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
 	}
-	status, ok := meta.ReadSnapshotStatus(live)
-	if !ok {
+	status := meta.ReadSnapshotStatus(live)
+	if status.Ref == "" {
 		t.Fatalf("no snapshot status on the pod: %v", live.Annotations)
 	}
 	return status
+}
+
+type manifestRecordingRegistry struct {
+	fakeRegistry
+	refs []string
+}
+
+func (r *manifestRecordingRegistry) PutManifest(_ context.Context, name, tag string, _ []byte, _ string) error {
+	r.refs = append(r.refs, name+":"+tag)
+	return nil
 }

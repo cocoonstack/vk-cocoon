@@ -171,9 +171,8 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 	if isMacosVM(v) {
 		return ""
 	}
-	lc := meta.ReadLifecycleState(pod)
 	// An empty lifecycle (lost Creating patch) with a marker still records owed work.
-	resuming := lc == meta.LifecycleStateCreating || lc == ""
+	resuming := lifecycleCreating(pod)
 	spec := meta.ParseVMSpec(pod)
 	if !spec.Managed {
 		if resuming {
@@ -207,4 +206,9 @@ func owedOpFor(pod *corev1.Pod, v *vm.VM) string {
 		}
 		return resumeOpReadyWait
 	}
+}
+
+func lifecycleCreating(pod *corev1.Pod) bool {
+	lc := meta.ReadLifecycleState(pod)
+	return lc == meta.LifecycleStateCreating || lc == ""
 }

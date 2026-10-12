@@ -29,8 +29,8 @@ type Pusher struct {
 }
 
 // PushSnapshot uploads a snapshot to the registry at the given repo/tag with the caller's annotations.
-func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage string, annotations map[string]string) error {
-	repo = cmp.Or(repo, vmName)
+func (p *Pusher) PushSnapshot(ctx context.Context, localName, repo, tag, baseImage string, annotations map[string]string) error {
+	repo = cmp.Or(repo, localName)
 	tag = cmp.Or(tag, meta.DefaultSnapshotTag)
 
 	if err := pushGate.Acquire(ctx, 1); err != nil {
@@ -50,7 +50,7 @@ func (p *Pusher) PushSnapshot(ctx context.Context, vmName, repo, tag, baseImage 
 	}
 	if err := pusher.Push(ctx, snapshot.PushOptions{
 		Name:            repo,
-		LocalName:       vmName,
+		LocalName:       localName,
 		Tag:             tag,
 		BaseImage:       baseImage,
 		Annotations:     stamped,
